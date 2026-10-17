@@ -35,6 +35,14 @@ object XrayBridge {
     private val _status = MutableStateFlow(RealStatus())
     val status = _status.asStateFlow()
 
+    private val resetReq = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    fun requestCounterReset() {
+        resetReq.set(true)
+    }
+
+    fun takeCounterReset(): Boolean = resetReq.compareAndSet(true, false)
+
     private val _logs = MutableStateFlow<List<ir.v2rayng.compose.data.LogLine>>(emptyList())
     val logs = _logs.asStateFlow()
 

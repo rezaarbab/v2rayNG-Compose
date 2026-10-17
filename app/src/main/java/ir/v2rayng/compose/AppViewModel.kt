@@ -468,6 +468,17 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
     }
 
+    fun resetTraffic() {
+        put { s ->
+            s.copy(
+                traffic = s.traffic.copy(up = 0, down = 0, upSpeed = 0.0, downSpeed = 0.0),
+                servers = s.servers.map { it.copy(up = 0, down = 0) },
+            )
+        }
+        ir.v2rayng.compose.core.XrayBridge.requestCounterReset()
+        log("INFO", "Traffic counters reset")
+    }
+
     fun select(id: String) {
         val name = _state.value.servers.firstOrNull { it.id == id }?.name ?: return
         put { s -> s.copy(selectedId = id) }

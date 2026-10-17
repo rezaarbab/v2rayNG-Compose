@@ -47,6 +47,12 @@ class XrayVpnService : VpnService() {
             val c = controller
             if (c != null) {
                 try {
+                    if (XrayBridge.takeCounterReset()) {
+                        lastUp = 0
+                        lastDown = 0
+                        zeroStreak = 0
+                        XrayBridge.setTraffic(0, 0, 0.0, 0.0)
+                    }
                     val raw = c.queryAllOutboundTrafficStats()
                     val d = parseTrafficDeltas(raw)
                     if (d.up > 0 || d.down > 0) {
@@ -173,6 +179,13 @@ class XrayVpnService : VpnService() {
             builder.setColor(it.getPixel(128, 128))
         }
         builder.setContentText(link.name.ifBlank { "Connected - ${link.address}" })
+        val stopIntent = android.app.PendingIntent.getService(
+            this,
+            7,
+            Intent(this, XrayVpnService::class.java).setAction(ACTION_STOP),
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        builder.addAction(0, "Disconnect", stopIntent)
         androidx.core.app.ServiceCompat.startForeground(this, 1001, builder.build(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
     }
 
@@ -181,15 +194,30 @@ class XrayVpnService : VpnService() {
             Libv2ray.initCoreEnv(File(filesDir, "core").apply { mkdirs() }.absolutePath, "")
             XrayBridge.addLog("INFO", "Starting core: ${link.address}:${link.port} (${link.type}/${link.security})")
             XrayBridge.setState(RealState.CONNECTING)
-            val tun = Builder()
+            val builder = Builder()
                 .setSession("Blob")
                 .setMtu(1500)
                 .addAddress("10.9.0.2", 32)
                 .addDnsServer("1.1.1.1")
                 .addRoute("0.0.0.0", 0)
                 .addDisallowedApplication(packageName)
-                .setBlocking(true)
-                .establish()
+            var excluded = 1
+            try {
+                val anti = SettingsStore(applicationContext).load().antiFilterApps
+                for (pkg in anti.split(",").map { it.trim() }.filter { it.isNotBlank() }) {
+                    try {
+                        val uid = packageManager.getPackageUid(pkg, 0)
+                        if (uid > 0) {
+                            builder.addDisallowedApplication(uid)
+                            excluded++
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+            } catch (_: Exception) {
+            }
+            XrayBridge.addLog("INFO", "Apps excluded from tunnel: $excluded")
+            val tun = builder.setBlocking(true).establish()
             if (tun == null) {
                 XrayBridge.addLog("ERROR", "TUN create failed (another VPN active or duplicate)")
                 XrayBridge.setState(RealState.BROKEN, "TUN create failed")

@@ -33,6 +33,8 @@ object S {
 
     const val ROUTING_TITLE = "Routing"
     const val ROUTING_SUB = "Traffic rules"
+    const val ROUTING_PLACEHOLDER = "Traffic rules come in a future update"
+    const val ROUTING_PLACEHOLDER_BODY = "Bypass, ads block and UDP options were removed in this version."
     const val RULE_BYPASS = "Bypass Iran"
     const val RULE_BYPASS_SUB = "Local traffic goes direct"
     const val RULE_ADS = "Block ads"

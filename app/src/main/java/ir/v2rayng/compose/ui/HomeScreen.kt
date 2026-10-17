@@ -196,9 +196,13 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        StatChip(S.TOTAL_UP, TimeKit.human(state.traffic.up))
-                        StatChip(S.TOTAL_DOWN, TimeKit.human(state.traffic.down))
+                        StatChip(S.TOTAL_UP, TimeKit.human(state.traffic.up), Modifier.weight(1f))
+                        StatChip(S.TOTAL_DOWN, TimeKit.human(state.traffic.down), Modifier.weight(1f))
+                        androidx.compose.material3.TextButton(
+                            onClick = { vm.resetTraffic() },
+                        ) { Text("Reset", style = MaterialTheme.typography.labelMedium) }
                     }
                 }
             }
@@ -301,9 +305,9 @@ private fun TrafficArrow(up: Boolean, accent: Color) {
 }
 
 @Composable
-private fun RowScope.StatChip(title: String, value: String) {
+private fun StatChip(title: String, value: String, modifier: Modifier = Modifier) {
     Card(
-        modifier = Modifier.weight(1f),
+        modifier = modifier,
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
