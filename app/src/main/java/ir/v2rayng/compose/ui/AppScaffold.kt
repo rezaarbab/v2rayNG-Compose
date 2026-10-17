@@ -20,12 +20,15 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -42,8 +45,11 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.SettingsStore
+import ir.v2rayng.compose.stickers.LocalStickerEnv
 import ir.v2rayng.compose.stickers.StickerCharacter
+import ir.v2rayng.compose.stickers.StickerEnv
 import ir.v2rayng.compose.stickers.StickerMood
+import ir.v2rayng.compose.stickers.StickerTicker
 import ir.v2rayng.compose.stickers.V2Stickers
 import ir.v2rayng.compose.ui.theme.V2rayNGTheme
 
@@ -56,8 +62,26 @@ fun AppRoot() {
         }
     )
     val settings by vm.settings.collectAsState()
-    V2rayNGTheme(dark = settings.dark, accent = settings.accent) {
-        AppScaffold(vm, settings)
+    val env = remember { StickerEnv() }
+    LaunchedEffect(Unit) {
+        var last = 0L
+        while (true) {
+            withFrameMillis { v ->
+                if (v - last >= 31L) {
+                    last = v
+                    StickerTicker.ms.longValue = v
+                }
+            }
+        }
+    }
+    LaunchedEffect(settings.animate, settings.speed) {
+        env.enabled.value = settings.animate
+        env.speed.floatValue = settings.speed
+    }
+    CompositionLocalProvider(LocalStickerEnv provides env) {
+        V2rayNGTheme(dark = settings.dark, accent = settings.accent) {
+            AppScaffold(vm, settings)
+        }
     }
 }
 

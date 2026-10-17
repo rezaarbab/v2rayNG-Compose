@@ -42,6 +42,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setStickerStyle(i: Int) = setSettings { it.copy(stickerStyle = i) }
     fun setWallpaper(i: Int) = setSettings { it.copy(wallpaperIndex = i) }
     fun setFollowFinger(v: Boolean) = setSettings { it.copy(followFinger = v) }
+    fun setAnimate(v: Boolean) = setSettings { it.copy(animate = v) }
+    fun setSpeed(v: Float) = setSettings { it.copy(speed = v) }
 
     private fun log(level: String, msg: String) {
         put { s -> s.copy(logs = (s.logs + LogLine(TimeKit.now(), level, msg)).takeLast(240)) }

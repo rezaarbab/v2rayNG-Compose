@@ -77,11 +77,33 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("استیکرها", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("شکل استیکرها", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     SelectChip("Blob (بابلی)", settings.stickerStyle == 0, { vm.setStickerStyle(0) })
                     SelectChip("عروسکی", settings.stickerStyle == 1, { vm.setStickerStyle(1) })
                 }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("انیمیشن استیکرها", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "خاموش = بیشترین سرعت",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = settings.animate, onCheckedChange = { vm.setAnimate(it) })
+                }
+
+                Text(
+                    text = "سرعت رقص: ${"%.1f".format(settings.speed)}x",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                androidx.compose.material3.Slider(
+                    value = settings.speed,
+                    onValueChange = { vm.setSpeed(it) },
+                    valueRange = 0.25f..2f,
+                )
 
                 Text("پس‌زمینه", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Row(verticalAlignment = Alignment.CenterVertically) {

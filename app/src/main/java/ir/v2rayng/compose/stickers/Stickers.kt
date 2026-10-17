@@ -80,8 +80,8 @@ object V2Stickers {
         val hue = if (idx < classic.size) classic[idx] else (((idx - classic.size) * 137.508f) % 360f)
         val color = Color.hsl(hue, 0.62f + 0.2f * (idx % 4) / 3f, 0.56f + 0.12f * (idx % 3) / 2f)
         val eyes = listOf(
-            ToyEye(0.40f, 0.46f, 0.085f, 0.19f, if (idx % 2 == 0) -6f else 6f),
-            ToyEye(0.60f, 0.46f, 0.085f, 0.19f, if (idx % 2 == 0) 6f else -6f),
+            ToyEye(0.40f, 0.47f, 0.12f, 0.34f, if (idx % 2 == 0) -8f else 8f),
+            ToyEye(0.60f, 0.47f, 0.12f, 0.34f, if (idx % 2 == 0) 8f else -8f),
         )
         val ops: List<ToyOp> = when (idx % 10) {
             0 -> cloudOps(4 + idx % 3)

@@ -8,6 +8,8 @@ data class Settings(
     val stickerStyle: Int = 0,
     val wallpaperIndex: Int = -1,
     val followFinger: Boolean = true,
+    val animate: Boolean = true,
+    val speed: Float = 1f,
 )
 
 class SettingsStore(context: Context) {
@@ -19,6 +21,8 @@ class SettingsStore(context: Context) {
         stickerStyle = sp.getInt("style", 0),
         wallpaperIndex = sp.getInt("wallpaper", -1),
         followFinger = sp.getBoolean("followFinger", true),
+        animate = sp.getBoolean("animate", true),
+        speed = sp.getFloat("speed", 1f),
     )
 
     fun save(s: Settings) {
@@ -28,6 +32,8 @@ class SettingsStore(context: Context) {
             .putInt("style", s.stickerStyle)
             .putInt("wallpaper", s.wallpaperIndex)
             .putBoolean("followFinger", s.followFinger)
+            .putBoolean("animate", s.animate)
+            .putFloat("speed", s.speed)
             .apply()
     }
 }
