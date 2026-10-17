@@ -1,15 +1,13 @@
 package ir.v2rayng.compose.stickers
 
-import androidx.compose.runtime.withFrameMillis
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -24,6 +22,28 @@ import kotlin.math.sin
 
 private val EyeDark = Color(0xFF231E1E)
 
+enum class StickerMood { NORMAL, HAPPY, WOBBLE, SLEEP }
+
+private fun moodSpeed(mood: StickerMood): Float = when (mood) {
+    StickerMood.SLEEP -> 0.55f
+    StickerMood.WOBBLE -> 2.1f
+    StickerMood.HAPPY -> 1.7f
+    else -> 1f
+}
+
+private fun moodHop(mood: StickerMood, t: Float): Float = when (mood) {
+    StickerMood.SLEEP -> 0f
+    StickerMood.HAPPY -> -0.085f * abs(sin(PI * t * 2.0)).toFloat()
+    StickerMood.WOBBLE -> -0.05f * abs(sin(PI * t * 2.0)).toFloat()
+    else -> -0.03f * abs(sin(PI * t)).toFloat()
+}
+
+private fun moodBlink(mood: StickerMood, t: Float): Float {
+    if (mood == StickerMood.SLEEP) return 0.14f
+    val cycle = t % 1f
+    return if (cycle in 0.85f..0.93f) 0.12f else 1f
+}
+
 @Composable
 fun StickerCharacter(
     preset: StickerPreset,
@@ -32,33 +52,11 @@ fun StickerCharacter(
     modifier: Modifier = Modifier,
     onTap: (() -> Unit)? = null,
 ) {
-    var frame by remember { mutableLongStateOf(0L) }
+    val frame = remember { mutableLongStateOf(0L) }
     LaunchedEffect(Unit) {
         while (true) {
-            withFrameMillis { frame = it }
+            withFrameMillis { frame.longValue = it }
         }
-    }
-
-    val speed = when (mood) {
-        StickerMood.SLEEP -> 0.55f
-        StickerMood.WOBBLE -> 2.1f
-        StickerMood.HAPPY -> 1.7f
-        else -> 1f
-    }
-    val t = frame / 1000f * speed + preset.phaseOffset
-    val breathe = sin(2.0 * PI * t).toFloat()
-    val hop = when (mood) {
-        StickerMood.SLEEP -> 0f
-        StickerMood.HAPPY -> -0.085f * abs(sin(PI * t * 2.0)).toFloat()
-        StickerMood.WOBBLE -> -0.05f * abs(sin(PI * t * 2.0)).toFloat()
-        else -> -0.03f * abs(sin(PI * t)).toFloat()
-    }
-    val blink: Float
-    if (mood == StickerMood.SLEEP) {
-        blink = 0.14f
-    } else {
-        val cycle = t % 1f
-        blink = if (cycle in 0.85f..0.93f) 0.12f else 1f
     }
 
     Canvas(
@@ -66,6 +64,11 @@ fun StickerCharacter(
             .size(sizeDp)
             .then(if (onTap != null) Modifier.clickable { onTap() } else Modifier)
     ) {
+        val t = frame.longValue / 1000f * moodSpeed(mood) + preset.phaseOffset
+        val breathe = sin(2.0 * PI * t).toFloat()
+        val hop = moodHop(mood, t)
+        val blink = moodBlink(mood, t)
+
         val s = size.width
         val sx = 1f + 0.03f * breathe
         val sy = 1f - 0.03f * breathe
@@ -81,7 +84,7 @@ fun StickerCharacter(
         )
 
         val path = Path()
-        val n = 160
+        val n = 96
         for (i in 0 until n) {
             val th = 2.0 * PI * i / n
             val r = 0.34f * (

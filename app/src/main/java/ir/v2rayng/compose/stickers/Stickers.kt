@@ -3,8 +3,6 @@ package ir.v2rayng.compose.stickers
 import androidx.compose.ui.graphics.Color
 import kotlin.math.abs
 
-enum class StickerMood { NORMAL, HAPPY, WOBBLE, SLEEP }
-
 data class StickerPreset(
     val id: String,
     val color: Color,
