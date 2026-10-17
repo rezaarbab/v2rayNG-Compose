@@ -140,12 +140,8 @@ class XrayVpnService : VpnService() {
                 return
             }
             tunFd = tun.detachFd()
-            val fd = protect(tunFd)
-            if (!fd) {
-                XrayBridge.addLog("ERROR", "protect(fd) failed")
-                XrayBridge.setState(RealState.BROKEN, "protect failed")
-                return
-            }
+            // NOTE: do NOT call protect() on the TUN fd - protect() is only valid
+            // for socket fds; the tun inbound inside xray-core owns this fd.
             lastUp = 0
             lastDown = 0
             controller = Libv2ray.newCoreController(callback)

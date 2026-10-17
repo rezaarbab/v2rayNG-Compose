@@ -13,6 +13,10 @@ data class VlessLink(
     val type: String = "tcp",
     val flow: String = "",
     val sni: String = "",
+    val fp: String = "",
+    val pbk: String = "",
+    val sid: String = "",
+    val spx: String = "",
     val name: String = "",
 )
 
@@ -108,6 +112,10 @@ fun parseVlessLink(raw: String): VlessLink? {
             type = type,
             flow = flow,
             sni = sni,
+            fp = params["fp"] ?: "",
+            pbk = params["pbk"] ?: "",
+            sid = params["sid"] ?: "",
+            spx = params["spx"] ?: "",
             name = name,
         )
     } catch (_: Exception) {
@@ -130,13 +138,22 @@ fun buildXrayConfig(link: VlessLink): String {
     val stream = JSONObject()
         .put("network", link.type)
         .put("security", link.security)
-    if (link.security == "tls" && link.sni.isNotBlank()) {
-        stream.put(
-            "tlsSettings",
-            JSONObject()
-                .put("serverName", link.sni)
-                .put("allowInsecure", false),
-        )
+    when (link.security) {
+        "tls" -> {
+            val tls = JSONObject()
+            if (link.sni.isNotBlank()) tls.put("serverName", link.sni)
+            tls.put("allowInsecure", false)
+            stream.put("tlsSettings", tls)
+        }
+        "reality" -> {
+            val rs = JSONObject().put("show", false)
+            if (link.sni.isNotBlank()) rs.put("serverName", link.sni)
+            if (link.fp.isNotBlank()) rs.put("fingerprint", link.fp)
+            if (link.pbk.isNotBlank()) rs.put("publicKey", link.pbk)
+            if (link.sid.isNotBlank()) rs.put("shortId", link.sid)
+            if (link.spx.isNotBlank()) rs.put("spiderX", link.spx)
+            stream.put("realitySettings", rs)
+        }
     }
 
     val tunIn = JSONObject()

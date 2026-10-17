@@ -177,6 +177,14 @@ private fun ServerRow(
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (profile.up > 0 || profile.down > 0) {
+                    Text(
+                        text = "Up ${ir.v2rayng.compose.data.TimeKit.human(profile.up)} - Down ${ir.v2rayng.compose.data.TimeKit.human(profile.down)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             PingChip(profile.ping)
             if (selected) {

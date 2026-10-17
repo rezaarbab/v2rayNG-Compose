@@ -67,6 +67,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                         }
                     }
                     put { s ->
+                        val targetId = s.selectedId
                         s.copy(
                             vpnState = when (st.state) {
                                 ir.v2rayng.compose.core.RealState.IDLE -> if (real) VpnState.IDLE else s.vpnState
@@ -83,6 +84,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                 )
                             } else {
                                 s.traffic.copy(upSpeed = 0.0, downSpeed = 0.0)
+                            },
+                            servers = s.servers.map { srv ->
+                                if (srv.id == targetId) srv.copy(up = st.up, down = st.down) else srv
                             },
                         )
                     }
