@@ -57,7 +57,7 @@ fun RoutingScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .holdFor(5000L, onHold = { editZone.value = "route:$i" }),
+                    .holdFor(5000L, onHold = { editZone = "route:$i" }),
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             ) {
@@ -95,6 +95,6 @@ fun RoutingScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     }
 
     editZone?.let { zone ->
-        StickerEditorDialog(zone, settings, vm) { editZone.value = null }
+        StickerEditorDialog(zone, settings, vm) { editZone = null }
     }
 }

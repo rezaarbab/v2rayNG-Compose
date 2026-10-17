@@ -183,7 +183,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                         androidx.compose.foundation.layout.Box(
                             Modifier
                                 .clip(RoundedCornerShape(14.dp))
-                                .clickable { editNavSlot.value = slot }
+                                .clickable { editNavSlot = slot }
                                 .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), RoundedCornerShape(14.dp))
                                 .padding(5.dp),
                         ) {
