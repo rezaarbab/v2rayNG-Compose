@@ -1,4 +1,4 @@
-package ir.v2rayng.compose.ui
+﻿package ir.v2rayng.compose.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -146,7 +146,7 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                                         sticker = s,
                                         mood = if (tab == pos) StickerMood.HAPPY else StickerMood.NORMAL,
                                         sizeDp = 26.dp,
-                                        decorative = true,
+                                        
                                     )
                                 } else {
                                     Icon(tabIcons[real], contentDescription = S.TABS[real])
@@ -242,10 +242,10 @@ fun MoveNavDialog(order: List<Int>, vm: AppViewModel, onDismiss: () -> Unit) {
                         )
                         TextButton(
                             onClick = { if (pos > 0) vm.setNavOrder(order.toMutableList().apply { add(pos, removeAt(pos - 1)) }) },
-                        ) { Text("▲") }
+                        ) { Text("â–²") }
                         TextButton(
                             onClick = { if (pos < order.size - 1) vm.setNavOrder(order.toMutableList().apply { add(pos, removeAt(pos + 1)) }) },
-                        ) { Text("▼") }
+                        ) { Text("â–¼") }
                     }
                 }
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
@@ -255,3 +255,4 @@ fun MoveNavDialog(order: List<Int>, vm: AppViewModel, onDismiss: () -> Unit) {
         }
     }
 }
+

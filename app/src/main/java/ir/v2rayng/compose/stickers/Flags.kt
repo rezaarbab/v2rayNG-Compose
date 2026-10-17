@@ -64,8 +64,9 @@ private fun build(): List<Sticker> {
     val out = ArrayList<Sticker>(210)
 
     fun f(code: String, name: String, base: Color, bands: List<FlagBand>) {
+        val nm = EN[code] ?: name
         val art = FlagArt(base, listOf(baseRounded) + bands, (out.size * 0.031f) % 1f)
-        out.add(Sticker(code, name, art))
+        out.add(Sticker(code, nm, art))
     }
 
     f("ad", "آندورا", BLUE, V3(BLUE, GOLD, RED))
@@ -336,3 +337,60 @@ private fun build(): List<Sticker> {
 }
 
 private val GREY = Color(0xFF9BA8B4)
+
+private val GREY = Color(0xFF9BA8B4)
+
+private val EN = mapOf(
+    "ad" to "Andorra", "ae" to "United Arab Emirates", "af" to "Afghanistan", "ag" to "Antigua & Barbuda",
+    "ai" to "Anguilla", "al" to "Albania", "am" to "Armenia", "ao" to "Angola", "ar" to "Argentina",
+    "at" to "Austria", "au" to "Australia", "aw" to "Aruba", "ax" to "Åland Islands", "az" to "Azerbaijan",
+    "ba" to "Bosnia & Herzegovina", "bb" to "Barbados", "bd" to "Bangladesh", "be" to "Belgium",
+    "bf" to "Burkina Faso", "bg" to "Bulgaria", "bh" to "Bahrain", "bi" to "Burundi", "bj" to "Benin",
+    "bl" to "St. Barthélemy", "bm" to "Bermuda", "bn" to "Brunei", "bo" to "Bolivia", "br" to "Brazil",
+    "bs" to "Bahamas", "bt" to "Bhutan", "bw" to "Botswana", "by" to "Belarus", "bz" to "Belize",
+    "ca" to "Canada", "cd" to "DR Congo", "cf" to "Central African Rep.", "cg" to "Congo",
+    "ch" to "Switzerland", "ci" to "Côte d'Ivoire", "ck" to "Cook Islands", "cl" to "Chile",
+    "cm" to "Cameroon", "cn" to "China", "co" to "Colombia", "cr" to "Costa Rica", "cu" to "Cuba",
+    "cv" to "Cape Verde", "cw" to "Curaçao", "cx" to "Christmas Island", "cy" to "Cyprus", "cz" to "Czechia",
+    "de" to "Germany", "dj" to "Djibouti", "dk" to "Denmark", "dm" to "Dominica", "do" to "Dominican Rep.",
+    "dz" to "Algeria", "ec" to "Ecuador", "ee" to "Estonia", "eg" to "Egypt", "eh" to "Western Sahara",
+    "er" to "Eritrea", "es" to "Spain", "et" to "Ethiopia", "fi" to "Finland", "fj" to "Fiji",
+    "fm" to "Micronesia", "fo" to "Faroe Islands", "fr" to "France", "ga" to "Gabon", "gb" to "United Kingdom",
+    "gd" to "Grenada", "ge" to "Georgia", "gf" to "French Guiana", "gg" to "Guernsey", "gh" to "Ghana",
+    "gi" to "Gibraltar", "gl" to "Greenland", "gm" to "Gambia", "gn" to "Guinea", "gp" to "Guadeloupe",
+    "gq" to "Equatorial Guinea", "gr" to "Greece", "gs" to "South Georgia", "gt" to "Guatemala", "gu" to "Guam",
+    "gw" to "Guinea-Bissau", "gy" to "Guyana", "hk" to "Hong Kong", "hm" to "Heard Island", "hn" to "Honduras",
+    "hr" to "Croatia", "ht" to "Haiti", "hu" to "Hungary", "id" to "Indonesia", "ie" to "Ireland",
+    "il" to "Israel", "im" to "Isle of Man", "in" to "India", "io" to "British Indian Ocean Ter.",
+    "iq" to "Iraq", "ir" to "Iran", "is" to "Iceland", "it" to "Italy", "je" to "Jersey", "jm" to "Jamaica",
+    "jo" to "Jordan", "jp" to "Japan", "ke" to "Kenya", "kg" to "Kyrgyzstan", "kh" to "Cambodia",
+    "ki" to "Kiribati", "km" to "Comoros", "kn" to "St. Kitts & Nevis", "kp" to "North Korea",
+    "kr" to "South Korea", "kw" to "Kuwait", "ky" to "Cayman Islands", "kz" to "Kazakhstan", "la" to "Laos",
+    "lb" to "Lebanon", "lc" to "St. Lucia", "li" to "Liechtenstein", "lk" to "Sri Lanka", "lr" to "Liberia",
+    "ls" to "Lesotho", "lt" to "Lithuania", "lu" to "Luxembourg", "lv" to "Latvia", "ly" to "Libya",
+    "ma" to "Morocco", "mc" to "Monaco", "md" to "Moldova", "me" to "Montenegro", "mg" to "Madagascar",
+    "mh" to "Marshall Islands", "mk" to "North Macedonia", "ml" to "Mali", "mm" to "Myanmar",
+    "mn" to "Mongolia", "mo" to "Macau", "mp" to "N. Mariana Islands", "mq" to "Martinique",
+    "mr" to "Mauritania", "ms" to "Montserrat", "mt" to "Malta", "mu" to "Mauritius", "mv" to "Maldives",
+    "mw" to "Malawi", "mx" to "Mexico", "my" to "Malaysia", "mz" to "Mozambique", "na" to "Namibia",
+    "nc" to "New Caledonia", "ne" to "Niger", "nf" to "Norfolk Island", "ng" to "Nigeria",
+    "ni" to "Nicaragua", "nl" to "Netherlands", "no" to "Norway", "np" to "Nepal", "nr" to "Nauru",
+    "nu" to "Niue", "nz" to "New Zealand", "om" to "Oman", "pa" to "Panama", "pe" to "Peru",
+    "pf" to "French Polynesia", "pg" to "Papua New Guinea", "ph" to "Philippines", "pk" to "Pakistan",
+    "pl" to "Poland", "pm" to "St. Pierre & Miquelon", "pn" to "Pitcairn", "pr" to "Puerto Rico",
+    "ps" to "Palestine", "pt" to "Portugal", "pw" to "Palau", "py" to "Paraguay", "qa" to "Qatar",
+    "re" to "Réunion", "ro" to "Romania", "rs" to "Serbia", "ru" to "Russia", "rw" to "Rwanda",
+    "sa" to "Saudi Arabia", "sb" to "Solomon Islands", "sc" to "Seychelles", "sd" to "Sudan",
+    "se" to "Sweden", "sg" to "Singapore", "sh" to "St. Helena", "si" to "Slovenia", "sj" to "Svalbard",
+    "sk" to "Slovakia", "sl" to "Sierra Leone", "sm" to "San Marino", "sn" to "Senegal", "so" to "Somalia",
+    "sr" to "Suriname", "ss" to "South Sudan", "st" to "São Tomé & Príncipe", "sv" to "El Salvador",
+    "sx" to "Sint Maarten", "sy" to "Syria", "sz" to "Eswatini", "tc" to "Turks & Caicos", "td" to "Chad",
+    "tf" to "Fr. Southern Lands", "tg" to "Togo", "th" to "Thailand", "tj" to "Tajikistan", "tk" to "Tokelau",
+    "tl" to "Timor-Leste", "tm" to "Turkmenistan", "tn" to "Tunisia", "to" to "Tonga", "tr" to "Turkey",
+    "tt" to "Trinidad & Tobago", "tv" to "Tuvalu", "tw" to "Taiwan", "tz" to "Tanzania", "ua" to "Ukraine",
+    "ug" to "Uganda", "um" to "US Minor Outlying Is.", "us" to "United States", "uy" to "Uruguay",
+    "uz" to "Uzbekistan", "va" to "Vatican City", "vc" to "St. Vincent", "ve" to "Venezuela",
+    "vg" to "British Virgin Is.", "vi" to "U.S. Virgin Islands", "vn" to "Vietnam", "vu" to "Vanuatu",
+    "wf" to "Wallis & Futuna", "ws" to "Samoa", "xk" to "Kosovo", "ye" to "Yemen", "yt" to "Mayotte",
+    "za" to "South Africa", "zm" to "Zambia", "zw" to "Zimbabwe",
+)

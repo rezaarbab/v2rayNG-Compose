@@ -87,16 +87,16 @@ internal fun chaikin(base: List<Offset>, iters: Int = 3): List<Offset> {
 object V2Stickers {
 
     private val blobNames = listOf(
-        "زفیر", "پاک", "شارون", "کوری", "فنریر", "لدا", "رز", "استورم", "لیمو", "توتی",
-        "باران", "مهتاب", "ابر", "آفتاب", "نجوا", "بلبل", "ریحان", "زعفران", "نارنگی", "انبه",
-        "گواوا", "کیوی", "انجیر", "طالبی", "خربزه", "زرشک", "بهارنارنج", "گلاب", "لکه", "بوم",
-        "موج", "صدف", "مرجان", "صخره", "درخت", "غار", "شفق", "باد", "چشمه", "سراب",
-        "نوا", "واریا", "طوفان", "رعد", "برق", "شبنم", "یخ", "برف", "اورا", "فرفره",
-        "نارگیل", "بادام", "پسته", "گردو", "فندق", "کشمش", "برنج", "ماست", "عسل", "شهد",
-        "نسیم", "پری", "ماهور", "دیبا", "ناهید", "ترانه", "پونه", "نسرین", "ساناز", "لیانا",
-        "ارغوان", "شکوفه", "براق", "سیمرغ", "عطر", "خوشه", "سنبله", "ثریا", "زرین", "نزهت",
-        "گلبان", "گلاره", "لالهزار", "دیار", "شبگون", "ماهان", "پارند", "دلاو", "آسمانه", "اختر",
-        "لاجورد", "فیروزه", "یاقوت", "زمرد", "مروارید", "گوهر", "بلور", "سیمین", "وهاب", "روشا",
+        "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Rose", "Storm", "Lime", "Tutti",
+        "Rain", "Moonbeam", "Cloudy", "Sunny", "Whisper", "Nightingale", "Basil", "Saffron", "Tangerine", "Mango",
+        "Guava", "Kiwi", "Fig", "Melon", "Honeydew", "Barberry", "Blossom", "Rosewater", "Speck", "Echo",
+        "Wave", "Shell", "Coral", "Pebble", "Tree", "Cave", "Aurora", "Breeze", "Spring", "Mirage",
+        "Nova", "Varia", "Typhoon", "Thunder", "Bolt", "Dew", "Ice", "Snow", "Aura", "Pinwheel",
+        "Coconut", "Almond", "Pistachio", "Walnut", "Hazel", "Raisin", "Rice", "Yogurt", "Honey", "Nectar",
+        "Bubbles", "Comet", "Pudding", "Mochi", "Waffle", "Cookie", "Muffin", "Donut", "Candy", "Jelly",
+        "Peachy", "Cherry", "Berry", "Plum", "Olive", "Cocoa", "Minty", "Latte", "Mocha", "Crema",
+        "Sunny-D", "Fizzy", "Poppy", "Dandy", "Ziggy", "Bouncy", "Wobbly", "Squishy", "Squeezy", "Stretchy",
+        "Wiggles", "Jiggles", "Bloop", "Bleep", "Blip", "Pip", "Pop", "Boop", "Bounce", "Boing",
     )
 
     val blobs: List<Sticker> = blobNames.mapIndexed { idx, name ->
@@ -113,7 +113,7 @@ object V2Stickers {
         Sticker("blob-$idx", name, art)
     }
 
-    private val shapeNames = listOf("اشک", "مثلث", "ابر", "شب", "کپسول", "لوبیا")
+    private val shapeNames = listOf("Drop", "Triangle", "Cloud", "Ball", "Capsule", "Bean")
 
     private val dropOps: List<ToyOp> = listOf(
         ToyPoly(chaikin(listOf(Offset(0.5f, 0.05f), Offset(0.73f, 0.27f), Offset(0.87f, 0.56f), Offset(0.72f, 0.84f), Offset(0.5f, 0.96f), Offset(0.28f, 0.84f), Offset(0.13f, 0.56f), Offset(0.27f, 0.27f)))),

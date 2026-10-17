@@ -3,6 +3,7 @@
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ir.v2rayng.compose.data.AppState
+import ir.v2rayng.compose.data.AppInfo
 import ir.v2rayng.compose.data.LogLine
 import ir.v2rayng.compose.data.ServerProfile
 import ir.v2rayng.compose.data.Settings
@@ -85,6 +86,28 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setAntiFilter(v: Boolean) {
         setSettings { it.copy(antiFilter = v) }
         log("INFO", if (v) S.LOG_ANTI_ON else S.LOG_ANTI_OFF)
+    }
+
+    fun loadApps(context: android.content.Context) {
+        if (_state.value.apps.isNotEmpty()) return
+        val pm = context.packageManager
+        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN, null)
+        intent.addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+        val resolve = pm.queryIntentActivities(intent, 0)
+        val apps = resolve.mapNotNull {
+            val pkg = it.activityInfo?.applicationInfo?.packageName ?: return@mapNotNull null
+            AppInfo(
+                label = it.loadLabel(pm).toString(),
+                pkg = pkg,
+            )
+        }.distinctBy { it.pkg }.sortedBy { it.label.lowercase() }
+        put { s -> s.copy(apps = apps) }
+    }
+
+    fun toggleAntiFilterApp(pkg: String) = setSettings { s ->
+        val cur = s.antiFilterApps.split(",").filter { it.isNotBlank() }.toMutableSet()
+        if (cur.contains(pkg)) cur.remove(pkg) else cur.add(pkg)
+        s.copy(antiFilterApps = cur.joinToString(","))
     }
 
     fun setHomeOrder(order: List<Int>) = setSettings { it.copy(homeOrder = packList(order)) }

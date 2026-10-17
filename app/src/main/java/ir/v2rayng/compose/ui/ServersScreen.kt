@@ -1,4 +1,4 @@
-package ir.v2rayng.compose.ui
+﻿package ir.v2rayng.compose.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
@@ -121,7 +121,7 @@ private fun ServerRow(profile: ServerProfile, sticker: Sticker, selected: Boolea
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
-            StickerCharacter(sticker, sizeDp = 46.dp, decorative = true)
+            StickerCharacter(sticker, sizeDp = 46.dp)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(
@@ -189,3 +189,4 @@ private fun AddServerDialog(onDone: (Pair<String, String>) -> Unit, onDismiss: (
         },
     )
 }
+

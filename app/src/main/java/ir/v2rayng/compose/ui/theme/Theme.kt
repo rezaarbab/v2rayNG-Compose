@@ -9,14 +9,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 
 val AccentOptions = listOf(
-    "سبز" to Color(0xFF2BD48A),
-    "آبی" to Color(0xFF60A5FA),
-    "بنفش" to Color(0xFFB39BF5),
-    "نارنجی" to Color(0xFFFFA94D),
-    "قرمز" to Color(0xFFEC6E6E),
-    "زرد" to Color(0xFFF4D27A),
-    "فیروزه" to Color(0xFF7FD8E8),
-    "صورتی" to Color(0xFFE689C3),
+    "Green" to Color(0xFF2BD48A),
+    "Blue" to Color(0xFF60A5FA),
+    "Purple" to Color(0xFFB39BF5),
+    "Orange" to Color(0xFFFFA94D),
+    "Red" to Color(0xFFEC6E6E),
+    "Yellow" to Color(0xFFF4D27A),
+    "Cyan" to Color(0xFF7FD8E8),
+    "Pink" to Color(0xFFE689C3),
 )
 
 private val NightColors = darkColorScheme(

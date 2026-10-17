@@ -1,4 +1,4 @@
-package ir.v2rayng.compose.ui
+﻿package ir.v2rayng.compose.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -57,6 +57,9 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var editNavSlot by remember { mutableStateOf<Int?>(null) }
     var moveMenu by remember { mutableStateOf(false) }
     var moveHome by remember { mutableStateOf(false) }
+    var showAppPicker by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadApps(context) }
 
     Column(
         modifier = Modifier
@@ -127,6 +130,16 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 ToggleRow(S.NAV_STICKERS, "", settings.navStickers) { vm.setNavStickers(it) }
                 ToggleRow(S.FOLLOW_FINGER, S.FOLLOW_SUB, settings.followFinger) { vm.setFollowFinger(it) }
                 ToggleRow(S.ANTI_FILTER, S.ANTI_FILTER_SUB, settings.antiFilter) { vm.setAntiFilter(it) }
+
+                val selectedApps = settings.antiFilterApps.split(",").filter { it.isNotBlank() }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        S.ANTI_FILTER_APPS.format(selectedApps.size),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    SelectChip(S.EDITOR, false, { showAppPicker = true })
+                }
             }
         }
 
@@ -178,7 +191,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 Text(S.HOME_LAYOUT, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        S.HOME_SECTIONS.joinToString(" • "),
+                        S.HOME_SECTIONS.joinToString(" â€¢ "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
@@ -198,7 +211,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                                 .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), RoundedCornerShape(14.dp))
                                 .padding(5.dp),
                         ) {
-                            StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 40.dp, decorative = true)
+                            StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 40.dp)
                         }
                     }
                 }
@@ -231,6 +244,62 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     }
     if (moveHome) {
         HomeLayoutDialog(parseList(settings.homeOrder, listOf(0, 1, 2, 3, 4)), vm) { moveHome = false }
+    }
+    if (showAppPicker) {
+        AppPickerDialog(state.apps, settings.antiFilterApps, vm) { showAppPicker = false }
+    }
+}
+
+@Composable
+private fun AppPickerDialog(apps: List<ir.v2rayng.compose.data.AppInfo>, selectedCsv: String, vm: AppViewModel, onDismiss: () -> Unit) {
+    var query by remember { mutableStateOf("") }
+    val selected = selectedCsv.split(",").filter { it.isNotBlank() }.toSet()
+    val filtered = if (query.isBlank()) apps else apps.filter { it.label.contains(query, ignoreCase = true) || it.pkg.contains(query, ignoreCase = true) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        androidx.compose.material3.Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) {
+            Column(Modifier.padding(16.dp)) {
+                Text(S.ALL_APPS, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    label = { Text(S.SEARCH_APPS) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.foundation.lazy.LazyColumn(
+                    modifier = Modifier.fillMaxWidth().height(420.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    itemsIndexed(filtered) { _, app ->
+                        val checked = selected.contains(app.pkg)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { vm.toggleAntiFilterApp(app.pkg) }
+                                .padding(vertical = 4.dp),
+                        ) {
+                            androidx.compose.material3.Checkbox(checked = checked, onCheckedChange = { vm.toggleAntiFilterApp(app.pkg) })
+                            Column(Modifier.weight(1f)) {
+                                Text(app.label, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    app.pkg,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text(S.CLOSE)
+                }
+            }
+        }
     }
 }
 
@@ -266,10 +335,10 @@ fun HomeLayoutDialog(order: List<Int>, vm: AppViewModel, onDismiss: () -> Unit) 
                         )
                         TextButton(
                             onClick = { if (pos > 0) vm.setHomeOrder(order.toMutableList().apply { add(pos, removeAt(pos - 1)) }) },
-                        ) { Text("▲") }
+                        ) { Text("â–²") }
                         TextButton(
                             onClick = { if (pos < order.size - 1) vm.setHomeOrder(order.toMutableList().apply { add(pos, removeAt(pos + 1)) }) },
-                        ) { Text("▼") }
+                        ) { Text("â–¼") }
                     }
                 }
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {

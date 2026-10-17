@@ -1,4 +1,4 @@
-package ir.v2rayng.compose.ui
+﻿package ir.v2rayng.compose.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -120,7 +120,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                         ) {
-                            StickerCharacter(tinted(mainSticker, settings.mainColor), sizeDp = 34.dp, decorative = true)
+                            StickerCharacter(tinted(mainSticker, settings.mainColor), sizeDp = 34.dp)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(
@@ -195,7 +195,7 @@ private fun RowScope.TrafficCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = if (title == S.UPLOAD) "▲" else "▼",
+                    text = if (title == S.UPLOAD) "â–²" else "â–¼",
                     color = accent,
                     fontWeight = FontWeight.Bold,
                 )
@@ -245,3 +245,4 @@ private fun RowScope.StatChip(title: String, value: String) {
         }
     }
 }
+

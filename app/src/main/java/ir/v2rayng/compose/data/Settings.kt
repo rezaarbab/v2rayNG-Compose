@@ -26,6 +26,7 @@ data class Settings(
     val downIcon: Int = 6,
     val routeIcons: String = "0,1,2",
     val antiFilter: Boolean = false,
+    val antiFilterApps: String = "",
     val homeOrder: String = "0,1,2,3,4",
 )
 
@@ -62,6 +63,7 @@ class SettingsStore(context: Context) {
         downIcon = sp.getInt("downIcon", 6),
         routeIcons = sp.getString("routeIcons", "0,1,2")!!,
         antiFilter = sp.getBoolean("antiFilter", false),
+        antiFilterApps = sp.getString("antiFilterApps", "")!!,
         homeOrder = sp.getString("homeOrder", "0,1,2,3,4")!!,
     )
 
@@ -90,6 +92,7 @@ class SettingsStore(context: Context) {
             .putInt("downIcon", s.downIcon)
             .putString("routeIcons", s.routeIcons)
             .putBoolean("antiFilter", s.antiFilter)
+            .putString("antiFilterApps", s.antiFilterApps)
             .putString("homeOrder", s.homeOrder)
             .apply()
     }

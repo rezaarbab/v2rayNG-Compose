@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -27,16 +30,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.StickerMood
 import ir.v2rayng.compose.stickers.V2Stickers
-import ir.v2rayng.compose.stickers.tinted
 
 private val PALETTE = longArrayOf(
     0xFF2BD48A, 0xFF60A5FA, 0xFFB39BF5, 0xFFFFA94D,
@@ -51,13 +50,13 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
     val slot = if (zone.startsWith("nav:") || zone.startsWith("route:")) zone.split(":").getOrNull(1)?.toIntOrNull() ?: 0 else -1
 
     val title = when {
-        isWall -> "Ø³ÙØ§Ø±Ø´ÛŒâ€ŒØ³Ø§Ø²ÛŒ Ù¾Ø³â€ŒØ²Ù…ÛŒÙ†Ù‡"
-        isMain -> "Ø³ÙØ§Ø±Ø´ÛŒâ€ŒØ³Ø§Ø²ÛŒ Ø§Ø³ØªÛŒÚ©Ø± Ø§ØµÙ„ÛŒ"
-        zone.startsWith("nav:") -> "Ø§Ø³ØªÛŒÚ©Ø± Ø¢ÛŒÚ©ÙˆÙ† Ù…Ù†Ùˆ"
-        zone == "up" -> "Ø§Ø³ØªÛŒÚ©Ø± Ú©Ø§Ø±Øª Ø®Ø±ÙˆØ¬ÛŒ"
-        zone == "down" -> "Ø§Ø³ØªÛŒÚ©Ø± Ú©Ø§Ø±Øª ÙˆØ±ÙˆØ¯ÛŒ"
-        zone.startsWith("route:") -> "Ø§Ø³ØªÛŒÚ©Ø± Ù‚Ø§Ù†ÙˆÙ† Ù…Ø³ÛŒØ±ÛŒØ§Ø¨ÛŒ"
-        else -> "Ø§Ø³ØªÛŒÚ©Ø±"
+        isWall -> S.EDITOR_WALL
+        isMain -> S.EDITOR_MAIN
+        zone.startsWith("nav:") -> S.EDITOR_NAV
+        zone == "up" -> "Upload card sticker"
+        zone == "down" -> "Download card sticker"
+        zone.startsWith("route:") -> S.EDITOR_ROUTE
+        else -> "Sticker"
     }
 
     val pickStyle = if (isWall) settings.wallpaperStyle else settings.stickerStyle
@@ -97,16 +96,16 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                 if (isWall) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         MiniChip(S.STYLE_BLOB, settings.wallpaperStyle == 0, { vm.setWallpaperStyle(0) })
-                        MiniChip("Ø¹Ø±ÙˆØ³Ú©ÛŒ", settings.wallpaperStyle == 1, { vm.setWallpaperStyle(1) })
-                        MiniChip("Ù¾Ø±Ú†Ù…", settings.wallpaperStyle == 2, { vm.setWallpaperStyle(2) })
+                        MiniChip(S.STYLE_TOY, settings.wallpaperStyle == 1, { vm.setWallpaperStyle(1) })
+                        MiniChip(S.STYLE_FLAG, settings.wallpaperStyle == 2, { vm.setWallpaperStyle(2) })
                     }
                 }
 
                 if (isMain) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        MiniChip("Ø§Ø² Ø³Ø±ÙˆØ±", settings.mainIndex < 0, { vm.setMainIndex(-1) })
+                        MiniChip(S.FROM_SERVER, settings.mainIndex < 0, { vm.setMainIndex(-1) })
                         MiniChip(
-                            "Ø§Ù†ØªØ®Ø§Ø¨ÛŒ",
+                            S.CHOSEN,
                             settings.mainIndex >= 0,
                             { if (settings.mainIndex < 0) vm.setMainIndex(0) },
                         )
@@ -114,7 +113,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                 }
 
                 Text(
-                    "Ø§Ù†ØªØ®Ø§Ø¨ Ø§Ø³ØªÛŒÚ©Ø± Ø§Ø² Ù¾Ú© (${set.size}):",
+                    S.PICK_STICKER.format(set.size),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -135,7 +134,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                                 .clickable { pick(i) }
                                 .padding(5.dp),
                         ) {
-                            StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 52.dp, decorative = true)
+                            StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 52.dp)
                             Text(
                                 text = sticker.name,
                                 style = MaterialTheme.typography.labelSmall,
@@ -147,24 +146,30 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
 
                 if (isMain || isWall) {
                     Text(
-                        "Ø±Ù†Ú¯ Ø¯Ù„Ø®ÙˆØ§Ù‡:",
+                        S.COLOR,
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         val cur: Long = if (isWall) settings.wallpaperColor else settings.mainColor
                         ColorDot(0xFF888888, cur < 0, { if (isWall) vm.setWallpaperColor(-1) else vm.setMainColor(-1) })
-                        PALEASE_COLOR_FOREACH(cur, isWall, vm)
+                        PALETTE.forEach { c ->
+                            ColorDot(
+                                c,
+                                cur == c,
+                                { if (isWall) vm.setWallpaperColor(c) else vm.setMainColor(c) },
+                            )
+                        }
                     }
 
                     Text(
-                        "Ø³Ø§ÛŒØ²:",
+                        S.SIZE,
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (isWall) {
                         Text(
-                            text = if (settings.wallpaperSize == 0) "Ù¾ÛŒØ´â€ŒÙØ±Ø¶ (Û³Û°Û°)" else "${settings.wallpaperSize}",
+                            text = if (settings.wallpaperSize == 0) S.SIZE_DEFAULT.format("300") else "${settings.wallpaperSize}",
                             style = MaterialTheme.typography.labelMedium,
                         )
                         Slider(
@@ -174,7 +179,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                         )
                     } else {
                         Text(
-                            text = if (settings.mainSize == 0) "Ù¾ÛŒØ´â€ŒÙØ±Ø¶ (Û±Û¹Û°)" else "${settings.mainSize}",
+                            text = if (settings.mainSize == 0) S.SIZE_DEFAULT.format("190") else "${settings.mainSize}",
                             style = MaterialTheme.typography.labelMedium,
                         )
                         Slider(
@@ -186,22 +191,9 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                 }
 
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text("Ø¨Ø³ØªÙ†")
+                    Text(S.CLOSE)
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun PALEASE_COLOR_FOREACH(cur: Long, isWall: Boolean, vm: AppViewModel) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        PALETTE.forEach { c ->
-            ColorDot(
-                c,
-                cur == c,
-                { if (isWall) vm.setWallpaperColor(c) else vm.setMainColor(c) },
-            )
         }
     }
 }
@@ -239,4 +231,3 @@ private fun ColorDot(color: Long, selected: Boolean, onClick: () -> Unit) {
             .clickable { onClick() },
     )
 }
-

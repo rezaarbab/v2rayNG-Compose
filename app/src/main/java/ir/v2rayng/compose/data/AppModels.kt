@@ -6,6 +6,11 @@ import java.util.Locale
 
 enum class VpnState { IDLE, CONNECTING, CONNECTED, BROKEN }
 
+data class AppInfo(
+    val label: String,
+    val pkg: String,
+)
+
 data class ServerProfile(
     val id: String,
     val name: String,
@@ -53,6 +58,7 @@ data class AppState(
         "udp443" to false,
     ),
     val ipCountry: String = "",
+    val apps: List<AppInfo> = emptyList(),
 ) {
     val selected: ServerProfile get() = servers.first { it.id == selectedId }
 }
