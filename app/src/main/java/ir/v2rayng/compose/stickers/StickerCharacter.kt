@@ -88,6 +88,7 @@ fun StickerCharacter(
             .onGloballyPositioned { rootPos = it.positionInRoot(); side = it.size }
             .then(if (onTap != null) Modifier.clickable { onTap() } else Modifier)
     ) {
+        val s = size.width
         val animOn = env.enabled.value
         val speed = env.speed.floatValue
         val static = mood == StickerMood.SLEEP || !animOn
