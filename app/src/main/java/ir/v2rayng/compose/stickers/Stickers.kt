@@ -45,88 +45,58 @@ data class Sticker(
 
 object V2Stickers {
 
-    val blobs = listOf(
-        Sticker("zephyr", "زفیر", BlobArt(Color(0xFFF09258), 0.8f, 0.5f, 1.3f, 0.2f, 0.00f)),
-        Sticker("puck", "پاک", BlobArt(Color(0xFF96B6F5), 1.0f, 0.6f, 0.4f, 2.1f, 0.17f)),
-        Sticker("charon", "شارون", BlobArt(Color(0xFFB2A0F5), 0.6f, 0.9f, 2.0f, 1.0f, 0.34f)),
-        Sticker("kore", "کوری", BlobArt(Color(0xFF8CDDB2), 1.0f, 0.4f, 2.6f, 0.7f, 0.51f)),
-        Sticker("fenrir", "فنریر", BlobArt(Color(0xFFEC6E6E), 0.7f, 0.8f, 1.1f, 2.9f, 0.68f)),
-        Sticker("leda", "لدا", BlobArt(Color(0xFFF4D27A), 0.9f, 0.5f, 0.1f, 1.6f, 0.85f)),
-        Sticker("rose", "رز", BlobArt(Color(0xFFE689C3), 0.9f, 0.6f, 0.9f, 2.4f, 0.31f)),
-        Sticker("storm", "استورم", BlobArt(Color(0xFF7FD8E8), 0.75f, 0.45f, 3.2f, 0.9f, 0.62f)),
-        Sticker("lime", "لیمو", BlobArt(Color(0xFFC9E87F), 0.85f, 0.7f, 0.6f, 1.9f, 0.78f)),
+    private val blobNames = listOf(
+        "زفیر", "پاک", "شارون", "کوری", "فنریر", "لدا", "رز", "استورم", "لیمو", "توتی",
+        "باران", "مهتاب", "ابر", "آفتاب", "نجوا", "بلبل", "ریحان", "زعفران", "نارنگی", "انبه",
+        "گواوا", "کیوی", "انجیر", "طالبی", "خربزه", "زرشک", "بهارنارنج", "گلاب", "لکه", "بوم",
+        "موج", "صدف", "مرجان", "صخره", "درخت", "غار", "شفق", "باد", "چشمه", "سراب",
+        "نوا", "واریا", "طوفان", "رعد", "برق", "شبنم", "یخ", "برف", "اورا", "فرفره",
     )
 
-    private val dropPoly = listOf(
-        Offset(0.5f, 0.05f), Offset(0.72f, 0.28f), Offset(0.86f, 0.55f),
-        Offset(0.7f, 0.85f), Offset(0.5f, 0.96f), Offset(0.3f, 0.85f),
-        Offset(0.14f, 0.55f), Offset(0.28f, 0.28f),
+    val blobs: List<Sticker> = blobNames.mapIndexed { idx, name ->
+        val classic = floatArrayOf(26f, 218f, 258f, 150f, 4f, 42f)
+        val hue = if (idx < classic.size) classic[idx] else (((idx - classic.size) * 137.508f) % 360f)
+        val art = BlobArt(
+            color = Color.hsl(hue, 0.55f + 0.25f * (idx % 4) / 3f, 0.60f + 0.10f * (idx % 3) / 2f),
+            a = 0.4f + 0.6f * (idx % 5) / 4f,
+            b = 0.3f + 0.7f * (idx % 7) / 6f,
+            p = (idx * 1.17f) % 6.2832f,
+            q = (idx * 2.31f) % 6.2832f,
+            phase = (idx * 0.053f) % 1f,
+        )
+        Sticker("blob-$idx", name, art)
+    }
+
+    private val toyNames = listOf(
+        "حباب", "توپ", "الماس", "برگ", "ستاره", "قلب", "نخود", "برنجک", "لوبیا", "نخیل",
+        "نعناع", "زیتون", "آلبالو", "گیلاس", "انار", "انگور", "توت‌فرنگی", "نارنج", "هلو", "زردآلو",
+        "آفتابگردان", "نیلوفر", "لاله", "شقایق", "بنفشه", "یاس", "نرگس", "مریم", "سنبل", "گلبرگ",
+        "قارچ", "مکعب", "بیضی", "لوزی", "سپر", "کپسول", "کدو", "شیشه", "سبد", "زنگ",
+        "چتر", "کلاه", "دکمه", "قیچی", "کلید", "ساعت", "تاب", "توتم", "بادبزن", "فانوس",
     )
 
-    private val trianglePoly = listOf(
-        Offset(0.5f, 0.07f), Offset(0.92f, 0.83f), Offset(0.9f, 0.94f),
-        Offset(0.1f, 0.94f), Offset(0.08f, 0.83f),
-    )
-
-    private val cloudOrangeOps = listOf(
-        ToyCircle(0.32f, 0.52f, 0.20f), ToyCircle(0.5f, 0.42f, 0.24f),
-        ToyCircle(0.68f, 0.47f, 0.20f), ToyCircle(0.55f, 0.66f, 0.18f),
-        ToyCircle(0.34f, 0.68f, 0.18f),
-    )
-
-    private val beanOps = listOf(
-        ToyCircle(0.5f, 0.5f, 0.30f), ToyCircle(0.25f, 0.4f, 0.20f),
-        ToyCircle(0.72f, 0.3f, 0.20f), ToyCircle(0.72f, 0.7f, 0.20f),
-        ToyCircle(0.3f, 0.75f, 0.18f),
-    )
-
-    private val pillOps = listOf(
-        ToyCircle(0.3f, 0.5f, 0.3f), ToyCircle(0.7f, 0.5f, 0.3f),
-        ToyPoly(listOf(Offset(0.3f, 0.2f), Offset(0.7f, 0.2f), Offset(0.7f, 0.8f), Offset(0.3f, 0.8f))),
-    )
-
-    val toys = listOf(
-        Sticker(
-            "drop", "اشک",
-            ToyArt(Color(0xFF787878), listOf(ToyPoly(dropPoly)),
-                listOf(ToyEye(0.38f, 0.5f, 0.09f, 0.22f, -8f), ToyEye(0.6f, 0.5f, 0.09f, 0.22f, -4f)), 0.11f),
-        ),
-        Sticker(
-            "triangle", "مثلث",
-            ToyArt(Color(0xFF1184FF), listOf(ToyPoly(trianglePoly)),
-                listOf(ToyEye(0.42f, 0.6f, 0.08f, 0.2f, 0f), ToyEye(0.58f, 0.6f, 0.08f, 0.2f, 0f)), 0.29f),
-        ),
-        Sticker(
-            "cloudy", "ابر",
-            ToyArt(Color(0xFFFF6600), cloudOrangeOps,
-                listOf(ToyEye(0.42f, 0.45f, 0.16f, 0.07f, 20f), ToyEye(0.6f, 0.5f, 0.16f, 0.07f, 24f)), 0.44f),
-        ),
-        Sticker(
-            "blackie", "شب",
-            ToyArt(Color(0xFF111418), listOf(ToyCircle(0.5f, 0.5f, 0.46f)),
-                listOf(ToyEye(0.4f, 0.42f, 0.09f, 0.2f, -25f), ToyEye(0.56f, 0.46f, 0.09f, 0.2f, 20f)), 0.58f),
-        ),
-        Sticker(
-            "pill", "کپسول",
-            ToyArt(Color(0xFF00C870), pillOps,
-                listOf(ToyEye(0.42f, 0.5f, 0.12f, 0.28f, 0f), ToyEye(0.58f, 0.5f, 0.12f, 0.28f, 0f)), 0.71f),
-        ),
-        Sticker(
-            "bean", "لوبیا",
-            ToyArt(Color(0xFF94623A), beanOps,
-                listOf(ToyEye(0.45f, 0.5f, 0.07f, 0.2f, -30f), ToyEye(0.65f, 0.5f, 0.07f, 0.2f, 30f)), 0.86f),
-        ),
-        Sticker(
-            "star", "ستاره",
-            ToyArt(Color(0xFFF4C244), listOf(ToyPoly(starPts())),
-                listOf(ToyEye(0.44f, 0.52f, 0.08f, 0.18f, 0f), ToyEye(0.56f, 0.52f, 0.08f, 0.18f, 0f)), 0.2f),
-        ),
-        Sticker(
-            "heart", "قلب",
-            ToyArt(Color(0xFFF06D9E), listOf(ToyPoly(heartPts())),
-                listOf(ToyEye(0.44f, 0.5f, 0.08f, 0.18f, 0f), ToyEye(0.56f, 0.5f, 0.08f, 0.18f, 0f)), 0.66f),
-        ),
-    )
+    val toys: List<Sticker> = toyNames.mapIndexed { idx, name ->
+        val classic = floatArrayOf(0f, 218f, 30f, 260f, 158f, 28f)
+        val hue = if (idx < classic.size) classic[idx] else (((idx - classic.size) * 137.508f) % 360f)
+        val color = Color.hsl(hue, 0.62f + 0.2f * (idx % 4) / 3f, 0.56f + 0.12f * (idx % 3) / 2f)
+        val eyes = listOf(
+            ToyEye(0.40f, 0.46f, 0.085f, 0.19f, if (idx % 2 == 0) -6f else 6f),
+            ToyEye(0.60f, 0.46f, 0.085f, 0.19f, if (idx % 2 == 0) 6f else -6f),
+        )
+        val ops: List<ToyOp> = when (idx % 10) {
+            0 -> cloudOps(4 + idx % 3)
+            1 -> flowerOps(5 + idx % 4)
+            2 -> listOf(ToyPoly(starPts(5 + idx % 4)))
+            3 -> listOf(ToyPoly(ngonPts(5 + idx % 5)))
+            4 -> pillOps(idx % 2 == 0)
+            5 -> listOf(ToyPoly(gemPts()))
+            6 -> eggOps()
+            7 -> listOf(ToyPoly(dropPts()))
+            8 -> listOf(ToyPoly(heartPts()))
+            else -> listOf(ToyPoly(shieldPts()))
+        }
+        Sticker("toy-$idx", name, ToyArt(color, ops, eyes, (idx * 0.071f) % 1f))
+    }
 
     private val sets = listOf(blobs, toys)
 
@@ -139,15 +109,72 @@ object V2Stickers {
     }
 }
 
-private fun starPts(): List<Offset> {
-    val pts = ArrayList<Offset>(10)
-    for (k in 0 until 10) {
-        val ang = (-90.0 + 36.0 * k) * PI / 180.0
+private fun cloudOps(n: Int): List<ToyOp> {
+    val ops = ArrayList<ToyOp>(n)
+    for (k in 0 until n) {
+        val f = k.toFloat() / (n - 1).coerceAtLeast(1)
+        val bump = sin((f * PI).toFloat())
+        ops.add(ToyCircle(0.30f + 0.40f * f, 0.58f - 0.16f * bump, 0.18f + 0.08f * bump))
+    }
+    return ops
+}
+
+private fun flowerOps(k: Int): List<ToyOp> {
+    val ops = ArrayList<ToyOp>(k + 1)
+    for (i in 0 until k) {
+        val th = ((2 * PI * i / k) + PI / 2).toFloat()
+        ops.add(ToyCircle(0.5f + 0.28f * cos(th), 0.52f + 0.28f * sin(th), 0.15f))
+    }
+    ops.add(ToyCircle(0.5f, 0.52f, 0.17f))
+    return ops
+}
+
+private fun starPts(spikes: Int = 5): List<Offset> {
+    val pts = ArrayList<Offset>(spikes * 2)
+    for (k in 0 until spikes * 2) {
+        val ang = (-90.0 + (360.0 / (spikes * 2)) * k) * PI / 180.0
         val rad = if (k % 2 == 0) 0.46f else 0.20f
         pts.add(Offset(0.5f + (rad * cos(ang)).toFloat(), 0.52f + (rad * sin(ang)).toFloat()))
     }
     return pts
 }
+
+private fun ngonPts(n: Int): List<Offset> {
+    val pts = ArrayList<Offset>(n)
+    for (k in 0 until n) {
+        val ang = (-90.0 + 360.0 * k / n) * PI / 180.0
+        pts.add(Offset(0.5f + (0.42f * cos(ang)).toFloat(), 0.52f + (0.42f * sin(ang)).toFloat()))
+    }
+    return pts
+}
+
+private fun pillOps(horizontal: Boolean): List<ToyOp> = if (horizontal) {
+    listOf(
+        ToyCircle(0.32f, 0.5f, 0.28f), ToyCircle(0.68f, 0.5f, 0.28f),
+        ToyPoly(listOf(Offset(0.32f, 0.22f), Offset(0.68f, 0.22f), Offset(0.68f, 0.78f), Offset(0.32f, 0.78f))),
+    )
+} else {
+    listOf(
+        ToyCircle(0.5f, 0.3f, 0.26f), ToyCircle(0.5f, 0.7f, 0.26f),
+        ToyPoly(listOf(Offset(0.26f, 0.3f), Offset(0.74f, 0.3f), Offset(0.74f, 0.7f), Offset(0.26f, 0.7f))),
+    )
+}
+
+private fun gemPts(): List<Offset> = listOf(
+    Offset(0.5f, 0.08f), Offset(0.88f, 0.52f), Offset(0.5f, 0.96f), Offset(0.12f, 0.52f),
+)
+
+private fun eggOps(): List<ToyOp> = listOf(
+    ToyCircle(0.5f, 0.40f, 0.30f),
+    ToyCircle(0.5f, 0.62f, 0.30f),
+    ToyCircle(0.5f, 0.72f, 0.26f),
+)
+
+private fun dropPts(): List<Offset> = listOf(
+    Offset(0.5f, 0.05f), Offset(0.72f, 0.28f), Offset(0.86f, 0.55f),
+    Offset(0.7f, 0.85f), Offset(0.5f, 0.96f), Offset(0.3f, 0.85f),
+    Offset(0.14f, 0.55f), Offset(0.28f, 0.28f),
+)
 
 private fun heartPts(): List<Offset> {
     val pts = ArrayList<Offset>(28)
@@ -160,4 +187,7 @@ private fun heartPts(): List<Offset> {
     return pts
 }
 
-private fun abs(v: Int): Int = if (v < 0) -v else v
+private fun shieldPts(): List<Offset> = listOf(
+    Offset(0.5f, 0.05f), Offset(0.9f, 0.2f), Offset(0.9f, 0.55f),
+    Offset(0.5f, 0.95f), Offset(0.1f, 0.55f), Offset(0.1f, 0.2f),
+)
