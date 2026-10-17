@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.viewmodel.compose.viewModel
+import ir.v2rayng.compose.AppViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
