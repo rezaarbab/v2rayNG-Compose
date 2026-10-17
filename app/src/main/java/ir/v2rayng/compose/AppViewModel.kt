@@ -81,10 +81,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     }
 
     fun resetSettings() = setSettings { Settings() }
+
     fun setAntiFilter(v: Boolean) {
         setSettings { it.copy(antiFilter = v) }
         log("INFO", if (v) S.LOG_ANTI_ON else S.LOG_ANTI_OFF)
     }
+
     fun setHomeOrder(order: List<Int>) = setSettings { it.copy(homeOrder = packList(order)) }
 
     private fun log(level: String, msg: String) {
@@ -101,17 +103,17 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun connect() {
         val target = _state.value.selected
         put { s -> s.copy(vpnState = VpnState.CONNECTING) }
-        log("INFO", "Ø¯Ø± Ø­Ø§Ù„ Ø§ØªØµØ§Ù„ Ø¨Ù‡ Â«${target.name}Â» â€¦")
+        log("INFO", S.LOG_CONNECTING.format(target.name))
         connectJob?.cancel()
         connectJob = viewModelScope.launch {
             delay(800L + Random.nextLong(900))
             if (_state.value.vpnState == VpnState.CONNECTING) {
                 if (Random.nextInt(7) == 0) {
                     put { s -> s.copy(vpnState = VpnState.BROKEN) }
-                    log("ERROR", "Ø§ØªØµØ§Ù„ Ø¨Ø±Ù‚Ø±Ø§Ø± Ù†Ø´Ø¯ â€“ Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†")
+                    log("ERROR", S.LOG_FAILED)
                 } else {
                     put { s -> s.copy(vpnState = VpnState.CONNECTED) }
-                    log("INFO", "Ø§ØªØµØ§Ù„ Ø¨Ø±Ù‚Ø±Ø§Ø± Ø´Ø¯ØŒ ØªÙˆÙ†Ù„ ÙØ¹Ø§Ù„ Ø§Ø³Øª")
+                    log("INFO", S.LOG_CONNECTED)
                     startTraffic()
                     if (_settings.value.autoFlag && target.country.isNotBlank()) {
                         applyFlag(target.country)
@@ -151,7 +153,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 traffic = s.traffic.copy(upSpeed = 0.0, downSpeed = 0.0),
             )
         }
-        log("INFO", "Ø§ØªØµØ§Ù„ Ù‚Ø·Ø¹ Ø´Ø¯")
+        log("INFO", S.LOG_DISCONNECTED)
         if (_settings.value.autoFlag) {
             fetchIpFlag()
         }
@@ -173,9 +175,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             if (code != null) {
                 val applied = applyFlag(code)
                 put { s -> s.copy(ipCountry = code) }
-                log("INFO", "Ú©Ø´ÙˆØ± Ø¢ÛŒâ€ŒÙ¾ÛŒ: $code" + if (applied) " (Ù¾Ø³â€ŒØ²Ù…ÛŒÙ†Ù‡ Ø³Øª Ø´Ø¯)" else "")
+                log("INFO", S.LOG_IP_OK.format(code))
             } else {
-                log("WARN", "ØªØ´Ø®ÛŒØµ Ú©Ø´ÙˆØ± Ø¢ÛŒâ€ŒÙ¾ÛŒ Ù†Ø§Ù…ÙˆÙÙ‚ Ø¨ÙˆØ¯")
+                log("WARN", S.LOG_IP_FAIL)
             }
         }
     }
@@ -189,7 +191,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun pingAll() {
         viewModelScope.launch {
-            log("INFO", "Ø¢Ø²Ù…ÙˆÙ† ØªØ§Ø®ÛŒØ± Ø´Ø±ÙˆØ¹ Ø´Ø¯")
+            log("INFO", S.LOG_PING_START)
             for (srv in _state.value.servers) {
                 delay(350)
                 val ms = 40 + Random.nextInt(400)
@@ -197,14 +199,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms) else it })
                 }
             }
-            log("INFO", "Ø¢Ø²Ù…ÙˆÙ† ØªØ§Ø®ÛŒØ± Ú©Ø§Ù…Ù„ Ø´Ø¯")
+            log("INFO", S.LOG_PING_DONE)
         }
     }
 
     fun select(id: String) {
         val name = _state.value.servers.firstOrNull { it.id == id }?.name ?: return
         put { s -> s.copy(selectedId = id) }
-        log("INFO", "Ù¾Ø±ÙˆÙØ§ÛŒÙ„ Ø§Ù†ØªØ®Ø§Ø¨ Ø´Ø¯: Â«$nameÂ»")
+        log("INFO", S.LOG_SELECTED.format(name))
     }
 
     fun addServer(name: String, host: String) {
@@ -219,16 +221,16 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 )
             )
         }
-        log("INFO", "Ø³Ø±ÙˆØ± Ø¬Ø¯ÛŒØ¯ Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯: Â«$nameÂ»")
+        log("INFO", S.LOG_ADDED.format(name))
     }
 
     fun setRoute(key: String, value: Boolean) {
         put { s -> s.copy(routes = s.routes + (key to value)) }
-        log("INFO", "Ù‚Ø§Ù†ÙˆÙ† Ù…Ø³ÛŒØ±ÛŒØ§Ø¨ÛŒ Â«${if (value) key else "!$key"}Â» ÙØ¹Ø§Ù„ Ø´Ø¯")
+        log("INFO", if (value) S.LOG_ROUTE_ON.format(key) else S.LOG_ROUTE_OFF.format(key))
     }
 
     fun clearLogs() {
         put { s -> s.copy(logs = emptyList()) }
-        log("INFO", "Ú¯Ø²Ø§Ø±Ø´ Ù¾Ø§Ú© Ø´Ø¯")
+        log("INFO", S.LOG_CLEARED)
     }
 }
