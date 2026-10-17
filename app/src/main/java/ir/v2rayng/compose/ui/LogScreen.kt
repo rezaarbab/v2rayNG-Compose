@@ -16,7 +16,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -65,7 +64,7 @@ fun LogScreen(state: AppState, vm: AppViewModel) {
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f),
             )
-            IconButton(
+            androidx.compose.material3.TextButton(
                 onClick = {
                     if (state.logs.isNotEmpty()) {
                         val text = buildString {
@@ -78,7 +77,7 @@ fun LogScreen(state: AppState, vm: AppViewModel) {
                     }
                 },
             ) {
-                Icon(Icons.Filled.ContentCopy, contentDescription = if (copied) "Copied!" else "Copy")
+                Text(if (copied) "Copied!" else "Copy")
             }
             IconButton(onClick = { vm.clearLogs() }) {
                 Icon(Icons.Filled.Delete, contentDescription = S.CLEAR)
