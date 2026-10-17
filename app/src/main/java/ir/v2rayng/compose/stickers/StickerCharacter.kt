@@ -31,8 +31,6 @@ import kotlin.math.sqrt
 val EyeDark = Color(0xFF231E1E)
 private val EyeLight = Color.White
 
-enum class StickerMood { NORMAL, HAPPY, WOBBLE, SLEEP }
-
 private data class BlobTables(
     val A: FloatArray,
     val B: FloatArray,

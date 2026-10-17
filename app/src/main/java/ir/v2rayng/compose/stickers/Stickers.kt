@@ -2,7 +2,7 @@ package ir.v2rayng.compose.stickers
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import kotlin.math.abs
+import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -15,7 +15,7 @@ data class BlobArt(
     val p: Float,
     val q: Float,
     val phase: Float,
-)
+) : StickerArt
 
 sealed interface ToyOp
 data class ToyCircle(val cx: Float, val cy: Float, val r: Float) : ToyOp
@@ -34,7 +34,7 @@ data class ToyArt(
     val ops: List<ToyOp>,
     val eyes: List<ToyEye>,
     val phase: Float,
-)
+) : StickerArt
 
 sealed interface StickerArt
 data class Sticker(
