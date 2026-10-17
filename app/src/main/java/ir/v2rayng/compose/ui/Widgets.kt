@@ -108,31 +108,40 @@ fun Modifier.holdFor(
     onTap: (() -> Unit)? = null,
     onHold: () -> Unit,
 ): Modifier = this.pointerInput(durationMs) {
-    androidx.compose.foundation.gestures.awaitEachGesture {
-        val down = awaitFirstDown(requireUnconsumed = false)
-        val startX = down.position.x
-        val startY = down.position.y
-        var elapsed = 0f
-        var movedFar = false
-        var fired = false
+    kotlinx.coroutines.coroutineScope {
         while (true) {
-            val remaining = (durationMs - elapsed).toLong().coerceAtLeast(1L)
-            val ev = kotlinx.coroutines.withTimeoutOrNull(remaining) { awaitPointerEvent() }
-            if (ev == null) {
-                onHold()
-                fired = true
-                currentEvent.changes.forEach { it.consume() }
-                break
+            awaitPointerEventScope {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                val startX = down.position.x
+                val startY = down.position.y
+                val startT = down.uptimeMillis
+                val holdJob = kotlinx.coroutines.launch {
+                    kotlinx.coroutines.delay(durationMs)
+                    onHold()
+                }
+                var movedFar = false
+                var released = false
+                while (true) {
+                    val e = awaitPointerEvent()
+                    val c = e.changes.firstOrNull { it.id == down.id } ?: continue
+                    val dx = c.position.x - startX
+                    val dy = c.position.y - startY
+                    if (dx * dx + dy * dy > 3600f) movedFar = true
+                    if (movedFar) break
+                    if (!c.pressed) {
+                        released = true
+                        break
+                    }
+                    if (c.uptimeMillis - startT >= durationMs) {
+                        holdJob.cancel()
+                        onHold()
+                        e.changes.forEach { it.consume() }
+                        break
+                    }
+                }
+                holdJob.cancel()
+                if (released && !movedFar && onTap != null) onTap()
             }
-            val c = ev.changes.firstOrNull { it.id == down.id }
-            if (c == null) continue
-            if (!c.pressed) break
-            val dx = c.position.x - startX
-            val dy = c.position.y - startY
-            if (dx * dx + dy * dy > 3600f) movedFar = true
-            if (movedFar) break
-            elapsed = c.uptimeMillis - down.uptimeMillis
         }
-        if (!fired && !movedFar && onTap != null) onTap()
     }
 }
