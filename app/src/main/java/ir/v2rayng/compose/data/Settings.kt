@@ -24,6 +24,10 @@ data class Settings(
     val navIcons: String = "0,1,2,3,4",
     val upIcon: Int = 5,
     val downIcon: Int = 6,
+    val upColor: Long = -1L,
+    val downColor: Long = -1L,
+    val navColors: String = "-1,-1,-1,-1,-1",
+    val routeColors: String = "-1,-1,-1",
     val routeIcons: String = "0,1,2",
     val antiFilter: Boolean = false,
     val antiFilterApps: String = "",
@@ -35,6 +39,12 @@ fun parseList(s: String, def: List<Int>): List<Int> {
 }
 
 fun packList(l: List<Int>): String = l.joinToString(",")
+
+fun parseLongList(s: String, def: List<Long>): List<Long> {
+    return s.split(",").mapNotNull { it.trim().toLongOrNull() }.ifEmpty { def }
+}
+
+fun packLongList(l: List<Long>): String = l.joinToString(",")
 
 class SettingsStore(context: Context) {
     private val sp = context.getSharedPreferences("v2settings", Context.MODE_PRIVATE)
@@ -61,6 +71,10 @@ class SettingsStore(context: Context) {
         navIcons = sp.getString("navIcons", "0,1,2,3,4")!!,
         upIcon = sp.getInt("upIcon", 5),
         downIcon = sp.getInt("downIcon", 6),
+        upColor = java.lang.Long.valueOf(sp.getString("upColor", "-1")!!),
+        downColor = java.lang.Long.valueOf(sp.getString("downColor", "-1")!!),
+        navColors = sp.getString("navColors", "-1,-1,-1,-1,-1")!!,
+        routeColors = sp.getString("routeColors", "-1,-1,-1")!!,
         routeIcons = sp.getString("routeIcons", "0,1,2")!!,
         antiFilter = sp.getBoolean("antiFilter", false),
         antiFilterApps = sp.getString("antiFilterApps", "")!!,
@@ -90,6 +104,10 @@ class SettingsStore(context: Context) {
             .putString("navIcons", s.navIcons)
             .putInt("upIcon", s.upIcon)
             .putInt("downIcon", s.downIcon)
+            .putString("upColor", s.upColor.toString())
+            .putString("downColor", s.downColor.toString())
+            .putString("navColors", s.navColors)
+            .putString("routeColors", s.routeColors)
             .putString("routeIcons", s.routeIcons)
             .putBoolean("antiFilter", s.antiFilter)
             .putString("antiFilterApps", s.antiFilterApps)

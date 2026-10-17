@@ -32,9 +32,11 @@ import androidx.compose.ui.unit.dp
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.Settings
+import ir.v2rayng.compose.data.parseLongList
 import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.V2Stickers
+import ir.v2rayng.compose.stickers.tinted
 
 private data class RouteUi(
     val key: String,
@@ -72,7 +74,8 @@ fun RoutingScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                 ) {
                     if (settings.navStickers) {
-                        StickerCharacter(V2Stickers.byIndex(settings.stickerStyle, routeIcons[i]), sizeDp = 42.dp)
+                        val tint = parseLongList(settings.routeColors, listOf(-1L, -1L, -1L)).getOrNull(i) ?: -1L
+                        StickerCharacter(tinted(V2Stickers.byIndex(settings.stickerStyle, routeIcons[i]), tint), sizeDp = 42.dp)
                     } else {
                         RouteVectorIcon(kind = r.key)
                     }

@@ -54,6 +54,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.SettingsStore
+import ir.v2rayng.compose.data.parseLongList
 import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.stickers.LocalStickerEnv
 import ir.v2rayng.compose.stickers.StickerCharacter
@@ -147,11 +148,12 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                             ) {
                                 if (settings.navStickers) {
                                     val s = V2Stickers.byIndex(settings.stickerStyle, navIcons.getOrNull(real) ?: real)
+                                    val tint = parseLongList(settings.navColors, listOf(-1L, -1L, -1L, -1L, -1L)).getOrNull(real) ?: -1L
                                     StickerCharacter(
-                                        sticker = s,
+                                        sticker = tinted(s, tint),
                                         mood = if (tab == pos) StickerMood.HAPPY else StickerMood.NORMAL,
                                         sizeDp = 26.dp,
-                                        
+
                                     )
                                 } else {
                                     Icon(tabIcons[real], contentDescription = S.TABS[real])

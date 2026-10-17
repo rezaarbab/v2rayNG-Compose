@@ -155,8 +155,8 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), settings.upIcon, settings.stickerStyle, { editZone.value = "up" }, settings.navStickers)
-                        TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), settings.downIcon, settings.stickerStyle, { editZone.value = "down" }, settings.navStickers)
+                        TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), settings.upIcon, settings.stickerStyle, settings.upColor, { editZone.value = "up" }, settings.navStickers)
+                        TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), settings.downIcon, settings.stickerStyle, settings.downColor, { editZone.value = "down" }, settings.navStickers)
                     }
                 }
                 else -> {
@@ -191,6 +191,7 @@ private fun RowScope.TrafficCard(
     accent: Color,
     iconIndex: Int,
     stickerStyle: Int,
+    iconColor: Long,
     onIconHold: () -> Unit,
     stickers: Boolean,
 ) {
@@ -213,7 +214,7 @@ private fun RowScope.TrafficCard(
             ) {
                 if (stickers && iconIndex >= 0) {
                     StickerCharacter(
-                        sticker = V2Stickers.byIndex(stickerStyle, iconIndex),
+                        sticker = tinted(V2Stickers.byIndex(stickerStyle, iconIndex), iconColor),
                         sizeDp = 30.dp,
                     )
                 } else {

@@ -11,7 +11,9 @@ import ir.v2rayng.compose.data.SettingsStore
 import ir.v2rayng.compose.data.TimeKit
 import ir.v2rayng.compose.data.VpnState
 import ir.v2rayng.compose.data.packList
+import ir.v2rayng.compose.data.packLongList
 import ir.v2rayng.compose.data.parseList
+import ir.v2rayng.compose.data.parseLongList
 import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.ui.S
 import java.net.HttpURLConnection
@@ -74,6 +76,20 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun setUpIcon(i: Int) = setSettings { it.copy(upIcon = i) }
     fun setDownIcon(i: Int) = setSettings { it.copy(downIcon = i) }
+    fun setUpColor(v: Long) = setSettings { it.copy(upColor = v) }
+    fun setDownColor(v: Long) = setSettings { it.copy(downColor = v) }
+
+    fun setNavColor(slot: Int, v: Long) = setSettings { s ->
+        val cur = parseLongList(s.navColors, listOf(-1L, -1L, -1L, -1L, -1L)).toMutableList()
+        cur[slot.coerceIn(0, cur.size - 1)] = v
+        s.copy(navColors = packLongList(cur))
+    }
+
+    fun setRouteColor(slot: Int, v: Long) = setSettings { s ->
+        val cur = parseLongList(s.routeColors, listOf(-1L, -1L, -1L)).toMutableList()
+        cur[slot.coerceIn(0, cur.size - 1)] = v
+        s.copy(routeColors = packLongList(cur))
+    }
 
     fun srvStickerIndex(id: String): Int =
         _state.value.servers.firstOrNull { it.id == id }?.stickerIndex ?: 0

@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.Settings
+import ir.v2rayng.compose.data.parseLongList
 import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.StickerMood
@@ -85,6 +86,28 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
             zone == "down" -> vm.setDownIcon(i)
             srvId != null -> vm.setServerIcon(srvId, i)
             zone.startsWith("route:") -> vm.setRouteIcon(slot, i)
+        }
+    }
+
+    val colorCur = when {
+        isWall -> settings.wallpaperColor
+        isMain -> settings.mainColor
+        zone.startsWith("nav:") -> parseLongList(settings.navColors, listOf(-1L, -1L, -1L, -1L, -1L)).getOrNull(slot) ?: -1L
+        zone == "up" -> settings.upColor
+        zone == "down" -> settings.downColor
+        zone.startsWith("route:") -> parseLongList(settings.routeColors, listOf(-1L, -1L, -1L)).getOrNull(slot) ?: -1L
+        else -> -1L
+    }
+    val hasColor = srvId == null
+
+    fun setColor(v: Long) {
+        when {
+            isWall -> vm.setWallpaperColor(v)
+            isMain -> vm.setMainColor(v)
+            zone.startsWith("nav:") -> vm.setNavColor(slot, v)
+            zone == "up" -> vm.setUpColor(v)
+            zone == "down" -> vm.setDownColor(v)
+            zone.startsWith("route:") -> vm.setRouteColor(slot, v)
         }
     }
 
@@ -149,24 +172,28 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                     }
                 }
 
-                if (isMain || isWall) {
+                if (hasColor) {
                     Text(
                         S.COLOR,
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val cur: Long = if (isWall) settings.wallpaperColor else settings.mainColor
-                        ColorDot(0xFF888888, cur < 0, { if (isWall) vm.setWallpaperColor(-1) else vm.setMainColor(-1) })
+                        ColorDot(0xFF888888, colorCur < 0, { setColor(-1L) })
                         PALETTE.forEach { c ->
                             ColorDot(
                                 c,
-                                cur == c,
-                                { if (isWall) vm.setWallpaperColor(c) else vm.setMainColor(c) },
+                                colorCur == c,
+                                { setColor(c) },
                             )
                         }
+                        MiniChip("Random", false, {
+                            setColor(PALETTE[(0 until PALETTE.size).random()])
+                        })
                     }
+                }
 
+                if (isMain || isWall) {
                     Text(
                         S.SIZE,
                         style = MaterialTheme.typography.labelMedium,
