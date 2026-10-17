@@ -71,13 +71,26 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
             vm.toggleVpn()
         }
     }
-    fun connectOrConsent() {
+    val proceedAfterNotif = {
         val intent = vm.needsVpnConsent()
         if (intent != null) {
             consentLauncher.launch(intent)
         } else {
             vm.toggleVpn()
         }
+    }
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
+        proceedAfterNotif()
+    }
+    fun connectOrConsent() {
+        val ctx = ir.v2rayng.compose.AppCtx.app
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            notifLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        proceedAfterNotif()
     }
 
     val mainSticker = if (settings.mainIndex >= 0) {

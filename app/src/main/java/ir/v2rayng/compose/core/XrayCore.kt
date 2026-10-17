@@ -198,6 +198,29 @@ fun buildXrayConfig(link: VlessLink): String {
                     ),
                 ),
         )
+        .put(
+            "stats",
+            JSONObject(),
+        )
+        .put(
+            "policy",
+            JSONObject()
+                .put(
+                    "levels",
+                    JSONObject().put(
+                        "0",
+                        JSONObject()
+                            .put("statsUserUplink", true)
+                            .put("statsUserDownlink", true),
+                    ),
+                )
+                .put(
+                    "system",
+                    JSONObject()
+                        .put("statsOutboundUplink", true)
+                        .put("statsOutboundDownlink", true),
+                ),
+        )
     return config.toString()
 }
 
