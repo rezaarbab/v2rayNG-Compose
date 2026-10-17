@@ -1,6 +1,8 @@
 package ir.v2rayng.compose.data
 
 import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class Settings(
     val dark: Boolean = true,
@@ -99,8 +101,58 @@ class SettingsStore(context: Context) {
         homeOrder = sp.getString("homeOrder", "0,1,2,3,4")!!,
     )
 
-    fun save(s: Settings) {
-        sp.edit()
+    fun loadServers(): List<ServerProfile>? {
+        return try {
+            if (!sp.contains("servers")) return null
+            val raw = sp.getString("servers", "") ?: return null
+            if (raw.isBlank()) return null
+            val out = ArrayList<ServerProfile>()
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val link = o.optString("link", "")
+                out.add(
+                    ServerProfile(
+                        id = o.optString("id"),
+                        name = o.optString("name"),
+                        host = o.optString("host"),
+                        stickerIndex = o.optInt("stickerIndex", i),
+                        country = o.optString("country", ""),
+                        link = link.takeIf { it.isNotBlank() },
+                    ),
+                )
+            }
+            out.ifEmpty { null }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveServers(list: List<ServerProfile>, selectedId: String) {
+        try {
+            val arr = JSONArray()
+            for (s in list) {
+                val o = JSONObject()
+                    .put("id", s.id)
+                    .put("name", s.name)
+                    .put("host", s.host)
+                    .put("stickerIndex", s.stickerIndex)
+                    .put("country", s.country)
+                if (s.link != null) o.put("link", s.link)
+                arr.put(o)
+            }
+            sp.edit().putString("servers", arr.toString()).putString("selectedId", selectedId).apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun loadSelectedId(): String = sp.getString("selectedId", "s1") ?: "s1"
+
+    fun saveSelectedId(id: String) {
+        sp.edit().putString("selectedId", id).apply()
+    }
+
+    fun save(s: Settings) {        sp.edit()
             .putBoolean("dark", s.dark)
             .putInt("accent", s.accent)
             .putString("customAccent", s.customAccent.toString())

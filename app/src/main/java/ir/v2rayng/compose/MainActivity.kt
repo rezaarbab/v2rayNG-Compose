@@ -16,7 +16,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         lockHighRefreshRate()
-        val dark = SettingsStore(this).load().dark
+        applySystemBars(SettingsStore(this).load().dark)
+        setContent {
+            AppRoot()
+        }
+    }
+
+    fun applySystemBars(dark: Boolean) {
         if (dark) {
             enableEdgeToEdge(
                 statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
@@ -27,9 +33,6 @@ class MainActivity : ComponentActivity() {
                 statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
                 navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
             )
-        }
-        setContent {
-            AppRoot()
         }
     }
 

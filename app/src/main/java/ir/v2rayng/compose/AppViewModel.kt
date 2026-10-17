@@ -48,6 +48,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private var trafficJob: Job? = null
 
     init {
+        val saved = store.loadServers()
+        if (saved != null) {
+            _state.value = _state.value.copy(
+                servers = saved,
+                selectedId = if (saved.any { it.id == store.loadSelectedId() }) store.loadSelectedId() else saved.first().id,
+            )
+        }
         if (_state.value.servers.isNotEmpty()) {
             pingAll()
         }
@@ -447,6 +454,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             )
         }
         log("INFO", S.LOG_ADDED.format(shownName))
+        store.saveServers(_state.value.servers, _state.value.selectedId)
         viewModelScope.launch {
             val code = serverCountry(link.address)
             if (code != null) {
@@ -455,6 +463,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                         servers = s.servers.map { if (it.id == newId) it.copy(country = code) else it },
                     )
                 }
+                store.saveServers(_state.value.servers, _state.value.selectedId)
             }
         }
     }
@@ -462,6 +471,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun select(id: String) {
         val name = _state.value.servers.firstOrNull { it.id == id }?.name ?: return
         put { s -> s.copy(selectedId = id) }
+        store.saveSelectedId(id)
         log("INFO", S.LOG_SELECTED.format(name))
     }
 

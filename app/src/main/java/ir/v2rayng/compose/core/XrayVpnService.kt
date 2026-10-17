@@ -48,29 +48,24 @@ class XrayVpnService : VpnService() {
             if (c != null) {
                 try {
                     val raw = c.queryAllOutboundTrafficStats()
-                    val t = parseTrafficStats(raw, lastUp, lastDown)
-                    val prevPair = lastStatsAt
-                    val now = System.nanoTime()
-                    var us = 0.0
-                    var ds = 0.0
-                    if (prevPair > 0) {
-                        val dt = (now - prevPair) / 1e9
-                        if (dt > 0.2 && t.up >= lastUp && t.down >= lastDown) {
-                            us = (t.up - lastUp).toDouble() / dt
-                            ds = (t.down - lastDown).toDouble() / dt
+                    val d = parseTrafficDeltas(raw)
+                    if (d.up > 0 || d.down > 0) {
+                        lastUp += d.up
+                        lastDown += d.down
+                        XrayBridge.setTraffic(lastUp, lastDown, d.up.toDouble(), d.down.toDouble())
+                    } else {
+                        zeroStreak++
+                        if (zeroStreak == 8 && c.getIsRunning()) {
+                            XrayBridge.addLog("CORE", "stats empty after 8s; isRunning=${c.getIsRunning()}")
                         }
                     }
-                    lastStatsAt = now
-                    lastUp = t.up
-                    lastDown = t.down
-                    XrayBridge.setTraffic(t.up, t.down, us, ds)
                 } catch (_: Exception) {
                 }
             }
             mainHandler.postDelayed(this, 1000L)
         }
     }
-    private var lastStatsAt = 0L
+    private var zeroStreak = 0
     private val stateSetter = Runnable { XrayBridge.setState(RealState.CONNECTED) }
 
     private val callback = object : CoreCallbackHandler {
@@ -205,6 +200,7 @@ class XrayVpnService : VpnService() {
             // for socket fds; the tun inbound inside xray-core owns this fd.
             lastUp = 0
             lastDown = 0
+            zeroStreak = 0
             controller = Libv2ray.newCoreController(callback)
             controller?.startLoop(buildXrayConfig(link), tunFd)
             XrayBridge.addLog("INFO", "Core loop entered")

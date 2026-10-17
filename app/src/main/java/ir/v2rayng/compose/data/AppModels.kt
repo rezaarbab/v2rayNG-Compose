@@ -63,7 +63,8 @@ data class AppState(
     val ipCountry: String = "",
     val apps: List<AppInfo> = emptyList(),
 ) {
-    val selected: ServerProfile get() = servers.first { it.id == selectedId }
+    val selected: ServerProfile
+        get() = servers.firstOrNull { it.id == selectedId } ?: servers.first()
 }
 
 object TimeKit {

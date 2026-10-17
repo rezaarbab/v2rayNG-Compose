@@ -226,30 +226,25 @@ fun buildXrayConfig(link: VlessLink): String {
 
 data class TrafficCounter(val up: Long, val down: Long)
 
-fun parseTrafficStats(raw: String, prevUp: Long, prevDown: Long): TrafficCounter {
-    var up = prevUp
-    var down = prevDown
+/**
+ * queryAllOutboundTrafficStats returns lines "tag,direction,value;" where direction is
+ * "uplink"/"downlink" and the counter RESETS on every query, so each value is the
+ * per-interval delta for that tag.
+ */
+fun parseTrafficDeltas(raw: String): TrafficCounter {
+    var up = 0L
+    var down = 0L
     if (raw.isNotBlank()) {
-        var newUp = 0L
-        var newDown = 0L
         for (chunk in raw.split(';')) {
             val parts = chunk.split(',')
             if (parts.size < 3) continue
+            val dir = parts[1].trim()
             val value = parts[2].trim().toLongOrNull() ?: continue
-            when (parts[0].trim()) {
-                "proxy" -> {
-                    if (parts[1].trim() == "up") newUp = value
-                    if (parts[1].trim() == "down") newDown = value
-                }
-                "tun-in" -> {
-                    if (parts[1].trim() == "up") newUp = value
-                    if (parts[1].trim() == "down") newDown = value
-                }
+            if (parts[0].trim() != "proxy") continue
+            when (dir) {
+                "uplink" -> up += value
+                "downlink" -> down += value
             }
-        }
-        if (newUp > 0 || newDown > 0 || prevUp > 0 || prevDown > 0) {
-            if (newUp >= prevUp) up = newUp
-            if (newDown >= prevDown) down = newDown
         }
     }
     return TrafficCounter(up, down)
