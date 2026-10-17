@@ -60,7 +60,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
         else -> "استیکر"
     }
 
-    val pickStyle = settings.stickerStyle
+    val pickStyle = if (isWall) settings.wallpaperStyle else settings.stickerStyle
     val set = V2Stickers.setFor(pickStyle)
 
     val current = when {
@@ -121,9 +121,8 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     itemsIndexed(set) { i, sticker ->
                         val selected = current == i
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(16.dp))
                                 .border(
@@ -136,7 +135,12 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                                 .clickable { pick(i) }
                                 .padding(5.dp),
                         ) {
-                            StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 52.dp)
+                            StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 52.dp, decorative = true)
+                            Text(
+                                text = sticker.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }

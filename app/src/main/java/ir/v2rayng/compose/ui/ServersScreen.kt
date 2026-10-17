@@ -44,6 +44,7 @@ import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.ServerProfile
 import ir.v2rayng.compose.data.Settings
+import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.stickers.Sticker
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.V2Stickers
@@ -79,9 +80,15 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(state.servers, key = { it.id }) { srv ->
+                val avatar = if (srv.country.isNotBlank()) {
+                    val fi = CountryFlags.byCode(srv.country)
+                    if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byIndex(settings.stickerStyle, srv.stickerIndex)
+                } else {
+                    V2Stickers.byIndex(settings.stickerStyle, srv.stickerIndex)
+                }
                 ServerRow(
                     profile = srv,
-                    sticker = V2Stickers.byIndex(settings.stickerStyle, srv.stickerIndex),
+                    sticker = avatar,
                     selected = srv.id == state.selectedId,
                     onPick = { vm.select(srv.id) },
                 )
@@ -110,7 +117,7 @@ private fun ServerRow(profile: ServerProfile, sticker: Sticker, selected: Boolea
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
-            StickerCharacter(sticker, sizeDp = 46.dp)
+            StickerCharacter(sticker, sizeDp = 46.dp, decorative = true)
             Spacer(Modifier.padding(4.dp))
             Column(Modifier.weight(1f)) {
                 Text(

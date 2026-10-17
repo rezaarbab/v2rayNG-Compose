@@ -107,7 +107,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             ) {
-                StickerCharacter(tinted(mainSticker, settings.mainColor), sizeDp = 34.dp)
+                StickerCharacter(tinted(mainSticker, settings.mainColor), sizeDp = 34.dp, decorative = true)
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -184,7 +184,7 @@ private fun RowScope.TrafficCard(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
-            StickerCharacter(sticker, mood = if (connected) StickerMood.HAPPY else StickerMood.SLEEP, sizeDp = 30.dp)
+            StickerCharacter(sticker, mood = if (connected) StickerMood.HAPPY else StickerMood.SLEEP, sizeDp = 30.dp, decorative = true)
             Spacer(Modifier.width(10.dp))
             Column {
                 Text(

@@ -1,6 +1,7 @@
 package ir.v2rayng.compose.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -106,31 +107,32 @@ fun Modifier.holdFor(
     durationMs: Long,
     onTap: (() -> Unit)? = null,
     onHold: () -> Unit,
-): Modifier = this.pointerInput(durationMs, onTap, onHold) {
-    awaitPointerEventScope {
+): Modifier = this.pointerInput(durationMs) {
+    androidx.compose.foundation.gestures.awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        val startX = down.position.x
+        val startY = down.position.y
+        var elapsed = 0f
+        var movedFar = false
+        var fired = false
         while (true) {
-            val down = awaitFirstDown(requireUnconsumed = false)
-            val start = down.uptimeMillis
-            val originX = down.position.x
-            val originY = down.position.y
-            var fired = false
-            var moved = false
-            while (true) {
-                val e = awaitPointerEvent()
-                val c = e.changes.firstOrNull() ?: break
-                val d = kotlin.math.hypot((c.position.x - originX).toDouble(), (c.position.y - originY).toDouble())
-                if (d > 40.0) {
-                    moved = true
-                }
-                if (!moved && c.pressed && c.uptimeMillis - start >= durationMs) {
-                    onHold()
-                    fired = true
-                    e.changes.forEach { it.consume() }
-                    break
-                }
-                if (!c.pressed) break
+            val remaining = (durationMs - elapsed).toLong().coerceAtLeast(1L)
+            val ev = kotlinx.coroutines.withTimeoutOrNull(remaining) { awaitPointerEvent() }
+            if (ev == null) {
+                onHold()
+                fired = true
+                currentEvent.changes.forEach { it.consume() }
+                break
             }
-            if (!fired && !moved && onTap != null) onTap()
+            val c = ev.changes.firstOrNull { it.id == down.id }
+            if (c == null) continue
+            if (!c.pressed) break
+            val dx = c.position.x - startX
+            val dy = c.position.y - startY
+            if (dx * dx + dy * dy > 3600f) movedFar = true
+            if (movedFar) break
+            elapsed = c.uptimeMillis - down.uptimeMillis
         }
+        if (!fired && !movedFar && onTap != null) onTap()
     }
 }

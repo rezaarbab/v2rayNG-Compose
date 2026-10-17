@@ -110,6 +110,7 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
     val gazeLocal = remember { mutableStateOf<Offset?>(null) }
     val outerRoot = remember { mutableStateOf(Offset.Zero) }
     var moveOpen by remember { mutableStateOf(false) }
+    var editNav by remember { mutableStateOf<Int?>(null) }
 
     val order = parseList(settings.navOrder, (0..4).toList()).take(5)
     val navIcons = parseList(settings.navIcons, (0..4).toList())
@@ -137,7 +138,7 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                                 Modifier.holdFor(
                                     durationMs = 5000L,
                                     onTap = { },
-                                    onHold = { moveOpen = true },
+                                    onHold = { editNav = real },
                                 )
                             ) {
                                 if (settings.navStickers) {
@@ -146,6 +147,7 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                                         sticker = s,
                                         mood = if (tab == pos) StickerMood.HAPPY else StickerMood.NORMAL,
                                         sizeDp = 26.dp,
+                                        decorative = true,
                                     )
                                 } else {
                                     Icon(tabIcons[real], contentDescription = tabLabels[real])
@@ -212,6 +214,9 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
 
     if (moveOpen) {
         MoveNavDialog(order, vm) { moveOpen = false }
+    }
+    editNav?.let { slot ->
+        StickerEditorDialog("nav:$slot", settings, vm) { editNav = null }
     }
 }
 

@@ -58,6 +58,7 @@ fun StickerCharacter(
     onLongPress: (() -> Unit)? = null,
     gaze: Offset? = null,
     bg: Boolean = false,
+    decorative: Boolean = false,
 ) {
     val env = LocalStickerEnv.current
     var rootPos by remember { mutableStateOf(Offset.Zero) }
@@ -100,7 +101,7 @@ fun StickerCharacter(
         val s = size.width
         val animOn = env.enabled.value
         val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue
-        val static = mood == StickerMood.SLEEP || !animOn
+        val static = mood == StickerMood.SLEEP || !animOn || decorative
         val phase = when (val a = sticker.art) {
             is BlobArt -> a.phase
             is ToyArt -> a.phase

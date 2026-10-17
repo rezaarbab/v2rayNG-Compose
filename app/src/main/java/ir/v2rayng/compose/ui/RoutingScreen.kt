@@ -65,7 +65,7 @@ fun RoutingScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                 ) {
-                    StickerCharacter(V2Stickers.byIndex(settings.stickerStyle, routeIcons[i]), sizeDp = 42.dp)
+                    StickerCharacter(V2Stickers.byIndex(settings.stickerStyle, routeIcons[i]), sizeDp = 42.dp, decorative = true)
                     Column(Modifier.weight(1f).padding(start = 8.dp)) {
                         Text(
                             text = r.title,
