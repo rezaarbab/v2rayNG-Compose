@@ -43,6 +43,7 @@ private fun cb(color: Color, vararg cs: ToyCircle) = FlagBand(color, cs.toList()
 
 private fun TRIH(a: Color, m: Color, b: Color) = listOf(hb(0.366f, 0.634f, m), hb(0.634f, 0.99f, b))
 private fun TRIV(l: Color, m: Color, r: Color) = listOf(vb(0.05f, 0.35f, l), vb(0.65f, 0.99f, r))
+private fun V3(l: Color, m: Color, r: Color) = listOf(vb(0.05f, 0.35f, l), vb(0.35f, 0.65f, m), vb(0.65f, 0.99f, r))
 private fun H2(t: Color) = listOf(hb(0.01f, 0.50f, t))
 private fun V2(l: Color) = listOf(vb(0.50f, 0.99f, l))
 private fun NV(base: Color, cross: Color) = listOf(hb(0.40f, 0.60f, cross), vb(0.28f, 0.42f, cross))
