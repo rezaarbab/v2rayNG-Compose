@@ -258,7 +258,9 @@ object V2Stickers {
 
     val toys: List<Sticker> = (0 until (shapeOps.size * toyColors.size)).map { idx ->
         val kind = idx % shapeOps.size
-        val color = Color(toyColors[idx / shapeOps.size].toLong())
+        val row = idx / shapeOps.size
+        val colorIdx = (kind * 5 + row * 3 + 2) % toyColors.size
+        val color = Color(toyColors[colorIdx].toLong())
         Sticker(
             "toy-$idx",
             shapeNames[kind],

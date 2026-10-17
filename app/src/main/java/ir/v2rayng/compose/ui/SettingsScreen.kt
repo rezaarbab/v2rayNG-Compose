@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -255,6 +256,10 @@ private fun AppPickerDialog(apps: List<ir.v2rayng.compose.data.AppInfo>, selecte
     var query by remember { mutableStateOf("") }
     val selected = selectedCsv.split(",").filter { it.isNotBlank() }.toSet()
     val filtered = if (query.isBlank()) apps else apps.filter { it.label.contains(query, ignoreCase = true) || it.pkg.contains(query, ignoreCase = true) }
+    val sorted = filtered.sortedWith(
+        compareByDescending<ir.v2rayng.compose.data.AppInfo> { selected.contains(it.pkg) }
+            .thenBy { it.label.lowercase() },
+    )
 
     Dialog(onDismissRequest = onDismiss) {
         androidx.compose.material3.Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) {
@@ -273,7 +278,7 @@ private fun AppPickerDialog(apps: List<ir.v2rayng.compose.data.AppInfo>, selecte
                     modifier = Modifier.fillMaxWidth().height(420.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    itemsIndexed(filtered) { _, app ->
+                    items(sorted, key = { it.pkg }) { app ->
                         val checked = selected.contains(app.pkg)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
