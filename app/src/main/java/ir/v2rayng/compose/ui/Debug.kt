@@ -79,6 +79,8 @@ private class DiagSnap {
 fun DiagnosticsDialog(onDismiss: () -> Unit) {
     val s = remember { DiagSnap() }
     val ctx = LocalContext.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val copied = remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         val dm = ctx.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
         val d = dm.getDisplay(android.view.Display.DEFAULT_DISPLAY)
@@ -123,6 +125,23 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
         }
     }
 
+    fun snapshotText(): String = buildString {
+        appendLine("=== Blob Diagnostics ===")
+        appendLine("Device: ${s.device.value}")
+        appendLine("Display(s): ${s.display.value}")
+        appendLine(String.format(
+            java.util.Locale.US,
+            "VsyncMeasured: %.1f/s | TickerWrites: %.1f/s | WorstGap: %d ms | Dropped>20ms: %d",
+            s.vsyncHz.value, s.vsyncHz.value, s.maxGap.value, s.dropped.value,
+        ))
+        appendLine(String.format(
+            java.util.Locale.US,
+            "StickerRecompositions: %.1f/s | LayerMatrixUpdates: %.1f/s | CanvasRedraws: %.1f/s | DrawTime: %.2f ms/s",
+            s.composeRate.value, s.layersRate.value, s.drawsRate.value, s.drawMsRate.value,
+        ))
+        appendLine("Scene: describe what you were seeing (home idle / connected / scrolling / touching)")
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Diagnostics") },
@@ -154,7 +173,15 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text(S.CLOSE) } },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(snapshotText()))
+                    copied.value = true
+                },
+            ) { Text(if (copied.value) "Copied!" else "Copy all") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(S.CLOSE) } },
     )
 }
 
