@@ -42,14 +42,14 @@ private data class BlobTables(
 private fun moodSpeed(mood: StickerMood): Float = when (mood) {
     StickerMood.SLEEP -> 0.55f
     StickerMood.WOBBLE -> 2.1f
-    StickerMood.HAPPY -> 1.7f
+    StickerMood.HAPPY -> 1.5f
     else -> 1f
 }
 
 private fun moodAmp(mood: StickerMood): Float = when (mood) {
-    StickerMood.HAPPY -> 0.085f
-    StickerMood.WOBBLE -> 0.05f
-    else -> 0.03f
+    StickerMood.HAPPY -> 0.115f
+    StickerMood.WOBBLE -> 0.055f
+    else -> 0.045f
 }
 
 private fun moodTilt(mood: StickerMood): Float = when (mood) {
@@ -129,13 +129,13 @@ fun StickerCharacter(
         val clock = StickerTicker.fast.longValue
         val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue
         val spMul = if (bg) 0.6f else 1f
-        val t = clock / 1000f * us * spMul * (moodSpeed(mood) * (if (tiny) 1.35f else 1f)) + phaseOf(sticker.art)
+        val t = clock / 1000f * us * spMul * (moodSpeed(mood) * (if (tiny) 1.8f else 1f)) + phaseOf(sticker.art)
         val w = 2.0 * PI * t
         val breathe = sin(w).toFloat()
         val sp = ((1.0 - cos(w)) / 2.0).toFloat()
-        val amp = (moodAmp(mood) * (if (tiny) 2.2f else 1f)).coerceAtMost(0.12f)
+        val amp = (moodAmp(mood) * (if (tiny) 2.6f else 1f)).coerceAtMost(0.14f)
         val hop = -amp * sp
-        val sway = (amp * 0.35f).coerceAtMost(if (tiny) 0.014f else 0.008f) * sin(w + 1.7).toFloat()
+        val sway = (amp * 0.35f).coerceAtMost(if (tiny) 0.018f else 0.008f) * sin(w + 1.7).toFloat()
         val tilt = moodTilt(mood) * (if (tiny) 1.3f else 1f) * sin(w + 0.6).toFloat()
         val sqx = 1f + 0.026f * breathe
 
@@ -232,9 +232,9 @@ fun StickerCharacter(
                     val t = if (static || sizeDp.value <= 48f) {
                         frozenPhase
                     } else {
-                        val clock = if (bg) StickerTicker.ms.longValue else StickerTicker.mid.longValue
+                        val clock = if (bg) StickerTicker.ms.longValue else StickerTicker.fast.longValue
                         val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue
-                        clock / 1000f * us * (if (bg) 0.6f else 1f) * (moodSpeed(mood) * (if (sizeDp.value <= 48f) 1.35f else 1f)) + phaseOf(art)
+                        clock / 1000f * us * (if (bg) 0.6f else 1f) * moodSpeed(mood) + phaseOf(art)
                     }
                     val wt = 2.0 * PI * t
                     val cw = cos(wt).toFloat()
