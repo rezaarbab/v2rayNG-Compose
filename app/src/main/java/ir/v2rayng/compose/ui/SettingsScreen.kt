@@ -14,8 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -41,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.Settings
@@ -49,7 +48,6 @@ import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.StickerMood
 import ir.v2rayng.compose.stickers.V2Stickers
-import ir.v2rayng.compose.stickers.tinted
 import ir.v2rayng.compose.ui.theme.AccentOptions
 
 @Composable
@@ -58,6 +56,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var showCustomAccent by remember { mutableStateOf(false) }
     var editNavSlot by remember { mutableStateOf<Int?>(null) }
     var moveMenu by remember { mutableStateOf(false) }
+    var moveHome by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -66,7 +65,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        SectionTitle("تنظیمات", "تم، رنگ و استیکرها")
+        SectionTitle(S.SETTINGS_TITLE, S.SETTINGS_SUB)
 
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -74,25 +73,22 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("تم", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(S.THEME, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SelectChip("تیره", settings.dark, { vm.setDark(true) })
-                    SelectChip("روشن", !settings.dark, { vm.setDark(false) })
+                    SelectChip(S.DARK, settings.dark, { vm.setDark(true) })
+                    SelectChip(S.LIGHT, !settings.dark, { vm.setDark(false) })
                 }
-                Text("رنگ اصلی", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text(S.PRIMARY_COLOR, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     AccentOptions.forEachIndexed { i, (name, color) ->
                         ColorDot(
                             color,
                             name,
-                            isSel = settings.customAccent < 0 && settings.accent % AccentOptions.size == i,
-                            onClick = { vm.setAccent(i) },
-                        )
+                            settings.customAccent < 0 && settings.accent % AccentOptions.size == i,
+                        ) { vm.setAccent(i) }
                     }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    SelectChip("رنگ دلخواه…", settings.customAccent >= 0, { showCustomAccent = true })
-                }
+                SelectChip(S.CUSTOM_COLOR, settings.customAccent >= 0, { showCustomAccent = true })
             }
         }
 
@@ -102,19 +98,19 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("استیکرها", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("شکل", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text(S.STICKERS, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(S.SHAPE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SelectChip("Blob", settings.stickerStyle == 0, { vm.setStickerStyle(0) })
-                    SelectChip("عروسکی", settings.stickerStyle == 1, { vm.setStickerStyle(1) })
-                    SelectChip("پرچم", settings.stickerStyle == 2, { vm.setStickerStyle(2) })
+                    SelectChip(S.STYLE_BLOB, settings.stickerStyle == 0, { vm.setStickerStyle(0) })
+                    SelectChip(S.STYLE_TOY, settings.stickerStyle == 1, { vm.setStickerStyle(1) })
+                    SelectChip(S.STYLE_FLAG, settings.stickerStyle == 2, { vm.setStickerStyle(2) })
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("انیمیشن", style = MaterialTheme.typography.bodyMedium)
+                        Text(S.ANIMATION, style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            "خاموش = حداکثر سرعت",
+                            S.ANIMATION_SUB,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -122,38 +118,46 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     Switch(checked = settings.animate, onCheckedChange = { vm.setAnimate(it) })
                 }
 
-                Text("سرعت استیکرها: ${"%.1f".format(settings.speed)}x", style = MaterialTheme.typography.bodyMedium)
+                Text(S.SPEED_STICKERS.format(settings.speed), style = MaterialTheme.typography.bodyMedium)
                 Slider(value = settings.speed, onValueChange = { vm.setSpeed(it) }, valueRange = 0.25f..2f)
 
-                Text("سرعت پس‌زمینه: ${"%.1f".format(settings.bgSpeed)}x", style = MaterialTheme.typography.bodyMedium)
+                Text(S.SPEED_BG.format(settings.bgSpeed), style = MaterialTheme.typography.bodyMedium)
                 Slider(value = settings.bgSpeed, onValueChange = { vm.setBgSpeed(it) }, valueRange = 0.25f..2f)
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("آیکون‌های منو = استیکر", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Switch(checked = settings.navStickers, onCheckedChange = { vm.setNavStickers(it) })
-                }
+                ToggleRow(S.NAV_STICKERS, "", settings.navStickers) { vm.setNavStickers(it) }
+                ToggleRow(S.FOLLOW_FINGER, S.FOLLOW_SUB, settings.followFinger) { vm.setFollowFinger(it) }
+                ToggleRow(S.ANTI_FILTER, S.ANTI_FILTER_SUB, settings.antiFilter) { vm.setAntiFilter(it) }
+            }
+        }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("چشم‌ها دنبال انگشت", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "لمس/کش روی صفحه",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(checked = settings.followFinger, onCheckedChange = { vm.setFollowFinger(it) })
-                }
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(S.BACKGROUND, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "ادیتور استیکر اصلی: نگه‌داشتن روی استیکر صفحه",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
+                ToggleRow(S.AUTO_FLAG, S.AUTO_FLAG_SUB, settings.autoFlag) { vm.setAutoFlag(it) }
+
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val wallName = when {
+                        settings.wallpaperIndex < 0 -> S.NO_BG
+                        settings.wallpaperStyle == 2 -> CountryFlags.list.getOrNull(settings.wallpaperIndex)?.name ?: ""
+                        else -> V2Stickers.setFor(settings.wallpaperStyle).getOrNull(settings.wallpaperIndex)?.name ?: ""
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(S.CURRENT_BG.format(wallName), style = MaterialTheme.typography.bodyMedium)
+                        if (state.ipCountry.isNotBlank()) {
+                            Text(
+                                S.IP_COUNTRY.format(state.ipCountry),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    SelectChip(S.EDITOR, false, { editWall = true })
+                    SelectChip(S.CLEAR_BG, settings.wallpaperIndex < 0, { vm.setWallpaper(-1) })
                 }
             }
         }
@@ -164,87 +168,48 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("منو و آیکون‌ها", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(S.MENU_LAYOUT, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "جابجایی آیتم‌ها / ۵ ثانیه نگه‌دار روی آیکون",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    SelectChip("چیدمان", false, { moveMenu = true })
+                    Text(S.MENU_LAYOUT_SUB, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    SelectChip(S.EDITOR, false, { moveMenu = true })
                 }
 
-                Text("استیکر آیکون‌های منو:", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text(S.HOME_LAYOUT, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        S.HOME_SECTIONS.joinToString(" • "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    SelectChip(S.EDITOR, false, { moveHome = true })
+                }
+
+                Text(S.NAV_ICONS_TITLE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 val navIcons = parseList(settings.navIcons, (0..4).toList())
-                androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     itemsIndexed(navIcons) { slot, idx ->
                         val sticker = V2Stickers.byIndex(settings.stickerStyle, idx)
-                        androidx.compose.foundation.layout.Box(
+                        Box(
                             Modifier
                                 .clip(RoundedCornerShape(14.dp))
                                 .clickable { editNavSlot = slot }
                                 .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), RoundedCornerShape(14.dp))
                                 .padding(5.dp),
                         ) {
-                            StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 40.dp)
+                            StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 40.dp, decorative = true)
                         }
                     }
                 }
-                Text(
-                    "نوک روی هر آیکون بالا: ادیتور",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("بازنشانی تنظیمات UI به پیش‌فرض", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    SelectChip("ریست", false, { vm.resetSettings() })
+                    Text(S.LANGUAGE_NOTE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 }
-            }
-        }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        ) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("پس‌زمینه", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("پرچم خودکار", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "وصل: پرچم کشور سرور / قطع: پرچم کشور IP",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(checked = settings.autoFlag, onCheckedChange = { vm.setAutoFlag(it) })
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val wallName = when {
-                        settings.wallpaperIndex < 0 -> "بدون پس‌زمینه"
-                        settings.wallpaperStyle == 2 -> CountryFlags.list.getOrNull(settings.wallpaperIndex)?.name ?: ""
-                        else -> V2Stickers.setFor(settings.wallpaperStyle).getOrNull(settings.wallpaperIndex)?.name ?: ""
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            "فعلی: $wallName",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        if (state.ipCountry.isNotBlank()) {
-                            Text(
-                                "کشور IP: ${state.ipCountry}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    SelectChip("ادیتور", false, { editWall = true })
-                    SelectChip("پاک کردن", settings.wallpaperIndex < 0, { vm.setWallpaper(-1) })
+                    Text(S.RESET, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    SelectChip(S.RESET, false, { vm.resetSettings() })
                 }
             }
         }
@@ -264,6 +229,55 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     if (moveMenu) {
         MoveNavDialog(parseList(settings.navOrder, (0..4).toList()), vm) { moveMenu = false }
     }
+    if (moveHome) {
+        HomeLayoutDialog(parseList(settings.homeOrder, listOf(0, 1, 2, 3, 4)), vm) { moveHome = false }
+    }
+}
+
+@Composable
+private fun ToggleRow(title: String, sub: String, value: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            if (sub.isNotBlank()) {
+                Text(
+                    sub,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Switch(checked = value, onCheckedChange = onChange)
+    }
+}
+
+@Composable
+fun HomeLayoutDialog(order: List<Int>, vm: AppViewModel, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        androidx.compose.material3.Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(S.HOME_LAYOUT_TITLE, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                order.forEachIndexed { pos, real ->
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "${pos + 1}. ${S.HOME_SECTIONS.getOrNull(real) ?: ""}",
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = { if (pos > 0) vm.setHomeOrder(order.toMutableList().apply { add(pos, removeAt(pos - 1)) }) },
+                        ) { Text("▲") }
+                        TextButton(
+                            onClick = { if (pos < order.size - 1) vm.setHomeOrder(order.toMutableList().apply { add(pos, removeAt(pos + 1)) }) },
+                        ) { Text("▼") }
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text(S.CLOSE)
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -271,7 +285,7 @@ private fun CustomAccentDialog(current: Long, vm: AppViewModel, onDismiss: () ->
     var hex by remember { mutableStateOf(if (current >= 0) String.format("%08X", current) else "#FF8CDDB2") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("رنگ دلخواه تم") },
+        title = { Text(S.CUSTOM_COLOR) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
@@ -294,10 +308,10 @@ private fun CustomAccentDialog(current: Long, vm: AppViewModel, onDismiss: () ->
                     }
                     onDismiss()
                 },
-            ) { Text("اعمال") }
+            ) { Text(S.APPLY) }
         },
         dismissButton = {
-            TextButton(onClick = { vm.setCustomAccent(-1L); onDismiss() }) { Text(" ریست") }
+            TextButton(onClick = { vm.setCustomAccent(-1L); onDismiss() }) { Text(S.CANCEL) }
         },
     )
 }

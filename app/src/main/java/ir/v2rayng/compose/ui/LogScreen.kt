@@ -53,13 +53,13 @@ fun LogScreen(state: AppState, vm: AppViewModel) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "گزارش",
+                text = S.LOGS_TITLE,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f),
             )
             IconButton(onClick = { vm.clearLogs() }) {
-                Icon(Icons.Filled.Delete, contentDescription = "پاک کردن")
+                Icon(Icons.Filled.Delete, contentDescription = S.CLEAR)
             }
         }
         Spacer(Modifier.height(10.dp))
@@ -67,7 +67,7 @@ fun LogScreen(state: AppState, vm: AppViewModel) {
         if (empty) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "هنوز لاگی نیست. استیکر رو بزن تا اولین لاگ ساخته شود!",
+                    text = S.LOGS_EMPTY,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

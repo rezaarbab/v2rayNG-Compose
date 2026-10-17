@@ -1,4 +1,4 @@
-package ir.v2rayng.compose.ui
+﻿package ir.v2rayng.compose.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -51,13 +51,13 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
     val slot = if (zone.startsWith("nav:") || zone.startsWith("route:")) zone.split(":").getOrNull(1)?.toIntOrNull() ?: 0 else -1
 
     val title = when {
-        isWall -> "سفارشی‌سازی پس‌زمینه"
-        isMain -> "سفارشی‌سازی استیکر اصلی"
-        zone.startsWith("nav:") -> "استیکر آیکون منو"
-        zone == "up" -> "استیکر کارت خروجی"
-        zone == "down" -> "استیکر کارت ورودی"
-        zone.startsWith("route:") -> "استیکر قانون مسیریابی"
-        else -> "استیکر"
+        isWall -> "Ø³ÙØ§Ø±Ø´ÛŒâ€ŒØ³Ø§Ø²ÛŒ Ù¾Ø³â€ŒØ²Ù…ÛŒÙ†Ù‡"
+        isMain -> "Ø³ÙØ§Ø±Ø´ÛŒâ€ŒØ³Ø§Ø²ÛŒ Ø§Ø³ØªÛŒÚ©Ø± Ø§ØµÙ„ÛŒ"
+        zone.startsWith("nav:") -> "Ø§Ø³ØªÛŒÚ©Ø± Ø¢ÛŒÚ©ÙˆÙ† Ù…Ù†Ùˆ"
+        zone == "up" -> "Ø§Ø³ØªÛŒÚ©Ø± Ú©Ø§Ø±Øª Ø®Ø±ÙˆØ¬ÛŒ"
+        zone == "down" -> "Ø§Ø³ØªÛŒÚ©Ø± Ú©Ø§Ø±Øª ÙˆØ±ÙˆØ¯ÛŒ"
+        zone.startsWith("route:") -> "Ø§Ø³ØªÛŒÚ©Ø± Ù‚Ø§Ù†ÙˆÙ† Ù…Ø³ÛŒØ±ÛŒØ§Ø¨ÛŒ"
+        else -> "Ø§Ø³ØªÛŒÚ©Ø±"
     }
 
     val pickStyle = if (isWall) settings.wallpaperStyle else settings.stickerStyle
@@ -96,17 +96,17 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
 
                 if (isWall) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        MiniChip("Blob", settings.wallpaperStyle == 0, { vm.setWallpaperStyle(0) })
-                        MiniChip("عروسکی", settings.wallpaperStyle == 1, { vm.setWallpaperStyle(1) })
-                        MiniChip("پرچم", settings.wallpaperStyle == 2, { vm.setWallpaperStyle(2) })
+                        MiniChip(S.STYLE_BLOB, settings.wallpaperStyle == 0, { vm.setWallpaperStyle(0) })
+                        MiniChip("Ø¹Ø±ÙˆØ³Ú©ÛŒ", settings.wallpaperStyle == 1, { vm.setWallpaperStyle(1) })
+                        MiniChip("Ù¾Ø±Ú†Ù…", settings.wallpaperStyle == 2, { vm.setWallpaperStyle(2) })
                     }
                 }
 
                 if (isMain) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        MiniChip("از سرور", settings.mainIndex < 0, { vm.setMainIndex(-1) })
+                        MiniChip("Ø§Ø² Ø³Ø±ÙˆØ±", settings.mainIndex < 0, { vm.setMainIndex(-1) })
                         MiniChip(
-                            "انتخابی",
+                            "Ø§Ù†ØªØ®Ø§Ø¨ÛŒ",
                             settings.mainIndex >= 0,
                             { if (settings.mainIndex < 0) vm.setMainIndex(0) },
                         )
@@ -114,7 +114,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                 }
 
                 Text(
-                    "انتخاب استیکر از پک (${set.size}):",
+                    "Ø§Ù†ØªØ®Ø§Ø¨ Ø§Ø³ØªÛŒÚ©Ø± Ø§Ø² Ù¾Ú© (${set.size}):",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -147,7 +147,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
 
                 if (isMain || isWall) {
                     Text(
-                        "رنگ دلخواه:",
+                        "Ø±Ù†Ú¯ Ø¯Ù„Ø®ÙˆØ§Ù‡:",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -158,13 +158,13 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                     }
 
                     Text(
-                        "سایز:",
+                        "Ø³Ø§ÛŒØ²:",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (isWall) {
                         Text(
-                            text = if (settings.wallpaperSize == 0) "پیش‌فرض (۳۰۰)" else "${settings.wallpaperSize}",
+                            text = if (settings.wallpaperSize == 0) "Ù¾ÛŒØ´â€ŒÙØ±Ø¶ (Û³Û°Û°)" else "${settings.wallpaperSize}",
                             style = MaterialTheme.typography.labelMedium,
                         )
                         Slider(
@@ -174,7 +174,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                         )
                     } else {
                         Text(
-                            text = if (settings.mainSize == 0) "پیش‌فرض (۱۹۰)" else "${settings.mainSize}",
+                            text = if (settings.mainSize == 0) "Ù¾ÛŒØ´â€ŒÙØ±Ø¶ (Û±Û¹Û°)" else "${settings.mainSize}",
                             style = MaterialTheme.typography.labelMedium,
                         )
                         Slider(
@@ -186,7 +186,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                 }
 
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text("بستن")
+                    Text("Ø¨Ø³ØªÙ†")
                 }
             }
         }
@@ -239,3 +239,4 @@ private fun ColorDot(color: Long, selected: Boolean, onClick: () -> Unit) {
             .clickable { onClick() },
     )
 }
+

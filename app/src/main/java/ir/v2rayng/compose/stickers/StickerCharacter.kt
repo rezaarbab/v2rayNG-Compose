@@ -110,8 +110,7 @@ fun StickerCharacter(
         val t = if (static) {
             frozenPhase
         } else {
-            val wantFast = (mood == StickerMood.HAPPY || mood == StickerMood.WOBBLE) && !bg
-            val clock = if (wantFast) StickerTicker.fast.longValue else StickerTicker.ms.longValue
+            val clock = if (bg) StickerTicker.ms.longValue else StickerTicker.fast.longValue
             clock / 1000f * us * moodSpeed(mood) + phase
         }
         val breathe = sin(2.0 * PI * t).toFloat()
@@ -254,8 +253,8 @@ fun StickerCharacter(
                 val gloss = px(0.42f, 0.37f)
                 drawCircle(Color.White.copy(alpha = 0.14f), radius = 0.10f * s, center = gloss)
 
-                val hw = 0.05f * s
-                val hh = 0.15f * blink * s
+                val hw = 0.045f * s
+                val hh = 0.13f * blink * s
                 val eyes = listOf(0.40f to 0.50f, 0.60f to 0.50f)
                 for ((i, eye) in eyes.withIndex()) {
                     val c = px(eye.first, eye.second) + Offset(gx, gy)

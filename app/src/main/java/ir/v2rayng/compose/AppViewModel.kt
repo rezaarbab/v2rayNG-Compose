@@ -1,4 +1,4 @@
-package ir.v2rayng.compose
+﻿package ir.v2rayng.compose
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -12,6 +12,7 @@ import ir.v2rayng.compose.data.VpnState
 import ir.v2rayng.compose.data.packList
 import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.stickers.CountryFlags
+import ir.v2rayng.compose.ui.S
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
@@ -80,6 +81,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     }
 
     fun resetSettings() = setSettings { Settings() }
+    fun setAntiFilter(v: Boolean) {
+        setSettings { it.copy(antiFilter = v) }
+        log("INFO", if (v) S.LOG_ANTI_ON else S.LOG_ANTI_OFF)
+    }
+    fun setHomeOrder(order: List<Int>) = setSettings { it.copy(homeOrder = packList(order)) }
 
     private fun log(level: String, msg: String) {
         put { s -> s.copy(logs = (s.logs + LogLine(TimeKit.now(), level, msg)).takeLast(240)) }
@@ -95,17 +101,17 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun connect() {
         val target = _state.value.selected
         put { s -> s.copy(vpnState = VpnState.CONNECTING) }
-        log("INFO", "در حال اتصال به «${target.name}» …")
+        log("INFO", "Ø¯Ø± Ø­Ø§Ù„ Ø§ØªØµØ§Ù„ Ø¨Ù‡ Â«${target.name}Â» â€¦")
         connectJob?.cancel()
         connectJob = viewModelScope.launch {
             delay(800L + Random.nextLong(900))
             if (_state.value.vpnState == VpnState.CONNECTING) {
                 if (Random.nextInt(7) == 0) {
                     put { s -> s.copy(vpnState = VpnState.BROKEN) }
-                    log("ERROR", "اتصال برقرار نشد – دوباره امتحان کن")
+                    log("ERROR", "Ø§ØªØµØ§Ù„ Ø¨Ø±Ù‚Ø±Ø§Ø± Ù†Ø´Ø¯ â€“ Ø¯ÙˆØ¨Ø§Ø±Ù‡ Ø§Ù…ØªØ­Ø§Ù† Ú©Ù†")
                 } else {
                     put { s -> s.copy(vpnState = VpnState.CONNECTED) }
-                    log("INFO", "اتصال برقرار شد، تونل فعال است")
+                    log("INFO", "Ø§ØªØµØ§Ù„ Ø¨Ø±Ù‚Ø±Ø§Ø± Ø´Ø¯ØŒ ØªÙˆÙ†Ù„ ÙØ¹Ø§Ù„ Ø§Ø³Øª")
                     startTraffic()
                     if (_settings.value.autoFlag && target.country.isNotBlank()) {
                         applyFlag(target.country)
@@ -145,7 +151,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 traffic = s.traffic.copy(upSpeed = 0.0, downSpeed = 0.0),
             )
         }
-        log("INFO", "اتصال قطع شد")
+        log("INFO", "Ø§ØªØµØ§Ù„ Ù‚Ø·Ø¹ Ø´Ø¯")
         if (_settings.value.autoFlag) {
             fetchIpFlag()
         }
@@ -167,9 +173,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             if (code != null) {
                 val applied = applyFlag(code)
                 put { s -> s.copy(ipCountry = code) }
-                log("INFO", "کشور آی‌پی: $code" + if (applied) " (پس‌زمینه ست شد)" else "")
+                log("INFO", "Ú©Ø´ÙˆØ± Ø¢ÛŒâ€ŒÙ¾ÛŒ: $code" + if (applied) " (Ù¾Ø³â€ŒØ²Ù…ÛŒÙ†Ù‡ Ø³Øª Ø´Ø¯)" else "")
             } else {
-                log("WARN", "تشخیص کشور آی‌پی ناموفق بود")
+                log("WARN", "ØªØ´Ø®ÛŒØµ Ú©Ø´ÙˆØ± Ø¢ÛŒâ€ŒÙ¾ÛŒ Ù†Ø§Ù…ÙˆÙÙ‚ Ø¨ÙˆØ¯")
             }
         }
     }
@@ -183,7 +189,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun pingAll() {
         viewModelScope.launch {
-            log("INFO", "آزمون تاخیر شروع شد")
+            log("INFO", "Ø¢Ø²Ù…ÙˆÙ† ØªØ§Ø®ÛŒØ± Ø´Ø±ÙˆØ¹ Ø´Ø¯")
             for (srv in _state.value.servers) {
                 delay(350)
                 val ms = 40 + Random.nextInt(400)
@@ -191,14 +197,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms) else it })
                 }
             }
-            log("INFO", "آزمون تاخیر کامل شد")
+            log("INFO", "Ø¢Ø²Ù…ÙˆÙ† ØªØ§Ø®ÛŒØ± Ú©Ø§Ù…Ù„ Ø´Ø¯")
         }
     }
 
     fun select(id: String) {
         val name = _state.value.servers.firstOrNull { it.id == id }?.name ?: return
         put { s -> s.copy(selectedId = id) }
-        log("INFO", "پروفایل انتخاب شد: «$name»")
+        log("INFO", "Ù¾Ø±ÙˆÙØ§ÛŒÙ„ Ø§Ù†ØªØ®Ø§Ø¨ Ø´Ø¯: Â«$nameÂ»")
     }
 
     fun addServer(name: String, host: String) {
@@ -213,16 +219,16 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 )
             )
         }
-        log("INFO", "سرور جدید اضافه شد: «$name»")
+        log("INFO", "Ø³Ø±ÙˆØ± Ø¬Ø¯ÛŒØ¯ Ø§Ø¶Ø§ÙÙ‡ Ø´Ø¯: Â«$nameÂ»")
     }
 
     fun setRoute(key: String, value: Boolean) {
         put { s -> s.copy(routes = s.routes + (key to value)) }
-        log("INFO", "قانون مسیریابی «${if (value) key else "!$key"}» فعال شد")
+        log("INFO", "Ù‚Ø§Ù†ÙˆÙ† Ù…Ø³ÛŒØ±ÛŒØ§Ø¨ÛŒ Â«${if (value) key else "!$key"}Â» ÙØ¹Ø§Ù„ Ø´Ø¯")
     }
 
     fun clearLogs() {
         put { s -> s.copy(logs = emptyList()) }
-        log("INFO", "گزارش پاک شد")
+        log("INFO", "Ú¯Ø²Ø§Ø±Ø´ Ù¾Ø§Ú© Ø´Ø¯")
     }
 }

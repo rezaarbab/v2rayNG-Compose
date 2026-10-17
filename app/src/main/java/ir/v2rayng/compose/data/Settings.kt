@@ -25,6 +25,8 @@ data class Settings(
     val upIcon: Int = 5,
     val downIcon: Int = 6,
     val routeIcons: String = "0,1,2",
+    val antiFilter: Boolean = false,
+    val homeOrder: String = "0,1,2,3,4",
 )
 
 fun parseList(s: String, def: List<Int>): List<Int> {
@@ -59,6 +61,8 @@ class SettingsStore(context: Context) {
         upIcon = sp.getInt("upIcon", 5),
         downIcon = sp.getInt("downIcon", 6),
         routeIcons = sp.getString("routeIcons", "0,1,2")!!,
+        antiFilter = sp.getBoolean("antiFilter", false),
+        homeOrder = sp.getString("homeOrder", "0,1,2,3,4")!!,
     )
 
     fun save(s: Settings) {
@@ -85,6 +89,8 @@ class SettingsStore(context: Context) {
             .putInt("upIcon", s.upIcon)
             .putInt("downIcon", s.downIcon)
             .putString("routeIcons", s.routeIcons)
+            .putBoolean("antiFilter", s.antiFilter)
+            .putString("homeOrder", s.homeOrder)
             .apply()
     }
 }

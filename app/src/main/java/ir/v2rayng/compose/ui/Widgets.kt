@@ -36,10 +36,10 @@ private fun statusColor(s: VpnState): Color = when (s) {
 }
 
 private fun statusText(s: VpnState): String = when (s) {
-    VpnState.IDLE -> "قطع شده"
-    VpnState.CONNECTING -> "در حال اتصال…"
-    VpnState.CONNECTED -> "متصل"
-    VpnState.BROKEN -> "اتصال خراب شد"
+    VpnState.IDLE -> S.STATUS_IDLE
+    VpnState.CONNECTING -> S.STATUS_CONNECTING
+    VpnState.CONNECTED -> S.STATUS_CONNECTED
+    VpnState.BROKEN -> S.STATUS_BROKEN
 }
 
 @Composable

@@ -100,7 +100,6 @@ fun AppRoot() {
 private val tabIcons = listOf(
     Icons.Filled.Home, Icons.Filled.List, Icons.Filled.Send, Icons.Filled.Info, Icons.Filled.Settings,
 )
-private val tabLabels = listOf("ارتباط", "سرورها", "مسیریابی", "گزارش", "تنظیمات")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -119,10 +118,10 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text("v2rayNG", fontWeight = FontWeight.Bold) },
+                title = { Text(S.APP, fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = { vm.pingAll() }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "آزمون تاخیر")
+                        Icon(Icons.Filled.Refresh, contentDescription = S.PING_TEST)
                     }
                 },
             )
@@ -136,7 +135,7 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                         icon = {
                             Box(
                                 Modifier.holdFor(
-                                    durationMs = 5000L,
+                                    durationMs = 1000L,
                                     onTap = { },
                                     onHold = { editNav = real },
                                 )
@@ -150,11 +149,11 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                                         decorative = true,
                                     )
                                 } else {
-                                    Icon(tabIcons[real], contentDescription = tabLabels[real])
+                                    Icon(tabIcons[real], contentDescription = S.TABS[real])
                                 }
                             }
                         },
-                        label = { Text(tabLabels[real]) },
+                        label = { Text(S.TABS[real]) },
                     )
                 }
             }
@@ -225,9 +224,9 @@ fun MoveNavDialog(order: List<Int>, vm: AppViewModel, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("چیدمان منو", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(S.MENU_LAYOUT_TITLE, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
-                    "این پنجره با نگه‌داشتن ۵ ثانیه روی آیکون‌های منو هم باز می‌شود",
+                    S.MENU_LAYOUT_HINT,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -237,7 +236,7 @@ fun MoveNavDialog(order: List<Int>, vm: AppViewModel, onDismiss: () -> Unit) {
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
-                            text = "${pos + 1}. ${tabLabels.getOrNull(real) ?: ""}",
+                            text = "${pos + 1}. ${S.TABS.getOrNull(real) ?: ""}",
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.weight(1f),
                         )
@@ -250,7 +249,7 @@ fun MoveNavDialog(order: List<Int>, vm: AppViewModel, onDismiss: () -> Unit) {
                     }
                 }
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text("بستن")
+                    Text(S.CLOSE)
                 }
             }
         }

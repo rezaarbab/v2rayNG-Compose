@@ -25,12 +25,12 @@ private val ORANGE = Color(0xFFE77A1E)
 
 private fun hb(y0: Float, y1: Float, color: Color) = FlagBand(
     color,
-    listOf(ToyPoly(chaikin(listOf(Offset(0.05f, y0), Offset(0.95f, y0), Offset(0.95f, y1), Offset(0.05f, y1)), 2))),
+    listOf(ToyPoly(chaikin(listOf(Offset(0.03f, y0), Offset(0.97f, y0), Offset(0.97f, y1), Offset(0.03f, y1)), 2))),
 )
 
 private fun vb(x0: Float, x1: Float, color: Color) = FlagBand(
     color,
-    listOf(ToyPoly(chaikin(listOf(Offset(x0, 0.10f), Offset(x1, 0.10f), Offset(x1, 0.90f), Offset(x0, 0.90f)), 2))),
+    listOf(ToyPoly(chaikin(listOf(Offset(x0, 0.08f), Offset(x1, 0.08f), Offset(x1, 0.92f), Offset(x0, 0.92f)), 2))),
 )
 
 private fun rc(x0: Float, y0: Float, x1: Float, y1: Float, color: Color) = FlagBand(
@@ -60,7 +60,7 @@ private fun miniUK(): List<FlagBand> = listOf(
 )
 
 private fun build(): List<Sticker> {
-    val baseRounded = FlagBand(WHITE, listOf(ToyPoly(chaikin(listOf(Offset(0.06f, 0.10f), Offset(0.94f, 0.10f), Offset(0.94f, 0.90f), Offset(0.06f, 0.90f)), 4))))
+    val baseRounded = FlagBand(WHITE, listOf(ToyPoly(chaikin(listOf(Offset(0.04f, 0.08f), Offset(0.96f, 0.08f), Offset(0.96f, 0.92f), Offset(0.04f, 0.92f)), 3))))
     val out = ArrayList<Sticker>(210)
 
     fun f(code: String, name: String, base: Color, bands: List<FlagBand>) {
@@ -297,7 +297,11 @@ private fun build(): List<Sticker> {
     f("tm", "ترکمنستان", GREEN, listOf(vb(0.05f, 0.22f, RED), cb(WHITE, ToyCircle(0.55f, 0.42f, 0.11f))))
     f("tn", "تونس", RED, listOf(cb(WHITE, ToyCircle(0.5f, 0.5f, 0.26f)), cb(RED, ToyCircle(0.5f, 0.5f, 0.12f))))
     f("to", "تونگا", RED, listOf(rc(0.05f, 0.10f, 0.42f, 0.48f, WHITE), cb(RED, ToyCircle(0.24f, 0.29f, 0.06f))))
-    f("tr", "ترکیه", RED, listOf(cb(WHITE, ToyCircle(0.42f, 0.5f, 0.20f)), cb(RED, ToyCircle(0.485f, 0.5f, 0.205f)), cb(WHITE, ToyCircle(0.68f, 0.5f, 0.055f))))
+    f("tr", "ترکیه", Color(0xFFE30A17), listOf(
+        cb(Color.White, ToyCircle(0.40f, 0.5f, 0.24f)),
+        cb(Color(0xFFE30A17), ToyCircle(0.475f, 0.5f, 0.19f)),
+        cb(Color.White, ToyCircle(0.66f, 0.5f, 0.075f)),
+    ))
     f("tt", "ترینیداد", RED, listOf(hb(0.366f, 0.634f, WHITE), cb(BLACK, ToyCircle(0.5f, 0.5f, 0.16f))))
     f("tv", "تووالو", SKY, miniUK() + listOf(cb(GOLD, ToyCircle(0.7f, 0.6f, 0.06f))))
     f("tw", "تایوان", RED, listOf(rc(0.05f, 0.10f, 0.46f, 0.50f, NAVY), cb(WHITE, ToyCircle(0.25f, 0.30f, 0.11f))))

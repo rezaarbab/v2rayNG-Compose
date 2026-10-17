@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,8 +26,8 @@ import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.parseList
-import ir.v2rayng.compose.stickers.V2Stickers
 import ir.v2rayng.compose.stickers.StickerCharacter
+import ir.v2rayng.compose.stickers.V2Stickers
 
 private data class RouteUi(
     val key: String,
@@ -39,9 +38,9 @@ private data class RouteUi(
 @Composable
 fun RoutingScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     val rows = listOf(
-        RouteUi("bypass_ir", "دور زدن ایران", "ترافیک داخلی مستقیم می‌رود"),
-        RouteUi("block_ads", "مسدودسازی تبلیغات", "GeoSite ads حذف می‌شود"),
-        RouteUi("udp443", "پذیرش UDP 443", "برای QUIC و بازی‌ها"),
+        RouteUi("bypass_ir", S.RULE_BYPASS, S.RULE_BYPASS_SUB),
+        RouteUi("block_ads", S.RULE_ADS, S.RULE_ADS_SUB),
+        RouteUi("udp443", S.RULE_UDP, S.RULE_UDP_SUB),
     )
     val routeIcons = parseList(settings.routeIcons, listOf(0, 1, 2))
     var editZone by remember { mutableStateOf<String?>(null) }
@@ -50,14 +49,14 @@ fun RoutingScreen(state: AppState, settings: Settings, vm: AppViewModel) {
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        SectionTitle("مسیریابی", "نگه‌داشتن ۵ ثانیه روی کارت: سفارشی‌سازی")
+        SectionTitle(S.ROUTING_TITLE, S.HOLD_HINT)
         Spacer(Modifier.height(4.dp))
 
         rows.forEachIndexed { i, r ->
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .holdFor(5000L, onHold = { editZone = "route:$i" }),
+                    .holdFor(1000L, onHold = { editZone = "route:$i" }),
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             ) {
@@ -88,7 +87,7 @@ fun RoutingScreen(state: AppState, settings: Settings, vm: AppViewModel) {
 
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "قوانین روی پروفایل انتخاب‌شده اعمال می‌شوند.",
+            text = S.ROUTING_NOTE,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
