@@ -156,12 +156,15 @@ fun buildXrayConfig(link: VlessLink): String {
         }
     }
 
+    val tunSettings = JSONObject()
+        .put("name", "utun42")
+        .put("desc", "Blob")
+        .put("mtu", 1500)
+
     val tunIn = JSONObject()
         .put("tag", "tun-in")
         .put("protocol", "tun")
-        .put("name", "utun42")
-        .put("mtu", 1500)
-        .put("desc", "Blob")
+        .put("settings", tunSettings)
 
     val config = JSONObject()
         .put(
