@@ -66,17 +66,20 @@ class XrayVpnService : VpnService() {
 
     private val callback = object : CoreCallbackHandler {
         override fun onEmitStatus(p0: Long, p1: String?): Long {
+            XrayBridge.addLog("CORE", p1 ?: "")
             mainHandler.removeCallbacks(stateSetter)
             mainHandler.postDelayed(stateSetter, 900L)
             return 0L
         }
 
         override fun shutdown(): Long {
+            XrayBridge.addLog("CORE", "Core shutdown")
             XrayBridge.setState(RealState.IDLE)
             return 0L
         }
 
         override fun startup(): Long {
+            XrayBridge.addLog("CORE", "Core started")
             XrayBridge.setState(RealState.CONNECTED)
             return 0L
         }
@@ -120,6 +123,7 @@ class XrayVpnService : VpnService() {
     private fun startCore(link: VlessLink) {
         try {
             Libv2ray.initCoreEnv(File(filesDir, "core").apply { mkdirs() }.absolutePath, "")
+            XrayBridge.addLog("INFO", "Starting core: ${link.address}:${link.port} (${link.type}/${link.security})")
             XrayBridge.setState(RealState.CONNECTING)
             val tun = Builder()
                 .setSession("Blob")
@@ -127,15 +131,18 @@ class XrayVpnService : VpnService() {
                 .addAddress("10.9.0.2", 32)
                 .addDnsServer("1.1.1.1")
                 .addRoute("0.0.0.0", 0)
+                .addDisallowedApplication(packageName)
                 .setBlocking(true)
                 .establish()
             if (tun == null) {
+                XrayBridge.addLog("ERROR", "TUN create failed (another VPN active or duplicate)")
                 XrayBridge.setState(RealState.BROKEN, "TUN create failed")
                 return
             }
             tunFd = tun.detachFd()
             val fd = protect(tunFd)
             if (!fd) {
+                XrayBridge.addLog("ERROR", "protect(fd) failed")
                 XrayBridge.setState(RealState.BROKEN, "protect failed")
                 return
             }
@@ -143,9 +150,11 @@ class XrayVpnService : VpnService() {
             lastDown = 0
             controller = Libv2ray.newCoreController(callback)
             controller?.startLoop(buildXrayConfig(link), tunFd)
+            XrayBridge.addLog("INFO", "Core loop entered")
             mainHandler.removeCallbacks(statsRunnable)
             mainHandler.postDelayed(statsRunnable, 1200L)
         } catch (e: Exception) {
+            XrayBridge.addLog("ERROR", "Core error: ${e.message}")
             XrayBridge.setState(RealState.BROKEN, e.message ?: "core error")
         }
     }

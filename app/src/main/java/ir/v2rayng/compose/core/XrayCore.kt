@@ -31,6 +31,15 @@ object XrayBridge {
     private val _status = MutableStateFlow(RealStatus())
     val status = _status.asStateFlow()
 
+    private val _logs = MutableStateFlow<List<ir.v2rayng.compose.data.LogLine>>(emptyList())
+    val logs = _logs.asStateFlow()
+
+    fun addLog(level: String, msg: String) {
+        if (msg.isBlank()) return
+        val line = ir.v2rayng.compose.data.LogLine(ir.v2rayng.compose.data.TimeKit.now(), level, msg.take(400))
+        _logs.value = (_logs.value + line).takeLast(60)
+    }
+
     fun setState(s: RealState, msg: String = "") {
         _status.value = _status.value.copy(state = s, message = msg)
     }

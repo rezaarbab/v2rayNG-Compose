@@ -51,10 +51,21 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         if (_state.value.servers.isNotEmpty()) {
             pingAll()
         }
+        var lastRealState = ir.v2rayng.compose.core.RealState.IDLE
         viewModelScope.launch {
             ir.v2rayng.compose.core.XrayBridge.status.collect { st ->
-                val real = _state.value.selectedId.startsWith("rv-")
+                val real = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }?.link != null ||
+                    _state.value.selectedId.startsWith("rv-")
                 if (real || st.state != ir.v2rayng.compose.core.RealState.IDLE) {
+                    if (st.state != lastRealState) {
+                        lastRealState = st.state
+                        when (st.state) {
+                            ir.v2rayng.compose.core.RealState.CONNECTING -> log("INFO", "Core connecting${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
+                            ir.v2rayng.compose.core.RealState.CONNECTED -> log("INFO", S.LOG_CONNECTED)
+                            ir.v2rayng.compose.core.RealState.BROKEN -> log("ERROR", "${S.LOG_FAILED}${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
+                            ir.v2rayng.compose.core.RealState.IDLE -> log("INFO", S.LOG_DISCONNECTED)
+                        }
+                    }
                     put { s ->
                         s.copy(
                             vpnState = when (st.state) {
@@ -74,6 +85,19 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                 s.traffic.copy(upSpeed = 0.0, downSpeed = 0.0)
                             },
                         )
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            ir.v2rayng.compose.core.XrayBridge.logs.collect { lines ->
+                if (lines.isNotEmpty()) {
+                    val known = _state.value.logs.size
+                    val fresh = lines.takeLast(maxOf(0, lines.size)).filter { new ->
+                        _state.value.logs.none { old -> old.time == new.time && old.msg == new.msg }
+                    }
+                    if (fresh.isNotEmpty()) {
+                        put { s -> s.copy(logs = (s.logs + fresh).takeLast(240)) }
                     }
                 }
             }
@@ -213,6 +237,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 log("ERROR", S.LOG_FAILED)
                 return
             }
+            log("INFO", S.LOG_CONNECTING.format(target.name))
             ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed)
             return
         }
