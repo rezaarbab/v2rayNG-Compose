@@ -1,4 +1,4 @@
-﻿package ir.v2rayng.compose.ui
+package ir.v2rayng.compose.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -191,7 +191,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 Text(S.HOME_LAYOUT, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        S.HOME_SECTIONS.joinToString(" â€¢ "),
+                        S.HOME_SECTIONS.joinToString(" | "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
@@ -335,10 +335,10 @@ fun HomeLayoutDialog(order: List<Int>, vm: AppViewModel, onDismiss: () -> Unit) 
                         )
                         TextButton(
                             onClick = { if (pos > 0) vm.setHomeOrder(order.toMutableList().apply { add(pos, removeAt(pos - 1)) }) },
-                        ) { Text("â–²") }
+                        ) { Text("^") }
                         TextButton(
                             onClick = { if (pos < order.size - 1) vm.setHomeOrder(order.toMutableList().apply { add(pos, removeAt(pos + 1)) }) },
-                        ) { Text("â–¼") }
+                        ) { Text("v") }
                     }
                 }
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {

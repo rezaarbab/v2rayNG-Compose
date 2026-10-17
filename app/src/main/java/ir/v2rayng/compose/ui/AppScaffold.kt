@@ -1,4 +1,4 @@
-﻿package ir.v2rayng.compose.ui
+package ir.v2rayng.compose.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -78,6 +78,7 @@ fun AppRoot() {
         var last = 0L
         while (true) {
             withFrameMillis { v ->
+                StickerTicker.fast.longValue = v
                 if (v - last >= 31L) {
                     last = v
                     StickerTicker.ms.longValue = v
@@ -242,10 +243,10 @@ fun MoveNavDialog(order: List<Int>, vm: AppViewModel, onDismiss: () -> Unit) {
                         )
                         TextButton(
                             onClick = { if (pos > 0) vm.setNavOrder(order.toMutableList().apply { add(pos, removeAt(pos - 1)) }) },
-                        ) { Text("â–²") }
+                        ) { Text("v") }
                         TextButton(
                             onClick = { if (pos < order.size - 1) vm.setNavOrder(order.toMutableList().apply { add(pos, removeAt(pos + 1)) }) },
-                        ) { Text("â–¼") }
+                        ) { Text("^") }
                     }
                 }
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {

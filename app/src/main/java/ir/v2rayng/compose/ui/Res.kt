@@ -6,11 +6,11 @@ object S {
     val TABS = listOf("Connect", "Servers", "Routing", "Logs", "Settings")
 
     const val STATUS_IDLE = "Disconnected"
-    const val STATUS_CONNECTING = "Connecting…"
+    const val STATUS_CONNECTING = "Connecting..."
     const val STATUS_CONNECTED = "Connected"
     const val STATUS_BROKEN = "Connection failed"
 
-    const val TAP_HINT = "Tap to connect • Hold (1s) to customize"
+    const val TAP_HINT = "Tap to connect + Hold (1s) to customize"
     const val HOLD_HINT = "Hold any sticker (1s) to customize it"
 
     const val UPLOAD = "Upload"
@@ -79,7 +79,7 @@ object S {
     const val NO_BG = "None"
     const val EDITOR = "Editor"
     const val CLEAR_BG = "Clear"
-    const val LANGUAGE_NOTE = "Language: all strings live in ui/Res.kt — translate them in one place."
+    const val LANGUAGE_NOTE = "Language: all strings live in ui/Res.kt - translate them in one place."
 
     const val EDITOR_MAIN = "Customize main sticker"
     const val EDITOR_WALL = "Customize background"

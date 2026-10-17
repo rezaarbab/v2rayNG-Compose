@@ -195,7 +195,7 @@ private fun RowScope.TrafficCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = if (title == S.UPLOAD) "â–²" else "â–¼",
+                    text = if (title == S.UPLOAD) "^" else "v",
                     color = accent,
                     fontWeight = FontWeight.Bold,
                 )

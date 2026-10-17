@@ -70,7 +70,7 @@ fun StatusPill(state: VpnState) {
 @Composable
 fun PingChip(ping: Int?) {
     val (color, text) = when {
-        ping == null -> Color(0xFF9BA8B4) to "—"
+        ping == null -> Color(0xFF9BA8B4) to "-"
         ping <= 150 -> Color(0xFF2BD48A) to "$ping ms"
         ping <= 300 -> Color(0xFFFFB24A) to "$ping ms"
         else -> Color(0xFFFF7C7C) to "$ping ms"
