@@ -137,7 +137,7 @@ class XrayVpnService : VpnService() {
         paint.style = Paint.Style.FILL
         paint.color = if (colorHex >= 0) colorHex.toInt() else if (dark) 0xFF7FD8E8.toInt() else 0xFF2C5BD6.toInt()
         c.drawCircle(size / 2f, size / 2f, size * 0.34f, paint)
-        paint.color = 0x2EFFFFFF
+        paint.color = 0x2EFFFFFF.toInt()
         c.drawCircle(size * 0.40f, size * 0.36f, size * 0.11f, paint)
         paint.color = 0xFF241E1E.toInt()
         val hw = size * 0.028f
@@ -151,7 +151,7 @@ class XrayVpnService : VpnService() {
                 hw, hw, paint,
             )
         }
-        paint.color = 0x99FFFFFF
+        paint.color = 0x99FFFFFF.toInt()
         c.drawCircle(size * 0.373f, size * 0.44f, size * 0.012f, paint)
         c.drawCircle(size * 0.573f, size * 0.44f, size * 0.012f, paint)
         return bmp
