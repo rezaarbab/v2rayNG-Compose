@@ -15,6 +15,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -22,35 +26,38 @@ import androidx.compose.ui.unit.dp
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.Settings
-import ir.v2rayng.compose.stickers.Sticker
-import ir.v2rayng.compose.stickers.StickerCharacter
+import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.stickers.V2Stickers
+import ir.v2rayng.compose.stickers.StickerCharacter
 
 private data class RouteUi(
     val key: String,
     val title: String,
     val sub: String,
-    val stickerIndex: Int,
 )
 
 @Composable
 fun RoutingScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     val rows = listOf(
-        RouteUi("bypass_ir", "دور زدن ایران", "ترافیک داخلی مستقیم می‌رود", 0),
-        RouteUi("block_ads", "مسدودسازی تبلیغات", "GeoSite ads حذف می‌شود", 1),
-        RouteUi("udp443", "پذیرش UDP 443", "برای QUIC و بازی‌ها", 2),
+        RouteUi("bypass_ir", "دور زدن ایران", "ترافیک داخلی مستقیم می‌رود"),
+        RouteUi("block_ads", "مسدودسازی تبلیغات", "GeoSite ads حذف می‌شود"),
+        RouteUi("udp443", "پذیرش UDP 443", "برای QUIC و بازی‌ها"),
     )
+    val routeIcons = parseList(settings.routeIcons, listOf(0, 1, 2))
+    var editZone by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        SectionTitle("مسیریابی", "قوانین مسیر ترافیک")
+        SectionTitle("مسیریابی", "نگه‌داشتن ۵ ثانیه روی کارت: سفارشی‌سازی")
         Spacer(Modifier.height(4.dp))
 
-        rows.forEach { r ->
+        rows.forEachIndexed { i, r ->
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .holdFor(5000L, onHold = { editZone.value = "route:$i" }),
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             ) {
@@ -58,8 +65,7 @@ fun RoutingScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                 ) {
-                    StickerCharacter(V2Stickers.byIndex(settings.stickerStyle, r.stickerIndex), sizeDp = 42.dp)
-                    Spacer(Modifier.height(4.dp))
+                    StickerCharacter(V2Stickers.byIndex(settings.stickerStyle, routeIcons[i]), sizeDp = 42.dp)
                     Column(Modifier.weight(1f).padding(start = 8.dp)) {
                         Text(
                             text = r.title,
@@ -87,6 +93,8 @@ fun RoutingScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-}
 
-private fun unusedSticker(): Sticker = V2Stickers.setFor(0).first()
+    editZone?.let { zone ->
+        StickerEditorDialog(zone, settings, vm) { editZone.value = null }
+    }
+}

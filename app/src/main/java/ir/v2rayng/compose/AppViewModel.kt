@@ -9,6 +9,8 @@ import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.SettingsStore
 import ir.v2rayng.compose.data.TimeKit
 import ir.v2rayng.compose.data.VpnState
+import ir.v2rayng.compose.data.packList
+import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.stickers.CountryFlags
 import java.net.HttpURLConnection
 import java.net.URL
@@ -59,6 +61,25 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setBgSpeed(v: Float) = setSettings { it.copy(bgSpeed = v) }
     fun setNavStickers(v: Boolean) = setSettings { it.copy(navStickers = v) }
     fun setAutoFlag(v: Boolean) = setSettings { it.copy(autoFlag = v) }
+
+    fun setNavOrder(order: List<Int>) = setSettings { it.copy(navOrder = packList(order)) }
+
+    fun setNavIcon(slot: Int, idx: Int) = setSettings { s ->
+        val cur = parseList(s.navIcons, (0..4).toList()).toMutableList()
+        cur[slot.coerceIn(0, cur.size - 1)] = idx
+        s.copy(navIcons = packList(cur))
+    }
+
+    fun setUpIcon(i: Int) = setSettings { it.copy(upIcon = i) }
+    fun setDownIcon(i: Int) = setSettings { it.copy(downIcon = i) }
+
+    fun setRouteIcon(slot: Int, idx: Int) = setSettings { s ->
+        val cur = parseList(s.routeIcons, listOf(0, 1, 2)).toMutableList()
+        cur[slot.coerceIn(0, 2)] = idx
+        s.copy(routeIcons = packList(cur))
+    }
+
+    fun resetSettings() = setSettings { Settings() }
 
     private fun log(level: String, msg: String) {
         put { s -> s.copy(logs = (s.logs + LogLine(TimeKit.now(), level, msg)).takeLast(240)) }

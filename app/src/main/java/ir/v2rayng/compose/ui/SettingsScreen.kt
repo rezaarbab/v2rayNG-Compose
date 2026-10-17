@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.Settings
+import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.StickerMood
@@ -55,6 +56,8 @@ import ir.v2rayng.compose.ui.theme.AccentOptions
 fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var editWall by remember { mutableStateOf(false) }
     var showCustomAccent by remember { mutableStateOf(false) }
+    var editNavSlot by remember { mutableStateOf<Int?>(null) }
+    var moveMenu by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -146,11 +149,57 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "ادیتور استیکر اصلی: روی استیکر صفحه نگه‌دار",
+                        "ادیتور استیکر اصلی: نگه‌داشتن روی استیکر صفحه",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("منو و آیکون‌ها", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "جابجایی آیتم‌ها / ۵ ثانیه نگه‌دار روی آیکون",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    SelectChip("چیدمان", false, { moveMenu = true })
+                }
+
+                Text("استیکر آیکون‌های منو:", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                val navIcons = parseList(settings.navIcons, (0..4).toList())
+                androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    itemsIndexed(navIcons) { slot, idx ->
+                        val sticker = V2Stickers.byIndex(settings.stickerStyle, idx)
+                        androidx.compose.foundation.layout.Box(
+                            Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { editNavSlot.value = slot }
+                                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), RoundedCornerShape(14.dp))
+                                .padding(5.dp),
+                        ) {
+                            StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 40.dp)
+                        }
+                    }
+                }
+                Text(
+                    "نوک روی هر آیکون بالا: ادیتور",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("بازنشانی تنظیمات UI به پیش‌فرض", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    SelectChip("ریست", false, { vm.resetSettings() })
                 }
             }
         }
@@ -208,6 +257,12 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     }
     if (showCustomAccent) {
         CustomAccentDialog(settings.customAccent, vm) { showCustomAccent = false }
+    }
+    editNavSlot?.let { slot ->
+        StickerEditorDialog("nav:$slot", settings, vm) { editNavSlot = null }
+    }
+    if (moveMenu) {
+        MoveNavDialog(parseList(settings.navOrder, (0..4).toList()), vm) { moveMenu = false }
     }
 }
 

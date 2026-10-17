@@ -50,6 +50,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
     }
     val connected = state.vpnState == VpnState.CONNECTED
     val editorOpen = remember { mutableStateOf(false) }
+    val editZone = remember { mutableStateOf<String?>(null) }
 
     val mainSticker = if (settings.mainIndex >= 0) {
         V2Stickers.byIndex(settings.stickerStyle, settings.mainIndex)
@@ -75,14 +76,20 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
             )
         }
         Spacer(Modifier.height(14.dp))
-        StickerCharacter(
-            sticker = tinted(mainSticker, settings.mainColor),
-            mood = mood,
-            sizeDp = if (settings.mainSize > 0) settings.mainSize.dp else 190.dp,
-            onTap = { vm.toggleVpn() },
-            onLongPress = { editorOpen.value = true },
-            gaze = gaze,
-        )
+        androidx.compose.foundation.layout.Box(
+            Modifier.holdFor(
+                durationMs = 5000L,
+                onTap = { vm.toggleVpn() },
+                onHold = { editorOpen.value = true },
+            )
+        ) {
+            StickerCharacter(
+                sticker = tinted(mainSticker, settings.mainColor),
+                mood = mood,
+                sizeDp = if (settings.mainSize > 0) settings.mainSize.dp else 190.dp,
+                gaze = gaze,
+            )
+        }
         Spacer(Modifier.height(6.dp))
         Text(
             text = "لمس = اتصال/قطع • نگه‌داشتن = سفارشی‌سازی",
@@ -125,8 +132,8 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            TrafficCard("خروجی", state.traffic.upSpeed, state.traffic.up, V2Stickers.byIndex(settings.stickerStyle, 5), connected)
-            TrafficCard("ورودی", state.traffic.downSpeed, state.traffic.down, V2Stickers.byIndex(settings.stickerStyle, 6), connected)
+            TrafficCard("خروجی", state.traffic.upSpeed, state.traffic.up, V2Stickers.byIndex(settings.stickerStyle, settings.upIcon), connected, onHold = { editZone.value = "up" })
+            TrafficCard("ورودی", state.traffic.downSpeed, state.traffic.down, V2Stickers.byIndex(settings.stickerStyle, settings.downIcon), connected, onHold = { editZone.value = "down" })
         }
 
         Spacer(Modifier.height(12.dp))
@@ -139,11 +146,21 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
             StatChip("کل ورودی", TimeKit.human(state.traffic.down))
         }
 
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = "نگه‌داشتن ۵ ثانیه روی هر استیکر: ادیتور و جابجایی",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
         Spacer(Modifier.height(16.dp))
     }
 
     if (editorOpen.value) {
         StickerEditorDialog("main", settings, vm) { editorOpen.value = false }
+    }
+    editZone.value?.let { zone ->
+        StickerEditorDialog(zone, settings, vm) { editZone.value = null }
     }
 }
 
@@ -154,9 +171,12 @@ private fun RowScope.TrafficCard(
     total: Long,
     sticker: Sticker,
     connected: Boolean,
+    onHold: () -> Unit = {},
 ) {
     Card(
-        modifier = Modifier.weight(1f),
+        modifier = Modifier
+            .weight(1f)
+            .holdFor(5000L, onHold = onHold),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {

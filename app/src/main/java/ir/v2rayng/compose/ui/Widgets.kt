@@ -1,6 +1,7 @@
 package ir.v2rayng.compose.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ir.v2rayng.compose.data.VpnState
@@ -96,6 +98,39 @@ fun SectionTitle(text: String, subtitle: String = "") {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+fun Modifier.holdFor(
+    durationMs: Long,
+    onTap: (() -> Unit)? = null,
+    onHold: () -> Unit,
+): Modifier = this.pointerInput(durationMs, onTap, onHold) {
+    awaitPointerEventScope {
+        while (true) {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val start = down.uptimeMillis
+            val originX = down.position.x
+            val originY = down.position.y
+            var fired = false
+            var moved = false
+            while (true) {
+                val e = awaitPointerEvent()
+                val c = e.changes.firstOrNull() ?: break
+                val d = kotlin.math.hypot((c.position.x - originX).toDouble(), (c.position.y - originY).toDouble())
+                if (d > 40.0) {
+                    moved = true
+                }
+                if (!moved && c.pressed && c.uptimeMillis - start >= durationMs) {
+                    onHold()
+                    fired = true
+                    e.changes.forEach { it.consume() }
+                    break
+                }
+                if (!c.pressed) break
+            }
+            if (!fired && !moved && onTap != null) onTap()
         }
     }
 }

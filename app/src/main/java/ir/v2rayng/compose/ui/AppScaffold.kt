@@ -1,8 +1,12 @@
 package ir.v2rayng.compose.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
@@ -18,7 +22,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -39,12 +45,14 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.SettingsStore
+import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.stickers.LocalStickerEnv
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.StickerEnv
@@ -99,6 +107,10 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
     var tab by remember { mutableIntStateOf(0) }
     val gazeLocal = remember { mutableStateOf<Offset?>(null) }
     val outerRoot = remember { mutableStateOf(Offset.Zero) }
+    var moveOpen by remember { mutableStateOf(false) }
+
+    val order = parseList(settings.navOrder, (0..4).toList()).take(5)
+    val navIcons = parseList(settings.navIcons, (0..4).toList())
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -114,23 +126,31 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
         },
         bottomBar = {
             NavigationBar {
-                tabLabels.forEachIndexed { i, label ->
+                order.forEachIndexed { pos, real ->
                     NavigationBarItem(
-                        selected = tab == i,
-                        onClick = { tab = i },
+                        selected = tab == pos,
+                        onClick = { tab = pos },
                         icon = {
-                            if (settings.navStickers) {
-                                val s = V2Stickers.byIndex(settings.stickerStyle, i)
-                                StickerCharacter(
-                                    sticker = s,
-                                    mood = if (tab == i) StickerMood.HAPPY else StickerMood.NORMAL,
-                                    sizeDp = 26.dp,
+                            Box(
+                                Modifier.holdFor(
+                                    durationMs = 5000L,
+                                    onTap = { },
+                                    onHold = { moveOpen = true },
                                 )
-                            } else {
-                                Icon(tabIcons[i], contentDescription = label)
+                            ) {
+                                if (settings.navStickers) {
+                                    val s = V2Stickers.byIndex(settings.stickerStyle, navIcons.getOrNull(real) ?: real)
+                                    StickerCharacter(
+                                        sticker = s,
+                                        mood = if (tab == pos) StickerMood.HAPPY else StickerMood.NORMAL,
+                                        sizeDp = 26.dp,
+                                    )
+                                } else {
+                                    Icon(tabIcons[real], contentDescription = tabLabels[real])
+                                }
                             }
                         },
-                        label = { Text(label) },
+                        label = { Text(tabLabels[real]) },
                     )
                 }
             }
@@ -178,12 +198,53 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                 }
             }
 
-            when (tab) {
+            when (val real = order[tab]) {
                 0 -> HomeScreen(state, settings, vm, gaze)
                 1 -> ServersScreen(state, settings, vm)
                 2 -> RoutingScreen(state, settings, vm)
                 3 -> LogScreen(state, vm)
                 else -> SettingsScreen(state, settings, vm)
+            }
+        }
+    }
+
+    if (moveOpen) {
+        MoveNavDialog(order, vm) { moveOpen = false }
+    }
+}
+
+@Composable
+fun MoveNavDialog(order: List<Int>, vm: AppViewModel, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("چیدمان منو", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "این پنجره با نگه‌داشتن ۵ ثانیه روی آیکون‌های منو هم باز می‌شود",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                order.forEachIndexed { pos, real ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = "${pos + 1}. ${tabLabels.getOrNull(real) ?: ""}",
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = { if (pos > 0) vm.setNavOrder(order.toMutableList().apply { add(pos, removeAt(pos - 1)) }) },
+                        ) { Text("▲") }
+                        TextButton(
+                            onClick = { if (pos < order.size - 1) vm.setNavOrder(order.toMutableList().apply { add(pos, removeAt(pos + 1)) }) },
+                        ) { Text("▼") }
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("بستن")
+                }
             }
         }
     }

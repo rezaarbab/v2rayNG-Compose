@@ -109,7 +109,9 @@ fun StickerCharacter(
         val t = if (static) {
             frozenPhase
         } else {
-            StickerTicker.ms.longValue / 1000f * us * moodSpeed(mood) + phase
+            val wantFast = (mood == StickerMood.HAPPY || mood == StickerMood.WOBBLE) && !bg
+            val clock = if (wantFast) StickerTicker.fast.longValue else StickerTicker.ms.longValue
+            clock / 1000f * us * moodSpeed(mood) + phase
         }
         val breathe = sin(2.0 * PI * t).toFloat()
         val hop = -moodAmp(mood) * sin(PI * t).let { (it * it).toFloat() }

@@ -7,6 +7,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 
 object StickerTicker {
     val ms = mutableLongStateOf(0L)
+    val fast = mutableLongStateOf(0L)
 }
 
 class StickerEnv {

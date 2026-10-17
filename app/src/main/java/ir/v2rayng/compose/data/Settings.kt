@@ -20,7 +20,18 @@ data class Settings(
     val bgSpeed: Float = 1f,
     val navStickers: Boolean = true,
     val autoFlag: Boolean = true,
+    val navOrder: String = "0,1,2,3,4",
+    val navIcons: String = "0,1,2,3,4",
+    val upIcon: Int = 5,
+    val downIcon: Int = 6,
+    val routeIcons: String = "0,1,2",
 )
+
+fun parseList(s: String, def: List<Int>): List<Int> {
+    return s.split(",").mapNotNull { it.trim().toIntOrNull() }.ifEmpty { def }
+}
+
+fun packList(l: List<Int>): String = l.joinToString(",")
 
 class SettingsStore(context: Context) {
     private val sp = context.getSharedPreferences("v2settings", Context.MODE_PRIVATE)
@@ -43,6 +54,11 @@ class SettingsStore(context: Context) {
         bgSpeed = sp.getFloat("bgSpeed", 1f),
         navStickers = sp.getBoolean("navStickers", true),
         autoFlag = sp.getBoolean("autoFlag", true),
+        navOrder = sp.getString("navOrder", "0,1,2,3,4")!!,
+        navIcons = sp.getString("navIcons", "0,1,2,3,4")!!,
+        upIcon = sp.getInt("upIcon", 5),
+        downIcon = sp.getInt("downIcon", 6),
+        routeIcons = sp.getString("routeIcons", "0,1,2")!!,
     )
 
     fun save(s: Settings) {
@@ -64,6 +80,11 @@ class SettingsStore(context: Context) {
             .putFloat("bgSpeed", s.bgSpeed)
             .putBoolean("navStickers", s.navStickers)
             .putBoolean("autoFlag", s.autoFlag)
+            .putString("navOrder", s.navOrder)
+            .putString("navIcons", s.navIcons)
+            .putInt("upIcon", s.upIcon)
+            .putInt("downIcon", s.downIcon)
+            .putString("routeIcons", s.routeIcons)
             .apply()
     }
 }
