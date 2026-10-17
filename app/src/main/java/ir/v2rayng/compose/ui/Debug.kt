@@ -89,8 +89,8 @@ fun DiagnosticsDialog(onDismiss: () -> Unit) {
         s.device.value = String.format("%s %s | Android %s (SDK %d)", maker, model, rel, sdk)
         if (d != null) {
             s.display.value = String.format(
-                "%.1f Hz | %dx%d px | %.2f dpi",
-                d.refreshRate, d.mode.physicalWidth, d.mode.physicalHeight, d.densityDpi,
+                "%.1f Hz | %dx%d px | %.2f density",
+                d.refreshRate, d.mode.physicalWidth, d.mode.physicalHeight, ctx.resources.displayMetrics.density,
             )
         } else {
             s.display.value = "display n/a"

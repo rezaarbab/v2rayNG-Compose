@@ -1,6 +1,6 @@
 package ir.v2rayng.compose.stickers
 
-import ir.v2rayng.compose.stickers.DebugKit
+import ir.v2rayng.compose.ui.DebugKit
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.size
