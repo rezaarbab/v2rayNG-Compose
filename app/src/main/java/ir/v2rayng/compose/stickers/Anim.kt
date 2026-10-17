@@ -12,6 +12,7 @@ object StickerTicker {
 class StickerEnv {
     val enabled = mutableStateOf(true)
     val speed = mutableFloatStateOf(1f)
+    val bgSpeed = mutableFloatStateOf(1f)
 }
 
 val LocalStickerEnv = staticCompositionLocalOf { StickerEnv() }

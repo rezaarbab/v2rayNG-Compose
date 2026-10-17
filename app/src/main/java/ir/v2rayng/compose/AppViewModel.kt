@@ -9,6 +9,10 @@ import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.SettingsStore
 import ir.v2rayng.compose.data.TimeKit
 import ir.v2rayng.compose.data.VpnState
+import ir.v2rayng.compose.stickers.CountryFlags
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.random.Random
 
 class AppViewModel(private val store: SettingsStore) : ViewModel() {
@@ -39,11 +44,21 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun setDark(v: Boolean) = setSettings { it.copy(dark = v) }
     fun setAccent(i: Int) = setSettings { it.copy(accent = i) }
+    fun setCustomAccent(v: Long) = setSettings { it.copy(customAccent = v) }
     fun setStickerStyle(i: Int) = setSettings { it.copy(stickerStyle = i) }
+    fun setWallpaperStyle(i: Int) = setSettings { it.copy(wallpaperStyle = i) }
     fun setWallpaper(i: Int) = setSettings { it.copy(wallpaperIndex = i) }
+    fun setWallpaperColor(v: Long) = setSettings { it.copy(wallpaperColor = v) }
+    fun setWallpaperSize(v: Int) = setSettings { it.copy(wallpaperSize = v) }
+    fun setMainColor(v: Long) = setSettings { it.copy(mainColor = v) }
+    fun setMainSize(v: Int) = setSettings { it.copy(mainSize = v) }
+    fun setMainIndex(v: Int) = setSettings { it.copy(mainIndex = v) }
     fun setFollowFinger(v: Boolean) = setSettings { it.copy(followFinger = v) }
     fun setAnimate(v: Boolean) = setSettings { it.copy(animate = v) }
     fun setSpeed(v: Float) = setSettings { it.copy(speed = v) }
+    fun setBgSpeed(v: Float) = setSettings { it.copy(bgSpeed = v) }
+    fun setNavStickers(v: Boolean) = setSettings { it.copy(navStickers = v) }
+    fun setAutoFlag(v: Boolean) = setSettings { it.copy(autoFlag = v) }
 
     private fun log(level: String, msg: String) {
         put { s -> s.copy(logs = (s.logs + LogLine(TimeKit.now(), level, msg)).takeLast(240)) }
@@ -71,6 +86,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     put { s -> s.copy(vpnState = VpnState.CONNECTED) }
                     log("INFO", "اتصال برقرار شد، تونل فعال است")
                     startTraffic()
+                    if (_settings.value.autoFlag && target.country.isNotBlank()) {
+                        applyFlag(target.country)
+                    }
                 }
             }
         }
@@ -80,14 +98,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         trafficJob?.cancel()
         trafficJob = viewModelScope.launch {
             while (true) {
-                delay(500)
+                delay(700)
                 val up = Random.nextInt(2, 81) * 1024.0
                 val down = up * (1.2 + Random.nextDouble(0.0, 4.8))
                 put { s ->
                     s.copy(
                         traffic = s.traffic.copy(
-                            up = s.traffic.up + (up * 0.5).toLong(),
-                            down = s.traffic.down + (down * 0.5).toLong(),
+                            up = s.traffic.up + (up * 0.7).toLong(),
+                            down = s.traffic.down + (down * 0.7).toLong(),
                             upSpeed = up,
                             downSpeed = down,
                         )
@@ -107,6 +125,39 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             )
         }
         log("INFO", "اتصال قطع شد")
+        if (_settings.value.autoFlag) {
+            fetchIpFlag()
+        }
+    }
+
+    fun fetchIpFlag() {
+        viewModelScope.launch {
+            val code = withContext(Dispatchers.IO) {
+                try {
+                    val conn = URL("https://ipapi.co/json/").openConnection() as HttpURLConnection
+                    conn.connectTimeout = 4500
+                    conn.readTimeout = 4500
+                    val text = conn.inputStream.bufferedReader().use { it.readText() }
+                    Regex("\"country_code\"\\s*:\\s*\"([A-Z]{2})\"").find(text)?.groupValues?.get(1)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            if (code != null) {
+                val applied = applyFlag(code)
+                put { s -> s.copy(ipCountry = code) }
+                log("INFO", "کشور آی‌پی: $code" + if (applied) " (پس‌زمینه ست شد)" else "")
+            } else {
+                log("WARN", "تشخیص کشور آی‌پی ناموفق بود")
+            }
+        }
+    }
+
+    private fun applyFlag(code: String): Boolean {
+        val idx = CountryFlags.byCode(code)
+        if (idx < 0) return false
+        setSettings { it.copy(wallpaperStyle = 2, wallpaperIndex = idx) }
+        return true
     }
 
     fun pingAll() {

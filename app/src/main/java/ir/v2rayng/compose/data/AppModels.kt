@@ -11,6 +11,7 @@ data class ServerProfile(
     val name: String,
     val host: String,
     val stickerIndex: Int,
+    val country: String = "",
     val ping: Int? = null,
 )
 
@@ -29,12 +30,12 @@ data class LogLine(
 
 data class AppState(
     val servers: List<ServerProfile> = listOf(
-        ServerProfile("s1", "آلمان – فرانکفورت", "de-01.sticker-vpn.net", 1),
-        ServerProfile("s2", "ترکیه – استانبول", "tr-02.sticker-vpn.net", 0),
-        ServerProfile("s3", "سوئد – استکهلم", "se-03.sticker-vpn.net", 2),
-        ServerProfile("s4", "هلند – امستردام", "nl-04.sticker-vpn.net", 4),
-        ServerProfile("s5", "ژاپن – توکیو", "jp-05.sticker-vpn.net", 3),
-        ServerProfile("s6", "آمریکا – نیویورک", "us-06.sticker-vpn.net", 5),
+        ServerProfile("s1", "آلمان – فرانکفورت", "de-01.sticker-vpn.net", 1, "de"),
+        ServerProfile("s2", "ترکیه – استانبول", "tr-02.sticker-vpn.net", 0, "tr"),
+        ServerProfile("s3", "سوئد – استکهلم", "se-03.sticker-vpn.net", 2, "se"),
+        ServerProfile("s4", "هلند – امستردام", "nl-04.sticker-vpn.net", 4, "nl"),
+        ServerProfile("s5", "ژاپن – توکیو", "jp-05.sticker-vpn.net", 3, "jp"),
+        ServerProfile("s6", "آمریکا – نیویورک", "us-06.sticker-vpn.net", 5, "us"),
     ),
     val selectedId: String = "s1",
     val vpnState: VpnState = VpnState.IDLE,
@@ -45,6 +46,7 @@ data class AppState(
         "block_ads" to true,
         "udp443" to false,
     ),
+    val ipCountry: String = "",
 ) {
     val selected: ServerProfile get() = servers.first { it.id == selectedId }
 }

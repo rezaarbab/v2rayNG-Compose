@@ -51,6 +51,7 @@ import ir.v2rayng.compose.stickers.StickerEnv
 import ir.v2rayng.compose.stickers.StickerMood
 import ir.v2rayng.compose.stickers.StickerTicker
 import ir.v2rayng.compose.stickers.V2Stickers
+import ir.v2rayng.compose.stickers.tinted
 import ir.v2rayng.compose.ui.theme.V2rayNGTheme
 
 @Composable
@@ -74,16 +75,22 @@ fun AppRoot() {
             }
         }
     }
-    LaunchedEffect(settings.animate, settings.speed) {
+    LaunchedEffect(settings.animate, settings.speed, settings.bgSpeed) {
         env.enabled.value = settings.animate
         env.speed.floatValue = settings.speed
+        env.bgSpeed.floatValue = settings.bgSpeed
     }
     CompositionLocalProvider(LocalStickerEnv provides env) {
-        V2rayNGTheme(dark = settings.dark, accent = settings.accent) {
+        V2rayNGTheme(dark = settings.dark, accent = settings.accent, custom = settings.customAccent) {
             AppScaffold(vm, settings)
         }
     }
 }
+
+private val tabIcons = listOf(
+    Icons.Filled.Home, Icons.Filled.List, Icons.Filled.Send, Icons.Filled.Info, Icons.Filled.Settings,
+)
+private val tabLabels = listOf("ارتباط", "سرورها", "مسیریابی", "گزارش", "تنظیمات")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,14 +99,6 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
     var tab by remember { mutableIntStateOf(0) }
     val gazeLocal = remember { mutableStateOf<Offset?>(null) }
     val outerRoot = remember { mutableStateOf(Offset.Zero) }
-
-    val items = listOf(
-        "ارتباط" to Icons.Filled.Home,
-        "سرورها" to Icons.Filled.List,
-        "مسیریابی" to Icons.Filled.Send,
-        "گزارش" to Icons.Filled.Info,
-        "تنظیمات" to Icons.Filled.Settings,
-    )
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -115,12 +114,22 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
         },
         bottomBar = {
             NavigationBar {
-                items.forEachIndexed { i, item ->
-                    val (label, icon) = item
+                tabLabels.forEachIndexed { i, label ->
                     NavigationBarItem(
                         selected = tab == i,
                         onClick = { tab = i },
-                        icon = { Icon(icon, contentDescription = label) },
+                        icon = {
+                            if (settings.navStickers) {
+                                val s = V2Stickers.byIndex(settings.stickerStyle, i)
+                                StickerCharacter(
+                                    sticker = s,
+                                    mood = if (tab == i) StickerMood.HAPPY else StickerMood.NORMAL,
+                                    sizeDp = 26.dp,
+                                )
+                            } else {
+                                Icon(tabIcons[i], contentDescription = label)
+                            }
+                        },
                         label = { Text(label) },
                     )
                 }
@@ -148,19 +157,23 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                 }
         ) {
             if (settings.wallpaperIndex >= 0) {
-                val wall = V2Stickers.byIndex(settings.stickerStyle, settings.wallpaperIndex)
+                val wall = tinted(
+                    V2Stickers.byIndex(settings.wallpaperStyle, settings.wallpaperIndex),
+                    settings.wallpaperColor,
+                )
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .graphicsLayer { alpha = if (settings.dark) 0.38f else 0.20f },
+                        .graphicsLayer { alpha = if (settings.dark) 0.38f else 0.22f },
                     contentAlignment = Alignment.BottomCenter,
                 ) {
                     StickerCharacter(
                         sticker = wall,
                         mood = StickerMood.HAPPY,
-                        sizeDp = 300.dp,
+                        sizeDp = if (settings.wallpaperSize > 0) settings.wallpaperSize.dp else 300.dp,
                         modifier = Modifier.padding(bottom = 8.dp),
                         gaze = gaze,
+                        bg = true,
                     )
                 }
             }

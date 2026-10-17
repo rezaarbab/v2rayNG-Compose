@@ -1,7 +1,7 @@
 package ir.v2rayng.compose.stickers
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -14,6 +14,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Dp
@@ -54,7 +55,9 @@ fun StickerCharacter(
     sizeDp: Dp = 96.dp,
     modifier: Modifier = Modifier,
     onTap: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
     gaze: Offset? = null,
+    bg: Boolean = false,
 ) {
     val env = LocalStickerEnv.current
     var rootPos by remember { mutableStateOf(Offset.Zero) }
@@ -81,25 +84,32 @@ fun StickerCharacter(
     }
 
     val shapePath = remember { Path() }
+    val gestures = if (onTap == null && onLongPress == null) null else Modifier.pointerInput(onTap, onLongPress) {
+        detectTapGestures(
+            onTap = { onTap?.invoke() },
+            onLongPress = { onLongPress?.invoke() },
+        )
+    }
 
     Canvas(
         modifier = modifier
             .size(sizeDp)
             .onGloballyPositioned { rootPos = it.positionInRoot(); side = it.size }
-            .then(if (onTap != null) Modifier.clickable { onTap() } else Modifier)
+            .then(gestures ?: Modifier)
     ) {
         val s = size.width
         val animOn = env.enabled.value
-        val speed = env.speed.floatValue
+        val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue
         val static = mood == StickerMood.SLEEP || !animOn
         val phase = when (val a = sticker.art) {
             is BlobArt -> a.phase
             is ToyArt -> a.phase
+            is FlagArt -> a.phase
         }
         val t = if (static) {
             frozenPhase
         } else {
-            StickerTicker.ms.longValue / 1000f * speed * moodSpeed(mood) + phase
+            StickerTicker.ms.longValue / 1000f * us * moodSpeed(mood) + phase
         }
         val breathe = sin(2.0 * PI * t).toFloat()
         val hop = -moodAmp(mood) * sin(PI * t).let { (it * it).toFloat() }
@@ -133,6 +143,40 @@ fun StickerCharacter(
             topLeft = Offset((0.5f - 0.27f * shScale) * s, 0.885f * s),
             size = Size(0.54f * s * shScale, 0.08f * s * shScale),
         )
+
+        fun drawPolyBand(pts: List<Offset>, color: Color) {
+            shapePath.rewind()
+            var first = true
+            for (pt in pts) {
+                val p = px(pt.x, pt.y)
+                if (first) {
+                    shapePath.moveTo(p.x, p.y)
+                    first = false
+                } else {
+                    shapePath.lineTo(p.x, p.y)
+                }
+            }
+            shapePath.close()
+            drawPath(shapePath, color)
+        }
+
+        fun drawOps(ops: List<ToyOp>, color: Color) {
+            for (op in ops) {
+                when (op) {
+                    is ToyCircle -> {
+                        val c = px(op.cx, op.cy)
+                        val rx = op.r * sx * s
+                        val ry = op.r * sy * s
+                        drawOval(
+                            color = color,
+                            topLeft = Offset(c.x - rx, c.y - ry),
+                            size = Size(2 * rx, 2 * ry),
+                        )
+                    }
+                    is ToyPoly -> drawPolyBand(op.pts, color)
+                }
+            }
+        }
 
         when (val art = sticker.art) {
             is BlobArt -> {
@@ -180,35 +224,7 @@ fun StickerCharacter(
             }
 
             is ToyArt -> {
-                shapePath.rewind()
-                for (op in art.ops) {
-                    when (op) {
-                        is ToyCircle -> {
-                            val c = px(op.cx, op.cy)
-                            val rx = op.r * sx * s
-                            val ry = op.r * sy * s
-                            drawOval(
-                                color = art.color,
-                                topLeft = Offset(c.x - rx, c.y - ry),
-                                size = Size(2 * rx, 2 * ry),
-                            )
-                        }
-                        is ToyPoly -> {
-                            var first = true
-                            for (pt in op.pts) {
-                                val p = px(pt.x, pt.y)
-                                if (first) {
-                                    shapePath.moveTo(p.x, p.y)
-                                    first = false
-                                } else {
-                                    shapePath.lineTo(p.x, p.y)
-                                }
-                            }
-                            shapePath.close()
-                        }
-                    }
-                }
-                drawPath(shapePath, art.color)
+                drawOps(art.ops, art.color)
 
                 val gloss = px(0.42f, 0.37f)
                 drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = gloss)
@@ -224,6 +240,34 @@ fun StickerCharacter(
                             size = Size(w, h),
                         )
                     }
+                }
+            }
+
+            is FlagArt -> {
+                for (band in art.bands) {
+                    drawOps(band.ops, band.color)
+                }
+
+                val gloss = px(0.42f, 0.37f)
+                drawCircle(Color.White.copy(alpha = 0.14f), radius = 0.10f * s, center = gloss)
+
+                val hw = 0.05f * s
+                val hh = 0.15f * blink * s
+                val eyes = listOf(0.40f to 0.50f, 0.60f to 0.50f)
+                for ((i, eye) in eyes.withIndex()) {
+                    val c = px(eye.first, eye.second) + Offset(gx, gy)
+                    rotate(if (i == 0) -8f else 8f, pivot = c) {
+                        drawOval(
+                            color = EyeDark,
+                            topLeft = Offset(c.x - hw, c.y - hh),
+                            size = Size(2 * hw, 2 * hh),
+                        )
+                    }
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.5f),
+                        radius = hw * 0.34f,
+                        center = c + Offset(-hw * 0.34f, -hh * 0.4f),
+                    )
                 }
             }
         }

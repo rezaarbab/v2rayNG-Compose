@@ -13,6 +13,10 @@ val AccentOptions = listOf(
     "آبی" to Color(0xFF60A5FA),
     "بنفش" to Color(0xFFB39BF5),
     "نارنجی" to Color(0xFFFFA94D),
+    "قرمز" to Color(0xFFEC6E6E),
+    "زرد" to Color(0xFFF4D27A),
+    "فیروزه" to Color(0xFF7FD8E8),
+    "صورتی" to Color(0xFFE689C3),
 )
 
 private val NightColors = darkColorScheme(
@@ -60,8 +64,12 @@ private val DayColors = lightColorScheme(
 )
 
 @Composable
-fun V2rayNGTheme(dark: Boolean = true, accent: Int = 0, content: @Composable () -> Unit) {
-    val a = AccentOptions[((accent % AccentOptions.size) + AccentOptions.size) % AccentOptions.size].second
+fun V2rayNGTheme(dark: Boolean = true, accent: Int = 0, custom: Long = -1L, content: @Composable () -> Unit) {
+    val a = if (custom >= 0L) {
+        Color(custom)
+    } else {
+        AccentOptions[((accent % AccentOptions.size) + AccentOptions.size) % AccentOptions.size].second
+    }
     val base = if (dark) NightColors else DayColors
     val onA = if (a.luminance() >= 0.55f) Color(0xFF06281C) else Color.White
     MaterialTheme(

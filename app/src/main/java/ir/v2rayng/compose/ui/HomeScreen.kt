@@ -18,6 +18,10 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -33,6 +37,7 @@ import ir.v2rayng.compose.stickers.Sticker
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.StickerMood
 import ir.v2rayng.compose.stickers.V2Stickers
+import ir.v2rayng.compose.stickers.tinted
 
 @Composable
 fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offset? = null) {
@@ -44,7 +49,13 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
         VpnState.BROKEN -> StickerMood.SLEEP
     }
     val connected = state.vpnState == VpnState.CONNECTED
-    val mainSticker = V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
+    val editorOpen = remember { mutableStateOf(false) }
+
+    val mainSticker = if (settings.mainIndex >= 0) {
+        V2Stickers.byIndex(settings.stickerStyle, settings.mainIndex)
+    } else {
+        V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
+    }
 
     Column(
         modifier = Modifier
@@ -55,17 +66,26 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
     ) {
         Spacer(Modifier.height(10.dp))
         StatusPill(state.vpnState)
+        if (settings.autoFlag && state.ipCountry.isNotBlank() && state.vpnState == VpnState.IDLE) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "کشور IP: ${state.ipCountry}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Spacer(Modifier.height(14.dp))
         StickerCharacter(
-            sticker = mainSticker,
+            sticker = tinted(mainSticker, settings.mainColor),
             mood = mood,
-            sizeDp = 190.dp,
+            sizeDp = if (settings.mainSize > 0) settings.mainSize.dp else 190.dp,
             onTap = { vm.toggleVpn() },
+            onLongPress = { editorOpen.value = true },
             gaze = gaze,
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "برای اتصال/قطع روی استیکر ضربه بزن",
+            text = "لمس = اتصال/قطع • نگه‌داشتن = سفارشی‌سازی",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -80,7 +100,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             ) {
-                StickerCharacter(mainSticker, sizeDp = 34.dp)
+                StickerCharacter(tinted(mainSticker, settings.mainColor), sizeDp = 34.dp)
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -120,6 +140,10 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
         }
 
         Spacer(Modifier.height(16.dp))
+    }
+
+    if (editorOpen.value) {
+        StickerEditorDialog("main", settings, vm) { editorOpen.value = false }
     }
 }
 
