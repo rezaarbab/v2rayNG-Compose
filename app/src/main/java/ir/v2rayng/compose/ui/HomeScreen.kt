@@ -20,20 +20,22 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.AppState
+import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.TimeKit
 import ir.v2rayng.compose.data.VpnState
+import ir.v2rayng.compose.stickers.Sticker
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.StickerMood
-import ir.v2rayng.compose.stickers.StickerPreset
 import ir.v2rayng.compose.stickers.V2Stickers
 
 @Composable
-fun HomeScreen(state: AppState, vm: AppViewModel) {
+fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offset? = null) {
     val sel = state.selected
     val mood = when (state.vpnState) {
         VpnState.IDLE -> StickerMood.NORMAL
@@ -42,6 +44,7 @@ fun HomeScreen(state: AppState, vm: AppViewModel) {
         VpnState.BROKEN -> StickerMood.SLEEP
     }
     val connected = state.vpnState == VpnState.CONNECTED
+    val mainSticker = V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
 
     Column(
         modifier = Modifier
@@ -54,10 +57,11 @@ fun HomeScreen(state: AppState, vm: AppViewModel) {
         StatusPill(state.vpnState)
         Spacer(Modifier.height(14.dp))
         StickerCharacter(
-            preset = V2Stickers.byIndex(sel.stickerIndex),
+            sticker = mainSticker,
             mood = mood,
             sizeDp = 190.dp,
             onTap = { vm.toggleVpn() },
+            gaze = gaze,
         )
         Spacer(Modifier.height(6.dp))
         Text(
@@ -76,7 +80,7 @@ fun HomeScreen(state: AppState, vm: AppViewModel) {
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             ) {
-                StickerCharacter(V2Stickers.byIndex(sel.stickerIndex), sizeDp = 34.dp)
+                StickerCharacter(mainSticker, sizeDp = 34.dp)
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -101,8 +105,8 @@ fun HomeScreen(state: AppState, vm: AppViewModel) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            TrafficCard("خروجی", state.traffic.upSpeed, state.traffic.up, V2Stickers.fenrir, connected)
-            TrafficCard("ورودی", state.traffic.downSpeed, state.traffic.down, V2Stickers.leda, connected)
+            TrafficCard("خروجی", state.traffic.upSpeed, state.traffic.up, V2Stickers.byIndex(settings.stickerStyle, 5), connected)
+            TrafficCard("ورودی", state.traffic.downSpeed, state.traffic.down, V2Stickers.byIndex(settings.stickerStyle, 6), connected)
         }
 
         Spacer(Modifier.height(12.dp))
@@ -124,7 +128,7 @@ private fun RowScope.TrafficCard(
     title: String,
     speed: Double,
     total: Long,
-    preset: StickerPreset,
+    sticker: Sticker,
     connected: Boolean,
 ) {
     Card(
@@ -136,7 +140,7 @@ private fun RowScope.TrafficCard(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
-            StickerCharacter(preset, mood = if (connected) StickerMood.HAPPY else StickerMood.SLEEP, sizeDp = 30.dp)
+            StickerCharacter(sticker, mood = if (connected) StickerMood.HAPPY else StickerMood.SLEEP, sizeDp = 30.dp)
             Spacer(Modifier.width(10.dp))
             Column {
                 Text(

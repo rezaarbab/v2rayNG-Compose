@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.LogLine
 import ir.v2rayng.compose.data.ServerProfile
+import ir.v2rayng.compose.data.Settings
+import ir.v2rayng.compose.data.SettingsStore
 import ir.v2rayng.compose.data.TimeKit
 import ir.v2rayng.compose.data.VpnState
 import kotlinx.coroutines.Job
@@ -16,15 +18,30 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 
-class AppViewModel : ViewModel() {
+class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
+
+    private val _settings = MutableStateFlow(store.load())
+    val settings: StateFlow<Settings> = _settings.asStateFlow()
 
     private var connectJob: Job? = null
     private var trafficJob: Job? = null
 
     private fun put(f: (AppState) -> AppState) = _state.update(f)
+
+    private fun setSettings(f: (Settings) -> Settings) {
+        val s = f(_settings.value)
+        _settings.value = s
+        store.save(s)
+    }
+
+    fun setDark(v: Boolean) = setSettings { it.copy(dark = v) }
+    fun setAccent(i: Int) = setSettings { it.copy(accent = i) }
+    fun setStickerStyle(i: Int) = setSettings { it.copy(stickerStyle = i) }
+    fun setWallpaper(i: Int) = setSettings { it.copy(wallpaperIndex = i) }
+    fun setFollowFinger(v: Boolean) = setSettings { it.copy(followFinger = v) }
 
     private fun log(level: String, msg: String) {
         put { s -> s.copy(logs = (s.logs + LogLine(TimeKit.now(), level, msg)).takeLast(240)) }

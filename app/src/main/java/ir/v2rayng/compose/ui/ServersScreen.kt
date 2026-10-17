@@ -43,11 +43,13 @@ import androidx.compose.ui.unit.dp
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.ServerProfile
+import ir.v2rayng.compose.data.Settings
+import ir.v2rayng.compose.stickers.Sticker
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.V2Stickers
 
 @Composable
-fun ServersScreen(state: AppState, vm: AppViewModel) {
+fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var showAdd by remember { mutableStateOf(false) }
 
     Column(
@@ -79,6 +81,7 @@ fun ServersScreen(state: AppState, vm: AppViewModel) {
             items(state.servers, key = { it.id }) { srv ->
                 ServerRow(
                     profile = srv,
+                    sticker = V2Stickers.byIndex(settings.stickerStyle, srv.stickerIndex),
                     selected = srv.id == state.selectedId,
                     onPick = { vm.select(srv.id) },
                 )
@@ -92,7 +95,7 @@ fun ServersScreen(state: AppState, vm: AppViewModel) {
 }
 
 @Composable
-private fun ServerRow(profile: ServerProfile, selected: Boolean, onPick: () -> Unit) {
+private fun ServerRow(profile: ServerProfile, sticker: Sticker, selected: Boolean, onPick: () -> Unit) {
     val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
     Card(
         modifier = Modifier
@@ -107,7 +110,7 @@ private fun ServerRow(profile: ServerProfile, selected: Boolean, onPick: () -> U
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
-            StickerCharacter(V2Stickers.byIndex(profile.stickerIndex), sizeDp = 46.dp)
+            StickerCharacter(sticker, sizeDp = 46.dp)
             Spacer(Modifier.padding(4.dp))
             Column(Modifier.weight(1f)) {
                 Text(

@@ -17,28 +17,28 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.AppState
+import ir.v2rayng.compose.data.Settings
+import ir.v2rayng.compose.stickers.Sticker
 import ir.v2rayng.compose.stickers.StickerCharacter
-import ir.v2rayng.compose.stickers.StickerPreset
 import ir.v2rayng.compose.stickers.V2Stickers
 
 private data class RouteUi(
     val key: String,
     val title: String,
     val sub: String,
-    val preset: StickerPreset,
+    val stickerIndex: Int,
 )
 
 @Composable
-fun RoutingScreen(state: AppState, vm: AppViewModel) {
+fun RoutingScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     val rows = listOf(
-        RouteUi("bypass_ir", "دور زدن ایران", "ترافیک داخلی مستقیم می‌رود", V2Stickers.zephyr),
-        RouteUi("block_ads", "مسدودسازی تبلیغات", "GeoSite ads حذف می‌شود", V2Stickers.fenrir),
-        RouteUi("udp443", "پذیرش UDP 443", "برای QUIC و بازی‌ها", V2Stickers.puck),
+        RouteUi("bypass_ir", "دور زدن ایران", "ترافیک داخلی مستقیم می‌رود", 0),
+        RouteUi("block_ads", "مسدودسازی تبلیغات", "GeoSite ads حذف می‌شود", 1),
+        RouteUi("udp443", "پذیرش UDP 443", "برای QUIC و بازی‌ها", 2),
     )
 
     Column(
@@ -58,9 +58,9 @@ fun RoutingScreen(state: AppState, vm: AppViewModel) {
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                 ) {
-                    StickerCharacter(r.preset, sizeDp = 42.dp)
-                    Spacer(Modifier.padding(4.dp))
-                    Column(Modifier.weight(1f)) {
+                    StickerCharacter(V2Stickers.byIndex(settings.stickerStyle, r.stickerIndex), sizeDp = 42.dp)
+                    Spacer(Modifier.height(4.dp))
+                    Column(Modifier.weight(1f).padding(start = 8.dp)) {
                         Text(
                             text = r.title,
                             style = MaterialTheme.typography.titleMedium,
@@ -84,7 +84,9 @@ fun RoutingScreen(state: AppState, vm: AppViewModel) {
         Text(
             text = "قوانین روی پروفایل انتخاب‌شده اعمال می‌شوند.",
             style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFF9BA8B4),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
+
+private fun unusedSticker(): Sticker = V2Stickers.setFor(0).first()
