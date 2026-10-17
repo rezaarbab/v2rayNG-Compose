@@ -21,6 +21,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ir.v2rayng.compose.data.VpnState
@@ -115,8 +118,8 @@ fun Modifier.holdFor(
                 val startX = down.position.x
                 val startY = down.position.y
                 val startT = down.uptimeMillis
-                val holdJob = kotlinx.coroutines.launch {
-                    kotlinx.coroutines.delay(durationMs)
+                val holdJob = launch {
+                    delay(durationMs)
                     onHold()
                 }
                 var movedFar = false
