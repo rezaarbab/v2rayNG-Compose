@@ -206,11 +206,8 @@ class XrayVpnService : VpnService() {
                 val anti = SettingsStore(applicationContext).load().antiFilterApps
                 for (pkg in anti.split(",").map { it.trim() }.filter { it.isNotBlank() }) {
                     try {
-                        val uid = packageManager.getPackageUid(pkg, 0)
-                        if (uid > 0) {
-                            builder.addDisallowedApplication(uid)
-                            excluded++
-                        }
+                        builder.addDisallowedApplication(pkg)
+                        excluded++
                     } catch (_: Exception) {
                     }
                 }
