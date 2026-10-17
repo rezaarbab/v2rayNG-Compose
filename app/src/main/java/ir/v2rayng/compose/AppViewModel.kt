@@ -65,6 +65,26 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             ir.v2rayng.compose.core.RealState.BROKEN -> log("ERROR", "${S.LOG_FAILED}${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
                             ir.v2rayng.compose.core.RealState.IDLE -> log("INFO", S.LOG_DISCONNECTED)
                         }
+                        if (st.state == ir.v2rayng.compose.core.RealState.CONNECTED && _settings.value.autoFlag) {
+                            val sel = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
+                            if (sel?.link != null) {
+                                viewModelScope.launch {
+                                    val code = serverCountry(sel.host.substringBefore(":"))
+                                    if (code != null) {
+                                        applyFlag(code)
+                                        put { s ->
+                                            s.copy(
+                                                servers = s.servers.map { if (it.id == sel.id) it.copy(country = code) else it },
+                                                ipCountry = code,
+                                            )
+                                        }
+                                        log("INFO", S.LOG_IP_OK.format(code))
+                                    } else {
+                                        log("WARN", S.LOG_IP_FAIL)
+                                    }
+                                }
+                            }
+                        }
                     }
                     put { s ->
                         val targetId = s.selectedId
@@ -130,6 +150,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setFollowFinger(v: Boolean) = setSettings { it.copy(followFinger = v) }
     fun setAnimate(v: Boolean) = setSettings { it.copy(animate = v) }
     fun setStateMotion(v: Boolean) = setSettings { it.copy(stateMotion = v) }
+    fun setShowNotification(v: Boolean) = setSettings { it.copy(showNotification = v) }
     fun setSpeed(v: Float) = setSettings { it.copy(speed = v) }
     fun setBgSpeed(v: Float) = setSettings { it.copy(bgSpeed = v) }
     fun setNavStickers(v: Boolean) = setSettings { it.copy(navStickers = v) }
@@ -242,7 +263,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 return
             }
             log("INFO", S.LOG_CONNECTING.format(target.name))
-            ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed)
+            ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed, target.link)
             return
         }
         put { s -> s.copy(vpnState = VpnState.CONNECTING) }
@@ -376,6 +397,36 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun needsVpnConsent(): android.content.Intent? = android.net.VpnService.prepare(AppCtx.app)
 
+    private val countryCache = mutableMapOf<String, String>()
+
+    private suspend fun serverCountry(host: String): String? {
+        return withContext(Dispatchers.IO) {
+            countryCache[host]?.let { return@withContext it }
+            try {
+                val ip = java.net.InetAddress.getByName(host).hostAddress ?: return@withContext null
+                val urls = listOf("https://ipwho.is/$ip", "https://ipapi.co/$ip/json/", "https://ipinfo.io/$ip/json")
+                for (u in urls) {
+                    try {
+                        val conn = java.net.URL(u).openConnection() as java.net.HttpURLConnection
+                        conn.connectTimeout = 3500
+                        conn.readTimeout = 3500
+                        val text = conn.inputStream.bufferedReader().use { it.readText() }
+                        val code = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"")
+                            .find(text)?.groupValues?.get(1)?.uppercase()
+                        if (code != null) {
+                            countryCache[host] = code
+                            return@withContext code
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+                null
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+
     fun addServerFromLink(raw: String) {
         val link = ir.v2rayng.compose.core.parseVlessLink(raw)
         if (link == null) {
@@ -383,20 +434,29 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             return
         }
         val shownName = link.name.ifBlank { link.address }
+        val newId = "rv-${_state.value.servers.size}-${Random.nextInt(999)}"
         put { s ->
-            val idx = s.servers.size
             s.copy(
                 servers = s.servers + ServerProfile(
-                    id = "rv-$idx-${Random.nextInt(999)}",
+                    id = newId,
                     name = shownName,
                     host = "${link.address}:${link.port}",
-                    stickerIndex = idx,
+                    stickerIndex = s.servers.size,
                     link = raw.trim(),
                 ),
             )
         }
         log("INFO", S.LOG_ADDED.format(shownName))
-        log("INFO", S.LOG_PING_START)
+        viewModelScope.launch {
+            val code = serverCountry(link.address)
+            if (code != null) {
+                put { s ->
+                    s.copy(
+                        servers = s.servers.map { if (it.id == newId) it.copy(country = code) else it },
+                    )
+                }
+            }
+        }
     }
 
     fun select(id: String) {

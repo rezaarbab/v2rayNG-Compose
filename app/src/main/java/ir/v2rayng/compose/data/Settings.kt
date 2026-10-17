@@ -17,6 +17,7 @@ data class Settings(
     val followFinger: Boolean = true,
     val animate: Boolean = true,
     val stateMotion: Boolean = true,
+    val showNotification: Boolean = true,
     val speed: Float = 1f,
     val bgSpeed: Float = 1f,
     val navStickers: Boolean = true,
@@ -75,6 +76,7 @@ class SettingsStore(context: Context) {
         followFinger = sp.getBoolean("followFinger", true),
         animate = sp.getBoolean("animate", true),
         stateMotion = sp.getBoolean("stateMotion", true),
+        showNotification = sp.getBoolean("showNotification", true),
         speed = sp.getFloat("speed", 1f),
         bgSpeed = sp.getFloat("bgSpeed", 1f),
         navStickers = sp.getBoolean("navStickers", true),
@@ -113,6 +115,7 @@ class SettingsStore(context: Context) {
             .putBoolean("followFinger", s.followFinger)
             .putBoolean("animate", s.animate)
             .putBoolean("stateMotion", s.stateMotion)
+            .putBoolean("showNotification", s.showNotification)
             .putFloat("speed", s.speed)
             .putFloat("bgSpeed", s.bgSpeed)
             .putBoolean("navStickers", s.navStickers)

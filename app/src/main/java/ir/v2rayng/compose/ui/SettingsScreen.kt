@@ -130,6 +130,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 Slider(value = settings.bgSpeed, onValueChange = { vm.setBgSpeed(it) }, valueRange = 0.25f..2f)
 
                 ToggleRow(S.STATE_MOTION, S.STATE_MOTION_SUB, settings.stateMotion) { vm.setStateMotion(it) }
+                ToggleRow(S.NOTIF_TITLE, S.NOTIF_SUB, settings.showNotification) { vm.setShowNotification(it) }
                 ToggleRow(S.FOLLOW_FINGER, S.FOLLOW_SUB, settings.followFinger) { vm.setFollowFinger(it) }
             }
         }
