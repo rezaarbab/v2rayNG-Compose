@@ -76,21 +76,23 @@ fun AppRoot() {
     val settings by vm.settings.collectAsState()
     val env = remember { StickerEnv() }
     LaunchedEffect(Unit) {
-        var lastMid = 0L
-        var lastMs = 0L
+        var prev = 0L
+        var animMs = 0L
+        var debt = 0.0
         while (true) {
             withFrameMillis { v ->
                 DebugKit.ticks.incrementAndGet()
                 FrameWatch.tick(v)
-                StickerTicker.fast.longValue = v
-                if (v - lastMid >= 15L) {
-                    lastMid = v
-                    StickerTicker.mid.longValue = v
+                if (prev != 0L && v > prev) {
+                    val raw = (v - prev).toDouble()
+                    val step = raw.coerceAtMost(25.0)
+                    debt += (raw - step)
+                    val extra = debt.coerceAtMost(12.5)
+                    animMs += (step + extra).toLong()
+                    debt -= extra
                 }
-                if (v - lastMs >= 31L) {
-                    lastMs = v
-                    StickerTicker.ms.longValue = v
-                }
+                prev = v
+                StickerTicker.anim.longValue = animMs
             }
         }
     }

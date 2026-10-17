@@ -126,7 +126,7 @@ fun StickerCharacter(
         }
         val tiny = sizeDp.value <= 48f
         val s = sizeDp.toPx()
-        val clock = StickerTicker.fast.longValue
+        val clock = StickerTicker.anim.longValue
         val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue
         val spMul = if (bg) 0.6f else 1f
         val t = clock / 1000f * us * spMul * (moodSpeed(mood) * (if (tiny) 1.8f else 1f)) + phaseOf(sticker.art)
@@ -232,7 +232,7 @@ fun StickerCharacter(
                     val t = if (static || sizeDp.value <= 48f) {
                         frozenPhase
                     } else {
-                        val clock = if (bg) StickerTicker.ms.longValue else StickerTicker.fast.longValue
+                        val clock = StickerTicker.anim.longValue
                         val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue
                         clock / 1000f * us * (if (bg) 0.6f else 1f) * moodSpeed(mood) + phaseOf(art)
                     }
