@@ -107,20 +107,32 @@ fun StickerCharacter(
             is ToyArt -> a.phase
             is FlagArt -> a.phase
         }
+        val tiny = sizeDp.value <= 48f
+        val ampScale = if (tiny) 0.7f else 1f
         val t = if (static) {
             frozenPhase
         } else {
-            val clock = if (bg) StickerTicker.ms.longValue else StickerTicker.fast.longValue
+            val clock = if (bg || tiny) StickerTicker.ms.longValue else StickerTicker.fast.longValue
             clock / 1000f * us * moodSpeed(mood) + phase
         }
-        val breathe = sin(2.0 * PI * t).toFloat()
-        val hop = -moodAmp(mood) * sin(PI * t).let { (it * it).toFloat() }
-        val blink: Float
+        val w = 2.0 * PI * t
+        val breathe = (sin(w) + 0.30 * sin(w * 1.618 + 0.9)).toFloat().coerceIn(-1.3f, 1.3f)
+        val sp = ((1.0 - cos(w)) / 2.0).toFloat()
+        val hop = -moodAmp(mood) * ampScale * (0.62f * sp + 0.38f * sp * sp)
         val cycle = t % 1f
         val dip = (1f - abs(cycle - 0.90f) / 0.06f).coerceIn(0f, 1f)
-        blink = if (mood == StickerMood.SLEEP) 0.14f else 1f - 0.88f * dip
-        val sx = 1f + 0.03f * breathe
-        val sy = 1f - 0.03f * breathe
+        val blink = if (mood == StickerMood.SLEEP) 0.14f else 1f - 0.88f * dip
+        val swayAmp = (moodAmp(mood) * 0.45f).coerceAtMost(0.014f) * (if (tiny) 0.6f else 1f)
+        val sway = swayAmp * sin(w * 0.5 + 1.7).toFloat()
+        val tiltAmp = when (mood) {
+            StickerMood.WOBBLE -> 3.0f
+            StickerMood.HAPPY -> 2.2f
+            StickerMood.SLEEP -> 0.4f
+            else -> 1.3f
+        } * (if (tiny) 0.5f else 1f)
+        val tilt = tiltAmp * sin(w * 0.5 + 0.6).toFloat()
+        val sx = 1f + 0.026f * breathe
+        val sy = 1f - 0.026f * breathe
 
         var gx = 0f
         var gy = 0f
@@ -137,7 +149,7 @@ fun StickerCharacter(
         }
 
         fun px(x: Float, y: Float): Offset =
-            Offset((0.5f + (x - 0.5f) * sx) * s, (0.5f + (y - 0.5f) * sy + hop) * s)
+            Offset((0.5f + (x - 0.5f) * sx + sway) * s, (0.5f + (y - 0.5f) * sy + hop) * s)
 
         val shScale = (1f - abs(hop) * 3f).coerceIn(0.45f, 1f)
         drawOval(
@@ -145,6 +157,8 @@ fun StickerCharacter(
             topLeft = Offset((0.5f - 0.27f * shScale) * s, 0.885f * s),
             size = Size(0.54f * s * shScale, 0.08f * s * shScale),
         )
+
+        rotate(tilt, pivot = px(0.5f, 0.86f)) {
 
         fun drawPolyBand(pts: List<Offset>, color: Color) {
             shapePath.rewind()
@@ -271,6 +285,7 @@ fun StickerCharacter(
                         center = c + Offset(-hw * 0.34f, -hh * 0.4f),
                     )
                 }
+            }
             }
         }
     }

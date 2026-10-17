@@ -1,5 +1,6 @@
 ﻿package ir.v2rayng.compose.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -145,8 +147,8 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), connected)
-                        TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), connected)
+                        TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), connected, settings.upIcon, settings.stickerStyle)
+                        TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), connected, settings.downIcon, settings.stickerStyle)
                     }
                 }
                 else -> {
@@ -177,6 +179,8 @@ private fun RowScope.TrafficCard(
     total: Long,
     accent: Color,
     connected: Boolean,
+    iconIndex: Int,
+    stickerStyle: Int,
 ) {
     Card(
         modifier = Modifier.weight(1f),
@@ -189,16 +193,19 @@ private fun RowScope.TrafficCard(
         ) {
             Box(
                 Modifier
-                    .size(30.dp)
+                    .size(34.dp)
                     .clip(CircleShape)
                     .background(accent.copy(alpha = 0.18f)),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = if (title == S.UPLOAD) "^" else "v",
-                    color = accent,
-                    fontWeight = FontWeight.Bold,
-                )
+                if (iconIndex >= 0) {
+                    StickerCharacter(
+                        sticker = V2Stickers.byIndex(stickerStyle, iconIndex),
+                        sizeDp = 30.dp,
+                    )
+                } else {
+                    TrafficArrow(up = title == S.UPLOAD, accent = accent)
+                }
             }
             Spacer(Modifier.width(10.dp))
             Column {
@@ -220,6 +227,28 @@ private fun RowScope.TrafficCard(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun TrafficArrow(up: Boolean, accent: Color) {
+    Canvas(Modifier.size(18.dp)) {
+        val sw = size.width * 0.09f
+        val tip = Offset(size.width * 0.5f, size.height * (if (up) 0.20f else 0.80f))
+        val tail = Offset(size.width * 0.5f, size.height * (if (up) 0.80f else 0.20f))
+        val h = size.height * (if (up) 0.40f else 0.60f)
+        drawLine(
+            accent, tail, tip,
+            strokeWidth = sw, cap = StrokeCap.Round,
+        )
+        drawLine(
+            accent, tip, Offset(size.width * 0.28f, h),
+            strokeWidth = sw, cap = StrokeCap.Round,
+        )
+        drawLine(
+            accent, tip, Offset(size.width * 0.72f, h),
+            strokeWidth = sw, cap = StrokeCap.Round,
+        )
     }
 }
 
