@@ -1,5 +1,6 @@
 package ir.v2rayng.compose.stickers
 
+import ir.v2rayng.compose.stickers.DebugKit
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.size
@@ -76,6 +77,7 @@ fun StickerCharacter(
     bg: Boolean = false,
     decorative: Boolean = false,
 ) {
+    DebugKit.composes.incrementAndGet()
     val env = LocalStickerEnv.current
     var rootPos by remember { mutableStateOf(Offset.Zero) }
     var side by remember { mutableStateOf(IntSize.Zero) }
@@ -116,6 +118,7 @@ fun StickerCharacter(
     val blinkCur = remember(mood) { mutableFloatStateOf(if (mood == StickerMood.SLEEP) 0.14f else 1f) }
 
     val dance = Modifier.graphicsLayer {
+        DebugKit.layers.incrementAndGet()
         if (mood == StickerMood.SLEEP || decorative || !env.enabled.value) {
             translationX = 0f; translationY = 0f
             scaleX = 1f; scaleY = 1f; rotationZ = 0f
@@ -158,6 +161,8 @@ fun StickerCharacter(
             .then(gestures ?: Modifier)
             .then(dance)
     ) {
+        DebugKit.draws.incrementAndGet()
+        val tStart = System.nanoTime()
         val s = size.width
         val animOn = env.enabled.value
         val static = mood == StickerMood.SLEEP || !animOn || decorative
@@ -314,5 +319,6 @@ fun StickerCharacter(
                 }
             }
         }
+        DebugKit.drawNanos.addAndGet(System.nanoTime() - tStart)
     }
 }

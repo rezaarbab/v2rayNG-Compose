@@ -80,6 +80,8 @@ fun AppRoot() {
         var lastMs = 0L
         while (true) {
             withFrameMillis { v ->
+                DebugKit.ticks.incrementAndGet()
+                FrameWatch.tick(v)
                 StickerTicker.fast.longValue = v
                 if (v - lastMid >= 15L) {
                     lastMid = v

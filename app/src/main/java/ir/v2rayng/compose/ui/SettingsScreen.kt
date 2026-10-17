@@ -65,6 +65,8 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadApps(context) }
 
+    var showDiag by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -72,6 +74,11 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(S.DEBUG_TITLE, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            SelectChip("Open", false, { showDiag = true })
+        }
+
         SectionTitle(S.SETTINGS_TITLE, S.SETTINGS_SUB)
 
         Card(
@@ -251,6 +258,9 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     }
     if (moveHome) {
         HomeLayoutDialog(parseList(settings.homeOrder, listOf(0, 1, 2, 3, 4)), vm) { moveHome = false }
+    }
+    if (showDiag) {
+        DiagnosticsDialog { showDiag = false }
     }
     if (showAppPicker) {
         AppPickerDialog(state.apps, settings.antiFilterApps, vm) { showAppPicker = false }
