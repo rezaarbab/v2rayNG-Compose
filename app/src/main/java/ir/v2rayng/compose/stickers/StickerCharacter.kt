@@ -123,17 +123,17 @@ fun StickerCharacter(
         }
         val tiny = sizeDp.value <= 48f
         val s = sizeDp.toPx()
-        val clock = if (bg) StickerTicker.ms.longValue else StickerTicker.fast.longValue
+        val clock = StickerTicker.fast.longValue
         val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue
         val spMul = if (bg) 0.6f else 1f
         val t = clock / 1000f * us * spMul * (moodSpeed(mood) * (if (tiny) 1.35f else 1f)) + phaseOf(sticker.art)
         val w = 2.0 * PI * t
-        val breathe = (sin(w) + 0.30 * sin(w * 1.618 + 0.9)).toFloat().coerceIn(-1.3f, 1.3f)
+        val breathe = sin(w).toFloat()
         val sp = ((1.0 - cos(w)) / 2.0).toFloat()
-        val amp = (moodAmp(mood) * (if (tiny) 2.2f else 1f)).coerceAtMost(0.16f)
-        val hop = -amp * (0.62f * sp + 0.38f * sp * sp)
-        val sway = (amp * 0.30f).coerceAtMost(if (tiny) 0.016f else 0.010f) * sin(w * 0.5 + 1.7).toFloat()
-        val tilt = moodTilt(mood) * (if (tiny) 1.4f else 1f) * sin(w * 0.5 + 0.6).toFloat()
+        val amp = (moodAmp(mood) * (if (tiny) 2.2f else 1f)).coerceAtMost(0.12f)
+        val hop = -amp * sp
+        val sway = (amp * 0.35f).coerceAtMost(if (tiny) 0.014f else 0.008f) * sin(w + 1.7).toFloat()
+        val tilt = moodTilt(mood) * (if (tiny) 1.3f else 1f) * sin(w + 0.6).toFloat()
         val sqx = 1f + 0.026f * breathe
 
         val cycle = t % 1f
@@ -227,7 +227,7 @@ fun StickerCharacter(
                     val t = if (static || sizeDp.value <= 48f) {
                         frozenPhase
                     } else {
-                        val clock = if (bg) StickerTicker.ms.longValue else StickerTicker.fast.longValue
+                        val clock = if (bg) StickerTicker.ms.longValue else StickerTicker.mid.longValue
                         val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue
                         clock / 1000f * us * (if (bg) 0.6f else 1f) * (moodSpeed(mood) * (if (sizeDp.value <= 48f) 1.35f else 1f)) + phaseOf(art)
                     }
