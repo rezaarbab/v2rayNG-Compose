@@ -18,6 +18,7 @@ data class ServerProfile(
     val stickerIndex: Int,
     val country: String = "",
     val ping: Int? = null,
+    val link: String? = null,
 )
 
 data class TrafficStat(

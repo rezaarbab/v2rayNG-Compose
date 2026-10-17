@@ -31,6 +31,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.random.Random
 
+object AppCtx {
+    @Volatile
+    lateinit var app: android.content.Context
+}
+
 class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private val _state = MutableStateFlow(AppState())
@@ -45,6 +50,33 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     init {
         if (_state.value.servers.isNotEmpty()) {
             pingAll()
+        }
+        viewModelScope.launch {
+            ir.v2rayng.compose.core.XrayBridge.status.collect { st ->
+                val real = _state.value.selectedId.startsWith("rv-")
+                if (real || st.state != ir.v2rayng.compose.core.RealState.IDLE) {
+                    put { s ->
+                        s.copy(
+                            vpnState = when (st.state) {
+                                ir.v2rayng.compose.core.RealState.IDLE -> if (real) VpnState.IDLE else s.vpnState
+                                ir.v2rayng.compose.core.RealState.CONNECTING -> VpnState.CONNECTING
+                                ir.v2rayng.compose.core.RealState.CONNECTED -> VpnState.CONNECTED
+                                ir.v2rayng.compose.core.RealState.BROKEN -> VpnState.BROKEN
+                            },
+                            traffic = if (st.state == ir.v2rayng.compose.core.RealState.CONNECTED) {
+                                s.traffic.copy(
+                                    up = st.up,
+                                    down = st.down,
+                                    upSpeed = st.upSpeed,
+                                    downSpeed = st.downSpeed,
+                                )
+                            } else {
+                                s.traffic.copy(upSpeed = 0.0, downSpeed = 0.0)
+                            },
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -174,6 +206,16 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private fun connect() {
         val target = _state.value.selected
+        if (target.link != null) {
+            val parsed = ir.v2rayng.compose.core.parseVlessLink(target.link)
+            if (parsed == null) {
+                put { s -> s.copy(vpnState = VpnState.BROKEN) }
+                log("ERROR", S.LOG_FAILED)
+                return
+            }
+            ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed)
+            return
+        }
         put { s -> s.copy(vpnState = VpnState.CONNECTING) }
         log("INFO", S.LOG_CONNECTING.format(target.name))
         connectJob?.cancel()
@@ -193,6 +235,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 }
             }
         }
+    }
+
+    private fun appCtx(): android.content.Context = AppCtx.app
+
+    fun disconnectReal() {
+        ir.v2rayng.compose.core.XrayVpnService.stop(appCtx())
     }
 
     private fun startTraffic() {
@@ -217,8 +265,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     }
 
     private fun disconnect() {
+        val target = _state.value.selected
         connectJob?.cancel()
         trafficJob?.cancel()
+        if (target.link != null) {
+            ir.v2rayng.compose.core.XrayVpnService.stop(appCtx())
+        }
         put { s ->
             s.copy(
                 vpnState = VpnState.IDLE,
@@ -264,15 +316,58 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun pingAll() {
         viewModelScope.launch {
             log("INFO", S.LOG_PING_START)
-            for (srv in _state.value.servers) {
-                delay(350)
-                val ms = 40 + Random.nextInt(400)
+            val servers = _state.value.servers
+            for (srv in servers) {
+                val ms: Int? = if (srv.link != null) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val l = ir.v2rayng.compose.core.parseVlessLink(srv.link!!)
+                            if (l == null) {
+                                null
+                            } else {
+                                val config = ir.v2rayng.compose.core.buildXrayConfig(l)
+                                val d = libv2ray.Libv2ray.measureOutboundDelay(config, "https://www.google.com/generate_204")
+                                if (d >= 0) d.toInt() else null
+                            }
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                } else {
+                    delay(350)
+                    40 + Random.nextInt(400)
+                }
                 put { s ->
                     s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms) else it })
                 }
             }
             log("INFO", S.LOG_PING_DONE)
         }
+    }
+
+    fun needsVpnConsent(): android.content.Intent? = android.net.VpnService.prepare(AppCtx.app)
+
+    fun addServerFromLink(raw: String) {
+        val link = ir.v2rayng.compose.core.parseVlessLink(raw)
+        if (link == null) {
+            log("ERROR", "Link not recognized (vless:// only)")
+            return
+        }
+        val shownName = link.name.ifBlank { link.address }
+        put { s ->
+            val idx = s.servers.size
+            s.copy(
+                servers = s.servers + ServerProfile(
+                    id = "rv-$idx-${Random.nextInt(999)}",
+                    name = shownName,
+                    host = "${link.address}:${link.port}",
+                    stickerIndex = idx,
+                    link = raw.trim(),
+                ),
+            )
+        }
+        log("INFO", S.LOG_ADDED.format(shownName))
+        log("INFO", S.LOG_PING_START)
     }
 
     fun select(id: String) {

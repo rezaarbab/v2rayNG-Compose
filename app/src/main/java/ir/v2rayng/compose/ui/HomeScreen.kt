@@ -1,5 +1,7 @@
 ﻿package ir.v2rayng.compose.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -64,6 +66,19 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
     val connected = state.vpnState == VpnState.CONNECTED
     val editorOpen = remember { mutableStateOf(false) }
     val editZone = remember { mutableStateOf<String?>(null) }
+    val consentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { _ ->
+        if (vm.needsVpnConsent() == null) {
+            vm.toggleVpn()
+        }
+    }
+    fun connectOrConsent() {
+        val intent = vm.needsVpnConsent()
+        if (intent != null) {
+            consentLauncher.launch(intent)
+        } else {
+            vm.toggleVpn()
+        }
+    }
 
     val mainSticker = if (settings.mainIndex >= 0) {
         V2Stickers.byIndex(settings.stickerStyle, settings.mainIndex)
@@ -99,7 +114,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                     Box(
                         Modifier.holdFor(
                             durationMs = 1000L,
-                            onTap = { vm.toggleVpn() },
+                            onTap = { connectOrConsent() },
                             onHold = { editorOpen.value = true },
                         )
                     ) {

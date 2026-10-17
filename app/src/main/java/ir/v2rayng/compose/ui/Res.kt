@@ -23,6 +23,8 @@ object S {
     const val SERVERS_COUNT = "%d profiles"
     const val PING_TEST = "Ping test"
     const val ADD_SERVER = "Add server"
+    const val IMPORT_TITLE = "Import from link"
+    const val IMPORT_HINT = "vless:// ..."
     const val FIELD_NAME = "Name"
     const val FIELD_ADDRESS = "Address"
     const val ADD = "Add"

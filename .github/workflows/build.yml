@@ -28,6 +28,12 @@ jobs:
             -storepass blob-tmp-2026 -keypass blob-tmp-2026 \
             -dname "CN=Blob, O=Blob, C=IR"
 
+      - name: Fetch Xray core library
+        run: |
+          mkdir -p app/libs
+          curl -L --fail -o app/libs/libv2ray.aar "https://github.com/2dust/AndroidLibXrayLite/releases/download/v26.10.10/libv2ray.aar"
+          ls -la app/libs || dir app/libs || true
+
       - name: Build release APK
         run: gradle :app:assembleRelease --no-daemon --stacktrace
 

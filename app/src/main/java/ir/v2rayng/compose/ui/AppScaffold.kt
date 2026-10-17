@@ -70,6 +70,7 @@ import ir.v2rayng.compose.ui.theme.V2rayNGTheme
 @Composable
 fun AppRoot() {
     val context = LocalContext.current
+    ir.v2rayng.compose.AppCtx.app = context.applicationContext
     val vm: AppViewModel = viewModel(
         factory = viewModelFactory {
             initializer { AppViewModel(SettingsStore(context.applicationContext)) }
