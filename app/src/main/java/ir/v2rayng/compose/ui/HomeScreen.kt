@@ -42,6 +42,7 @@ import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.TimeKit
 import ir.v2rayng.compose.data.VpnState
 import ir.v2rayng.compose.data.parseList
+import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.StickerMood
 import ir.v2rayng.compose.stickers.V2Stickers
@@ -58,6 +59,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
     }
     val connected = state.vpnState == VpnState.CONNECTED
     val editorOpen = remember { mutableStateOf(false) }
+    val editZone = remember { mutableStateOf<String?>(null) }
 
     val mainSticker = if (settings.mainIndex >= 0) {
         V2Stickers.byIndex(settings.stickerStyle, settings.mainIndex)
@@ -122,7 +124,13 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                         ) {
-                            StickerCharacter(tinted(mainSticker, settings.mainColor), sizeDp = 34.dp)
+                            val selAvatar = if (sel.country.isNotBlank()) {
+                                val fi = CountryFlags.byCode(sel.country)
+                                if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
+                            } else {
+                                V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
+                            }
+                            StickerCharacter(tinted(selAvatar, settings.mainColor), mood = if (connected) StickerMood.HAPPY else StickerMood.NORMAL, sizeDp = 34.dp)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(
@@ -147,8 +155,8 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), connected, settings.upIcon, settings.stickerStyle)
-                        TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), connected, settings.downIcon, settings.stickerStyle)
+                        TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), settings.upIcon, settings.stickerStyle, { editZone.value = "up" }, settings.navStickers)
+                        TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), settings.downIcon, settings.stickerStyle, { editZone.value = "down" }, settings.navStickers)
                     }
                 }
                 else -> {
@@ -170,6 +178,9 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
     if (editorOpen.value) {
         StickerEditorDialog("main", settings, vm) { editorOpen.value = false }
     }
+    editZone.value?.let { zone ->
+        StickerEditorDialog(zone, settings, vm) { editZone.value = null }
+    }
 }
 
 @Composable
@@ -178,9 +189,10 @@ private fun RowScope.TrafficCard(
     speed: Double,
     total: Long,
     accent: Color,
-    connected: Boolean,
     iconIndex: Int,
     stickerStyle: Int,
+    onIconHold: () -> Unit,
+    stickers: Boolean,
 ) {
     Card(
         modifier = Modifier.weight(1f),
@@ -195,10 +207,11 @@ private fun RowScope.TrafficCard(
                 Modifier
                     .size(34.dp)
                     .clip(CircleShape)
-                    .background(accent.copy(alpha = 0.18f)),
+                    .background(accent.copy(alpha = 0.18f))
+                    .holdFor(1000L, onHold = onIconHold),
                 contentAlignment = Alignment.Center,
             ) {
-                if (iconIndex >= 0) {
+                if (stickers && iconIndex >= 0) {
                     StickerCharacter(
                         sticker = V2Stickers.byIndex(stickerStyle, iconIndex),
                         sizeDp = 30.dp,

@@ -53,11 +53,14 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
         isWall -> S.EDITOR_WALL
         isMain -> S.EDITOR_MAIN
         zone.startsWith("nav:") -> S.EDITOR_NAV
-        zone == "up" -> "Upload card sticker"
-        zone == "down" -> "Download card sticker"
+        zone == "up" -> S.EDITOR_UP
+        zone == "down" -> S.EDITOR_DOWN
+        zone.startsWith("srv:") -> S.EDITOR_SRV
         zone.startsWith("route:") -> S.EDITOR_ROUTE
         else -> "Sticker"
     }
+
+    val srvId = if (zone.startsWith("srv:")) zone.removePrefix("srv:") else null
 
     val pickStyle = if (isWall) settings.wallpaperStyle else settings.stickerStyle
     val set = V2Stickers.setFor(pickStyle)
@@ -68,6 +71,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
         zone.startsWith("nav:") -> parseList(settings.navIcons, (0..4).toList()).getOrNull(slot) ?: slot
         zone == "up" -> settings.upIcon
         zone == "down" -> settings.downIcon
+        srvId != null -> vm.srvStickerIndex(srvId)
         zone.startsWith("route:") -> parseList(settings.routeIcons, listOf(0, 1, 2)).getOrNull(slot) ?: slot
         else -> -1
     }
@@ -79,6 +83,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
             zone.startsWith("nav:") -> vm.setNavIcon(slot, i)
             zone == "up" -> vm.setUpIcon(i)
             zone == "down" -> vm.setDownIcon(i)
+            srvId != null -> vm.setServerIcon(srvId, i)
             zone.startsWith("route:") -> vm.setRouteIcon(slot, i)
         }
     }

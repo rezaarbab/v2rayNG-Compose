@@ -75,6 +75,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setUpIcon(i: Int) = setSettings { it.copy(upIcon = i) }
     fun setDownIcon(i: Int) = setSettings { it.copy(downIcon = i) }
 
+    fun srvStickerIndex(id: String): Int =
+        _state.value.servers.firstOrNull { it.id == id }?.stickerIndex ?: 0
+
+    fun setServerIcon(id: String, idx: Int) {
+        put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(stickerIndex = idx) else it }) }
+    }
+
     fun setRouteIcon(slot: Int, idx: Int) = setSettings { s ->
         val cur = parseList(s.routeIcons, listOf(0, 1, 2)).toMutableList()
         cur[slot.coerceIn(0, 2)] = idx

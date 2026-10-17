@@ -53,6 +53,7 @@ import ir.v2rayng.compose.stickers.V2Stickers
 @Composable
 fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var showAdd by remember { mutableStateOf(false) }
+    var editSrv by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -92,9 +93,14 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     sticker = avatar,
                     selected = srv.id == state.selectedId,
                     onPick = { vm.select(srv.id) },
+                    onIconHold = { editSrv = srv.id },
                 )
             }
         }
+    }
+
+    editSrv?.let { id ->
+        StickerEditorDialog("srv:$id", settings, vm) { editSrv = null }
     }
 
     if (showAdd) {
@@ -103,7 +109,13 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
 }
 
 @Composable
-private fun ServerRow(profile: ServerProfile, sticker: Sticker, selected: Boolean, onPick: () -> Unit) {
+private fun ServerRow(
+    profile: ServerProfile,
+    sticker: Sticker,
+    selected: Boolean,
+    onPick: () -> Unit,
+    onIconHold: () -> Unit,
+) {
     val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
     Card(
         modifier = Modifier
@@ -117,11 +129,15 @@ private fun ServerRow(profile: ServerProfile, sticker: Sticker, selected: Boolea
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-        ) {
-            StickerCharacter(sticker, sizeDp = 46.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                ) {
+                    Box(
+                        Modifier.holdFor(1000L, onHold = onIconHold),
+                    ) {
+                        StickerCharacter(sticker, sizeDp = 46.dp)
+                    }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(

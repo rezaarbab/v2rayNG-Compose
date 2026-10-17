@@ -113,7 +113,10 @@ object V2Stickers {
         Sticker("blob-$idx", name, art)
     }
 
-    private val shapeNames = listOf("Drop", "Triangle", "Cloud", "Ball", "Capsule", "Bean")
+    private val shapeNames = listOf(
+        "Drop", "Triangle", "Cloud", "Ball", "Capsule", "Bean",
+        "Fire", "Star", "Heart", "Bolt", "Moon", "Cup", "Rocket", "Balloon", "Shroom", "Gem",
+    )
 
     private val dropOps: List<ToyOp> = listOf(
         ToyPoly(chaikin(listOf(Offset(0.5f, 0.05f), Offset(0.73f, 0.27f), Offset(0.87f, 0.56f), Offset(0.72f, 0.84f), Offset(0.5f, 0.96f), Offset(0.28f, 0.84f), Offset(0.13f, 0.56f), Offset(0.27f, 0.27f)))),
@@ -142,7 +145,91 @@ object V2Stickers {
         ToyCircle(0.30f, 0.76f, 0.18f),
     )
 
-    private val shapeOps = listOf(dropOps, triangleOps, cloudOps, ballOps, pillOps, beanOps)
+    private val fireOps: List<ToyOp> = listOf(
+        ToyPoly(chaikin(listOf(
+            Offset(0.50f, 0.05f), Offset(0.63f, 0.15f), Offset(0.58f, 0.26f), Offset(0.74f, 0.33f),
+            Offset(0.86f, 0.51f), Offset(0.80f, 0.71f), Offset(0.65f, 0.88f), Offset(0.50f, 0.93f),
+            Offset(0.35f, 0.88f), Offset(0.20f, 0.71f), Offset(0.14f, 0.51f), Offset(0.26f, 0.33f),
+            Offset(0.42f, 0.26f), Offset(0.37f, 0.15f),
+        ))),
+    )
+
+    private val starOps: List<ToyOp> = listOf(
+        ToyPoly(chaikin(listOf(
+            Offset(0.50f, 0.05f), Offset(0.61f, 0.37f), Offset(0.95f, 0.37f), Offset(0.68f, 0.57f),
+            Offset(0.78f, 0.92f), Offset(0.50f, 0.72f), Offset(0.22f, 0.92f), Offset(0.32f, 0.57f),
+            Offset(0.05f, 0.37f), Offset(0.39f, 0.37f),
+        ), 2)),
+    )
+
+    private val heartOps: List<ToyOp> = listOf(
+        ToyPoly(chaikin(listOf(
+            Offset(0.50f, 0.90f), Offset(0.31f, 0.78f), Offset(0.15f, 0.61f), Offset(0.11f, 0.43f),
+            Offset(0.18f, 0.27f), Offset(0.34f, 0.21f), Offset(0.50f, 0.32f), Offset(0.66f, 0.21f),
+            Offset(0.82f, 0.27f), Offset(0.89f, 0.43f), Offset(0.85f, 0.61f), Offset(0.69f, 0.78f),
+        ))),
+    )
+
+    private val boltOps: List<ToyOp> = listOf(
+        ToyPoly(chaikin(listOf(
+            Offset(0.62f, 0.04f), Offset(0.30f, 0.50f), Offset(0.46f, 0.50f),
+            Offset(0.36f, 0.96f), Offset(0.72f, 0.42f), Offset(0.55f, 0.42f), Offset(0.68f, 0.04f),
+        ), 1)),
+    )
+
+    private val moonOps: List<ToyOp> = listOf(
+        ToyPoly(chaikin(listOf(
+            Offset(0.62f, 0.06f), Offset(0.42f, 0.10f), Offset(0.24f, 0.26f), Offset(0.16f, 0.50f),
+            Offset(0.24f, 0.74f), Offset(0.42f, 0.90f), Offset(0.62f, 0.94f),
+            Offset(0.52f, 0.82f), Offset(0.44f, 0.64f), Offset(0.42f, 0.50f), Offset(0.44f, 0.36f), Offset(0.52f, 0.18f),
+        ), 2)),
+    )
+
+    private val cupOps: List<ToyOp> = listOf(
+        ToyPoly(chaikin(listOf(
+            Offset(0.24f, 0.30f), Offset(0.76f, 0.30f), Offset(0.80f, 0.40f),
+            Offset(0.78f, 0.84f), Offset(0.68f, 0.92f), Offset(0.32f, 0.92f), Offset(0.22f, 0.84f), Offset(0.20f, 0.40f),
+        ), 2)),
+        ToyCircle(0.86f, 0.56f, 0.11f),
+    )
+
+    private val rocketOps: List<ToyOp> = listOf(
+        ToyPoly(chaikin(listOf(
+            Offset(0.50f, 0.04f), Offset(0.62f, 0.16f), Offset(0.66f, 0.34f), Offset(0.66f, 0.60f),
+            Offset(0.80f, 0.82f), Offset(0.62f, 0.76f), Offset(0.56f, 0.86f), Offset(0.44f, 0.86f),
+            Offset(0.38f, 0.76f), Offset(0.20f, 0.82f), Offset(0.34f, 0.60f), Offset(0.34f, 0.34f), Offset(0.38f, 0.16f),
+        ), 2)),
+    )
+
+    private val balloonOps: List<ToyOp> = listOf(
+        ToyCircle(0.50f, 0.36f, 0.30f),
+        ToyPoly(chaikin(listOf(
+            Offset(0.47f, 0.65f), Offset(0.53f, 0.65f), Offset(0.56f, 0.76f), Offset(0.50f, 0.88f),
+            Offset(0.53f, 0.98f), Offset(0.47f, 0.98f), Offset(0.44f, 0.88f), Offset(0.50f, 0.76f),
+        ), 1)),
+    )
+
+    private val shroomOps: List<ToyOp> = listOf(
+        ToyPoly(chaikin(listOf(
+            Offset(0.50f, 0.08f), Offset(0.70f, 0.14f), Offset(0.84f, 0.32f), Offset(0.86f, 0.46f),
+            Offset(0.14f, 0.46f), Offset(0.16f, 0.32f), Offset(0.30f, 0.14f),
+        ), 1)),
+        ToyPoly(chaikin(listOf(
+            Offset(0.34f, 0.46f), Offset(0.66f, 0.46f), Offset(0.62f, 0.90f), Offset(0.38f, 0.90f),
+        ), 2)),
+    )
+
+    private val gemOps: List<ToyOp> = listOf(
+        ToyPoly(chaikin(listOf(
+            Offset(0.50f, 0.05f), Offset(0.73f, 0.10f), Offset(0.90f, 0.30f), Offset(0.68f, 0.58f),
+            Offset(0.50f, 0.95f), Offset(0.32f, 0.58f), Offset(0.10f, 0.30f), Offset(0.27f, 0.10f),
+        ), 1)),
+    )
+
+    private val shapeOps = listOf(
+        dropOps, triangleOps, cloudOps, ballOps, pillOps, beanOps,
+        fireOps, starOps, heartOps, boltOps, moonOps, cupOps, rocketOps, balloonOps, shroomOps, gemOps,
+    )
 
     private val eyeSets = listOf(
         listOf(ToyEye(0.40f, 0.50f, 0.11f, 0.32f, -10f), ToyEye(0.60f, 0.50f, 0.11f, 0.32f, -4f)),
@@ -151,17 +238,27 @@ object V2Stickers {
         listOf(ToyEye(0.42f, 0.40f, 0.10f, 0.30f, -22f), ToyEye(0.56f, 0.43f, 0.10f, 0.30f, 20f)),
         listOf(ToyEye(0.42f, 0.50f, 0.12f, 0.32f, 0f), ToyEye(0.58f, 0.50f, 0.12f, 0.32f, 0f)),
         listOf(ToyEye(0.45f, 0.50f, 0.10f, 0.30f, -28f), ToyEye(0.64f, 0.50f, 0.10f, 0.30f, 28f)),
+        listOf(ToyEye(0.40f, 0.58f, 0.10f, 0.18f, -6f), ToyEye(0.60f, 0.58f, 0.10f, 0.18f, 6f)),
+        listOf(ToyEye(0.41f, 0.50f, 0.09f, 0.16f, 0f), ToyEye(0.59f, 0.50f, 0.09f, 0.16f, 0f)),
+        listOf(ToyEye(0.40f, 0.48f, 0.10f, 0.18f, -4f), ToyEye(0.60f, 0.48f, 0.10f, 0.18f, 4f)),
+        listOf(ToyEye(0.46f, 0.30f, 0.07f, 0.12f, 0f), ToyEye(0.57f, 0.33f, 0.07f, 0.12f, 0f)),
+        listOf(ToyEye(0.24f, 0.44f, 0.07f, 0.14f, 8f), ToyEye(0.35f, 0.46f, 0.07f, 0.14f, 8f)),
+        listOf(ToyEye(0.40f, 0.58f, 0.09f, 0.16f, 0f), ToyEye(0.57f, 0.58f, 0.09f, 0.16f, 0f)),
+        listOf(ToyEye(0.42f, 0.38f, 0.08f, 0.15f, 0f), ToyEye(0.58f, 0.38f, 0.08f, 0.15f, 0f)),
+        listOf(ToyEye(0.40f, 0.31f, 0.09f, 0.16f, -4f), ToyEye(0.60f, 0.31f, 0.09f, 0.16f, 4f)),
+        listOf(ToyEye(0.44f, 0.62f, 0.08f, 0.14f, 0f), ToyEye(0.58f, 0.62f, 0.08f, 0.14f, 0f)),
+        listOf(ToyEye(0.38f, 0.36f, 0.09f, 0.15f, -6f), ToyEye(0.62f, 0.36f, 0.09f, 0.15f, 6f)),
     )
 
-    val toys: List<Sticker> = (0 until 60).map { idx ->
-        val kind = idx % 6
-        val classic = intArrayOf(0xFF8A8A8A.toInt(), 0xFF1E86F5.toInt(), 0xFFFA6E14.toInt(), 0xFF14171A.toInt(), 0xFF0FCB6E.toInt(), 0xFF9C6233.toInt())
-        val color = if (idx < 6) {
-            Color(classic[kind].toLong())
-        } else {
-            val hue = (((idx - 6) * 137.508f) % 360f + 360f) % 360f
-            Color.hsl(hue, 0.66f, 0.55f)
-        }
+    private val toyColors = intArrayOf(
+        0xFF8A8A8A.toInt(), 0xFF1E86F5.toInt(), 0xFFFA6E14.toInt(), 0xFF14171A.toInt(),
+        0xFF0FCB6E.toInt(), 0xFF9C6233.toInt(), 0xFFE05C5C.toInt(), 0xFFF7CE1B.toInt(),
+        0xFF7FD8E8.toInt(), 0xFFB39BF5.toInt(), 0xFF23262B.toInt(), 0xFFED8936.toInt(),
+    )
+
+    val toys: List<Sticker> = (0 until (shapeOps.size * toyColors.size)).map { idx ->
+        val kind = idx % shapeOps.size
+        val color = Color(toyColors[idx / shapeOps.size].toLong())
         Sticker(
             "toy-$idx",
             shapeNames[kind],

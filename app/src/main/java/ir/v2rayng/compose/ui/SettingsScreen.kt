@@ -127,7 +127,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 Text(S.SPEED_BG.format(settings.bgSpeed), style = MaterialTheme.typography.bodyMedium)
                 Slider(value = settings.bgSpeed, onValueChange = { vm.setBgSpeed(it) }, valueRange = 0.25f..2f)
 
-                ToggleRow(S.NAV_STICKERS, "", settings.navStickers) { vm.setNavStickers(it) }
+                ToggleRow(S.NAV_STICKERS, S.ICON_STICKERS_SUB, settings.navStickers) { vm.setNavStickers(it) }
                 ToggleRow(S.FOLLOW_FINGER, S.FOLLOW_SUB, settings.followFinger) { vm.setFollowFinger(it) }
                 ToggleRow(S.ANTI_FILTER, S.ANTI_FILTER_SUB, settings.antiFilter) { vm.setAntiFilter(it) }
 
