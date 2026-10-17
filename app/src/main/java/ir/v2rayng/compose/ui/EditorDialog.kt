@@ -7,6 +7,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -17,12 +19,15 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -44,6 +49,7 @@ private val PALETTE = longArrayOf(
     0xFF7FD8E8, 0xFFC9E87F, 0xFFE689C3, 0xFF23262B,
 )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDismiss: () -> Unit) {
     val isWall = zone == "wall"
@@ -98,7 +104,9 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
         zone.startsWith("route:") -> parseLongList(settings.routeColors, listOf(-1L, -1L, -1L)).getOrNull(slot) ?: -1L
         else -> -1L
     }
-    val hasColor = srvId == null
+    val styleId = if (isWall) settings.wallpaperStyle else settings.stickerStyle
+    val hasColor = srvId == null && styleId != 2
+    val showHex = remember { mutableStateOf(false) }
 
     fun setColor(v: Long) {
         when {
@@ -178,7 +186,10 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
                         ColorDot(0xFF888888, colorCur < 0, { setColor(-1L) })
                         PALETTE.forEach { c ->
                             ColorDot(
@@ -187,6 +198,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                                 { setColor(c) },
                             )
                         }
+                        MiniChip("Custom", false, { showHex.value = true })
                         MiniChip("Random", false, {
                             setColor(PALETTE[(0 until PALETTE.size).random()])
                         })
@@ -228,6 +240,44 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
             }
         }
     }
+
+    if (showHex.value) {
+        HexColorDialog(colorCur, ::setColor) { showHex.value = false }
+    }
+}
+
+@Composable
+private fun HexColorDialog(current: Long, onSet: (Long) -> Unit, onDismiss: () -> Unit) {
+    var hex by remember { mutableStateOf(if (current >= 0) String.format("%08X", current) else "#FF8CDDB2") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Custom color") },
+        text = {
+            OutlinedTextField(
+                value = hex,
+                onValueChange = { hex = it },
+                singleLine = true,
+                label = { Text("#AARRGGBB") },
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val cleaned = hex.removePrefix("#").trim()
+                    val v = cleaned.toLongOrNull(16)
+                    if (cleaned.length == 6) {
+                        onSet(0xFF000000L or v!!)
+                    } else if (cleaned.length == 8) {
+                        onSet(v!!)
+                    }
+                    onDismiss()
+                },
+            ) { Text(S.APPLY) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(S.CANCEL) }
+        },
+    )
 }
 
 @Composable

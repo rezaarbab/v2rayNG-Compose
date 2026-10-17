@@ -224,7 +224,7 @@ fun StickerCharacter(
                 if (tb == null) {
                     drawCircle(bodyColor, radius = 0.34f * s, center = p(0.5f, 0.5f))
                 } else {
-                    val t = if (static) {
+                    val t = if (static || sizeDp.value <= 48f) {
                         frozenPhase
                     } else {
                         val clock = if (bg) StickerTicker.ms.longValue else StickerTicker.fast.longValue
