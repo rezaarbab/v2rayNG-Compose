@@ -173,7 +173,8 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                     itemsIndexed(shown) { _, entry ->
                         val i = entry.index
                         val sticker = entry.value
-                        val selected = current == i                        Column(
+                        val selected = current == i
+                        Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(16.dp))
