@@ -16,9 +16,22 @@ android {
         versionName = "0.1.0"
     }
 
+    signingConfigs {
+        create("ci") {
+            storeFile = rootProject.file("ci-release.jks")
+            storePassword = "blob-tmp-2026"
+            keyAlias = "blob"
+            keyPassword = "blob-tmp-2026"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            val ks = rootProject.file("ci-release.jks")
+            if (ks.exists()) {
+                signingConfig = signingConfigs.getByName("ci")
+            }
         }
     }
     compileOptions {

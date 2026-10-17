@@ -84,18 +84,23 @@ fun StickerCharacter(
         BlobTables(A, B, C)
     }
 
-    val shapePath = remember { Path() }
-    val gestures = if (onTap == null && onLongPress == null) null else Modifier.pointerInput(onTap, onLongPress) {
-        detectTapGestures(
-            onTap = { onTap?.invoke() },
-            onLongPress = { onLongPress?.invoke() },
-        )
-    }
+        val shapePath = remember { Path() }
+        val gestures = if (onTap == null && onLongPress == null) null else Modifier.pointerInput(onTap, onLongPress) {
+            detectTapGestures(
+                onTap = { onTap?.invoke() },
+                onLongPress = { onLongPress?.invoke() },
+            )
+        }
+        val positionMod = if (gaze != null) {
+            Modifier.onGloballyPositioned { rootPos = it.positionInRoot(); side = it.size }
+        } else {
+            Modifier
+        }
 
     Canvas(
         modifier = modifier
             .size(sizeDp)
-            .onGloballyPositioned { rootPos = it.positionInRoot(); side = it.size }
+            .then(positionMod)
             .then(gestures ?: Modifier)
     ) {
         val s = size.width
