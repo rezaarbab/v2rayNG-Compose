@@ -8,7 +8,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 @Immutable
-enum class StickerMood { NORMAL, HAPPY, WOBBLE, SLEEP }
+enum class StickerMood { NORMAL, HAPPY, WOBBLE, SLEEP, SAD }
 
 @Immutable
 data class BlobArt(

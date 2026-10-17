@@ -40,6 +40,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private var connectJob: Job? = null
     private var trafficJob: Job? = null
 
+    init {
+        if (_state.value.servers.isNotEmpty()) {
+            pingAll()
+        }
+    }
+
     private fun put(f: (AppState) -> AppState) = _state.update(f)
 
     private fun setSettings(f: (Settings) -> Settings) {
@@ -61,6 +67,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setMainIndex(v: Int) = setSettings { it.copy(mainIndex = v) }
     fun setFollowFinger(v: Boolean) = setSettings { it.copy(followFinger = v) }
     fun setAnimate(v: Boolean) = setSettings { it.copy(animate = v) }
+    fun setStateMotion(v: Boolean) = setSettings { it.copy(stateMotion = v) }
     fun setSpeed(v: Float) = setSettings { it.copy(speed = v) }
     fun setBgSpeed(v: Float) = setSettings { it.copy(bgSpeed = v) }
     fun setNavStickers(v: Boolean) = setSettings { it.copy(navStickers = v) }

@@ -1,6 +1,5 @@
 package ir.v2rayng.compose.stickers
 
-import ir.v2rayng.compose.ui.DebugKit
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.size
@@ -42,6 +41,7 @@ private data class BlobTables(
 private fun moodSpeed(mood: StickerMood): Float = when (mood) {
     StickerMood.SLEEP -> 0.55f
     StickerMood.WOBBLE -> 2.1f
+    StickerMood.SAD -> 2.4f
     StickerMood.HAPPY -> 1.5f
     else -> 1f
 }
@@ -49,11 +49,13 @@ private fun moodSpeed(mood: StickerMood): Float = when (mood) {
 private fun moodAmp(mood: StickerMood): Float = when (mood) {
     StickerMood.HAPPY -> 0.115f
     StickerMood.WOBBLE -> 0.055f
+    StickerMood.SAD -> 0.02f
     else -> 0.045f
 }
 
 private fun moodTilt(mood: StickerMood): Float = when (mood) {
     StickerMood.WOBBLE -> 3.0f
+    StickerMood.SAD -> 5.0f
     StickerMood.HAPPY -> 2.2f
     StickerMood.SLEEP -> 0.4f
     else -> 1.3f
@@ -77,7 +79,6 @@ fun StickerCharacter(
     bg: Boolean = false,
     decorative: Boolean = false,
 ) {
-    DebugKit.composes.incrementAndGet()
     val env = LocalStickerEnv.current
     var rootPos by remember { mutableStateOf(Offset.Zero) }
     var side by remember { mutableStateOf(IntSize.Zero) }
@@ -118,7 +119,6 @@ fun StickerCharacter(
     val blinkCur = remember(mood) { mutableFloatStateOf(if (mood == StickerMood.SLEEP) 0.14f else 1f) }
 
     val dance = Modifier.graphicsLayer {
-        DebugKit.layers.incrementAndGet()
         if (mood == StickerMood.SLEEP || decorative || !env.enabled.value) {
             translationX = 0f; translationY = 0f
             scaleX = 1f; scaleY = 1f; rotationZ = 0f
@@ -135,8 +135,10 @@ fun StickerCharacter(
         val sp = ((1.0 - cos(w)) / 2.0).toFloat()
         val amp = (moodAmp(mood) * (if (tiny) 2.6f else 1f)).coerceAtMost(0.14f)
         val hop = -amp * sp
-        val sway = (amp * 0.35f).coerceAtMost(if (tiny) 0.018f else 0.008f) * sin(w + 1.7).toFloat()
-        val tilt = moodTilt(mood) * (if (tiny) 1.3f else 1f) * sin(w + 0.6).toFloat()
+        val sad = mood == StickerMood.SAD
+        val swayAmp = if (sad) 0.05f else (amp * 0.35f).coerceAtMost(if (tiny) 0.018f else 0.008f)
+        val sway = swayAmp * sin(if (sad) w * 2.5 + 1.7 else w + 1.7).toFloat()
+        val tilt = moodTilt(mood) * (if (tiny) 1.3f else 1f) * sin(if (sad) w * 2.5 + 0.6 else w + 0.6).toFloat()
         val sqx = 1f + 0.026f * breathe
 
         val cycle = t % 1f
@@ -161,8 +163,6 @@ fun StickerCharacter(
             .then(gestures ?: Modifier)
             .then(dance)
     ) {
-        DebugKit.draws.incrementAndGet()
-        val tStart = System.nanoTime()
         val s = size.width
         val animOn = env.enabled.value
         val static = mood == StickerMood.SLEEP || !animOn || decorative
@@ -319,6 +319,5 @@ fun StickerCharacter(
                 }
             }
         }
-        DebugKit.drawNanos.addAndGet(System.nanoTime() - tStart)
     }
 }

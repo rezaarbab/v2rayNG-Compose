@@ -81,7 +81,9 @@ object S {
     const val EDITOR = "Editor"
     const val CLEAR_BG = "Clear"
     const val LANGUAGE_NOTE = "Language: all strings live in ui/Res.kt - translate them in one place."
-    const val DEBUG_TITLE = "Diagnostics (jank debug - temporary)"
+    const val STATE_MOTION = "Connection dance indicator"
+    const val STATE_MOTION_SUB = "Sticker reacts while connecting / connected / on error"
+    const val SEARCH_STICKERS = "Search"
 
     const val EDITOR_MAIN = "Customize main sticker"
     const val EDITOR_WALL = "Customize background"

@@ -15,20 +15,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,7 +35,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.AppState
@@ -52,7 +47,6 @@ import ir.v2rayng.compose.stickers.V2Stickers
 
 @Composable
 fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
-    var showAdd by remember { mutableStateOf(false) }
     var editSrv by remember { mutableStateOf<String?>(null) }
 
     Column(
@@ -73,9 +67,6 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             }
             IconButton(onClick = { vm.pingAll() }) {
                 Icon(Icons.Filled.Refresh, contentDescription = S.PING_TEST)
-            }
-            IconButton(onClick = { showAdd = true }) {
-                Icon(Icons.Filled.Add, contentDescription = S.ADD_SERVER)
             }
         }
         Spacer(Modifier.height(10.dp))
@@ -101,10 +92,6 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
 
     editSrv?.let { id ->
         StickerEditorDialog("srv:$id", settings, vm) { editSrv = null }
-    }
-
-    if (showAdd) {
-        AddServerDialog(onDone = { vm.addServer(it.first, it.second) }, onDismiss = { showAdd = false })
     }
 }
 
@@ -165,44 +152,4 @@ private fun ServerRow(
     }
 }
 
-@Composable
-private fun AddServerDialog(onDone: (Pair<String, String>) -> Unit, onDismiss: () -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var host by remember { mutableStateOf("") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(S.ADD_SERVER) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text(S.FIELD_NAME) },
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = host,
-                    onValueChange = { host = it },
-                    label = { Text(S.FIELD_ADDRESS) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    if (name.isNotBlank() && host.isNotBlank()) {
-                        onDone(name.trim() to host.trim())
-                        onDismiss()
-                    }
-                },
-            ) { Text(S.ADD) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(S.CANCEL) }
-        },
-    )
-}
 

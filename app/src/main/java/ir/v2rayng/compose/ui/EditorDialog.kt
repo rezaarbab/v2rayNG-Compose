@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -55,6 +56,7 @@ private val PALETTE = longArrayOf(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDismiss: () -> Unit) {
+    var query by remember { mutableStateOf("") }
     val isWall = zone == "wall"
     val isMain = zone == "main"
     val slot = if (zone.startsWith("nav:") || zone.startsWith("route:")) zone.split(":").getOrNull(1)?.toIntOrNull() ?: 0 else -1
@@ -156,8 +158,20 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    label = { Text(S.SEARCH_STICKERS) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                val shown = set.withIndex().filter { (_, s) ->
+                    query.isBlank() || s.name.contains(query, ignoreCase = true) || s.id.contains(query, ignoreCase = true)
+                }
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    itemsIndexed(set) { i, sticker ->
+                    itemsIndexed(shown) { _, entry ->
+                        val i = entry.index
+                        val sticker = entry.value
                         val selected = current == i
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,

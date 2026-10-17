@@ -12,8 +12,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -81,8 +82,6 @@ fun AppRoot() {
         var debt = 0.0
         while (true) {
             withFrameMillis { v ->
-                DebugKit.ticks.incrementAndGet()
-                FrameWatch.tick(v)
                 if (prev != 0L && v > prev) {
                     val raw = (v - prev).toDouble()
                     val step = raw.coerceAtMost(25.0)
@@ -130,11 +129,6 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text(S.APP, fontWeight = FontWeight.Bold) },
-                actions = {
-                    IconButton(onClick = { vm.pingAll() }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = S.PING_TEST)
-                    }
-                },
             )
         },
         bottomBar = {
@@ -253,11 +247,13 @@ fun MoveNavDialog(order: List<Int>, vm: AppViewModel, onDismiss: () -> Unit) {
                             modifier = Modifier.weight(1f),
                         )
                         TextButton(
-                            onClick = { if (pos > 0) vm.setNavOrder(order.toMutableList().apply { add(pos, removeAt(pos - 1)) }) },
-                        ) { Text("v") }
+                            onClick = { if (pos > 0) vm.setNavOrder(order.toMutableList().apply { add(pos - 1, removeAt(pos)) }) },
+                            enabled = pos > 0,
+                        ) { Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Up") }
                         TextButton(
-                            onClick = { if (pos < order.size - 1) vm.setNavOrder(order.toMutableList().apply { add(pos, removeAt(pos + 1)) }) },
-                        ) { Text("^") }
+                            onClick = { if (pos < order.size - 1) vm.setNavOrder(order.toMutableList().apply { add(pos + 1, removeAt(pos)) }) },
+                            enabled = pos < order.size - 1,
+                        ) { Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Down") }
                     }
                 }
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {

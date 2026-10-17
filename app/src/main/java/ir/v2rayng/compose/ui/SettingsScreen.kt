@@ -22,9 +22,14 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -65,8 +70,6 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadApps(context) }
 
-    var showDiag by remember { mutableStateOf(false) }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -74,11 +77,6 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(S.DEBUG_TITLE, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            SelectChip("Open", false, { showDiag = true })
-        }
-
         SectionTitle(S.SETTINGS_TITLE, S.SETTINGS_SUB)
 
         Card(
@@ -123,17 +121,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     SelectChip(S.STYLE_FLAG, settings.stickerStyle == 2, { vm.setStickerStyle(2) })
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(S.ANIMATION, style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            S.ANIMATION_SUB,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(checked = settings.animate, onCheckedChange = { vm.setAnimate(it) })
-                }
+                ToggleRow(S.ANIMATION, S.ANIMATION_SUB, settings.animate) { vm.setAnimate(it) }
 
                 Text(S.SPEED_STICKERS.format(settings.speed), style = MaterialTheme.typography.bodyMedium)
                 Slider(value = settings.speed, onValueChange = { vm.setSpeed(it) }, valueRange = 0.25f..2f)
@@ -141,18 +129,52 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 Text(S.SPEED_BG.format(settings.bgSpeed), style = MaterialTheme.typography.bodyMedium)
                 Slider(value = settings.bgSpeed, onValueChange = { vm.setBgSpeed(it) }, valueRange = 0.25f..2f)
 
-                ToggleRow(S.NAV_STICKERS, S.ICON_STICKERS_SUB, settings.navStickers) { vm.setNavStickers(it) }
+                ToggleRow(S.STATE_MOTION, S.STATE_MOTION_SUB, settings.stateMotion) { vm.setStateMotion(it) }
                 ToggleRow(S.FOLLOW_FINGER, S.FOLLOW_SUB, settings.followFinger) { vm.setFollowFinger(it) }
-                ToggleRow(S.ANTI_FILTER, S.ANTI_FILTER_SUB, settings.antiFilter) { vm.setAntiFilter(it) }
+            }
+        }
 
-                val selectedApps = settings.antiFilterApps.split(",").filter { it.isNotBlank() }
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(S.MENU_LAYOUT, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+
+                ToggleRow(S.NAV_STICKERS, S.ICON_STICKERS_SUB, settings.navStickers) { vm.setNavStickers(it) }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(S.MENU_LAYOUT_SUB, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    SelectChip(S.EDITOR, false, { moveMenu = true })
+                }
+
+                Text(S.NAV_ICONS_TITLE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                val navIcons = parseList(settings.navIcons, (0..4).toList())
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    itemsIndexed(navIcons) { slot, idx ->
+                        val sticker = V2Stickers.byIndex(settings.stickerStyle, idx)
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { editNavSlot = slot }
+                                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), RoundedCornerShape(14.dp))
+                                .padding(5.dp),
+                        ) {
+                            StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 40.dp)
+                        }
+                    }
+                }
+
+                Text(S.HOME_LAYOUT, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        S.ANTI_FILTER_APPS.format(selectedApps.size),
-                        style = MaterialTheme.typography.bodyMedium,
+                        S.HOME_SECTIONS.joinToString(" | "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
                     )
-                    SelectChip(S.EDITOR, false, { showAppPicker = true })
+                    SelectChip(S.EDITOR, false, { moveHome = true })
                 }
             }
         }
@@ -195,41 +217,27 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(S.MENU_LAYOUT, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(S.ANTI_FILTER, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                ToggleRow(S.ANTI_FILTER, S.ANTI_FILTER_SUB, settings.antiFilter) { vm.setAntiFilter(it) }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(S.MENU_LAYOUT_SUB, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    SelectChip(S.EDITOR, false, { moveMenu = true })
-                }
-
-                Text(S.HOME_LAYOUT, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                val selectedApps = settings.antiFilterApps.split(",").filter { it.isNotBlank() }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        S.HOME_SECTIONS.joinToString(" | "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        S.ANTI_FILTER_APPS.format(selectedApps.size),
+                        style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.weight(1f),
                     )
-                    SelectChip(S.EDITOR, false, { moveHome = true })
+                    SelectChip(S.EDITOR, false, { showAppPicker = true })
                 }
+            }
+        }
 
-                Text(S.NAV_ICONS_TITLE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                val navIcons = parseList(settings.navIcons, (0..4).toList())
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    itemsIndexed(navIcons) { slot, idx ->
-                        val sticker = V2Stickers.byIndex(settings.stickerStyle, idx)
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { editNavSlot = slot }
-                                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), RoundedCornerShape(14.dp))
-                                .padding(5.dp),
-                        ) {
-                            StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 40.dp)
-                        }
-                    }
-                }
-
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(S.LANGUAGE_NOTE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 }
@@ -258,9 +266,6 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     }
     if (moveHome) {
         HomeLayoutDialog(parseList(settings.homeOrder, listOf(0, 1, 2, 3, 4)), vm) { moveHome = false }
-    }
-    if (showDiag) {
-        DiagnosticsDialog { showDiag = false }
     }
     if (showAppPicker) {
         AppPickerDialog(state.apps, settings.antiFilterApps, vm) { showAppPicker = false }
@@ -354,12 +359,14 @@ fun HomeLayoutDialog(order: List<Int>, vm: AppViewModel, onDismiss: () -> Unit) 
                             style = MaterialTheme.typography.bodyLarge,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(
-                            onClick = { if (pos > 0) vm.setHomeOrder(order.toMutableList().apply { add(pos, removeAt(pos - 1)) }) },
-                        ) { Text("^") }
-                        TextButton(
-                            onClick = { if (pos < order.size - 1) vm.setHomeOrder(order.toMutableList().apply { add(pos, removeAt(pos + 1)) }) },
-                        ) { Text("v") }
+                        IconButton(
+                            onClick = { if (pos > 0) vm.setHomeOrder(order.toMutableList().apply { add(pos - 1, removeAt(pos)) }) },
+                            enabled = pos > 0,
+                        ) { Icon(Icons.Filled.KeyboardArrowUp, contentDescription = "Up") }
+                        IconButton(
+                            onClick = { if (pos < order.size - 1) vm.setHomeOrder(order.toMutableList().apply { add(pos + 1, removeAt(pos)) }) },
+                            enabled = pos < order.size - 1,
+                        ) { Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Down") }
                     }
                 }
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
