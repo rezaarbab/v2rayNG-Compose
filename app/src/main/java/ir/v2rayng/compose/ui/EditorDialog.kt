@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.Settings
+import ir.v2rayng.compose.data.parseFloatList
 import ir.v2rayng.compose.data.parseLongList
 import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.stickers.StickerCharacter
@@ -172,8 +173,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                     itemsIndexed(shown) { _, entry ->
                         val i = entry.index
                         val sticker = entry.value
-                        val selected = current == i
-                        Column(
+                        val selected = current == i                        Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(16.dp))
@@ -195,6 +195,33 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                             )
                         }
                     }
+                }
+
+                val speedCur = when {
+                    zone.startsWith("nav:") -> parseFloatList(settings.navSpeeds, listOf(1f, 1f, 1f, 1f, 1f)).getOrNull(slot) ?: 1f
+                    zone == "up" -> settings.upSpeed
+                    zone == "down" -> settings.downSpeed
+                    zone.startsWith("route:") -> parseFloatList(settings.routeSpeeds, listOf(1f, 1f, 1f)).getOrNull(slot) ?: 1f
+                    else -> 0f
+                }
+                if (speedCur > 0f) {
+                    Text(
+                        text = "Dance speed: %.1fx".format(speedCur),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Slider(
+                        value = speedCur,
+                        onValueChange = { v ->
+                            when {
+                                zone.startsWith("nav:") -> vm.setNavSpeed(slot, v)
+                                zone == "up" -> vm.setUpSpeed(v)
+                                zone == "down" -> vm.setDownSpeed(v)
+                                zone.startsWith("route:") -> vm.setRouteSpeed(slot, v)
+                            }
+                        },
+                        valueRange = 0.4f..2.2f,
+                    )
                 }
 
                 if (hasColor) {

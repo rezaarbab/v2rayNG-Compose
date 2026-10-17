@@ -27,8 +27,12 @@ data class Settings(
     val downIcon: Int = 6,
     val upColor: Long = -1L,
     val downColor: Long = -1L,
+    val upSpeed: Float = 1f,
+    val downSpeed: Float = 1f,
     val navColors: String = "-1,-1,-1,-1,-1",
     val routeColors: String = "-1,-1,-1",
+    val navSpeeds: String = "1,1,1,1,1",
+    val routeSpeeds: String = "1,1,1",
     val routeIcons: String = "0,1,2",
     val antiFilter: Boolean = false,
     val antiFilterApps: String = "",
@@ -46,6 +50,12 @@ fun parseLongList(s: String, def: List<Long>): List<Long> {
 }
 
 fun packLongList(l: List<Long>): String = l.joinToString(",")
+
+fun parseFloatList(s: String, def: List<Float>): List<Float> {
+    return s.split(",").mapNotNull { it.trim().toFloatOrNull() }.ifEmpty { def }
+}
+
+fun packFloatList(l: List<Float>): String = l.joinToString(",")
 
 class SettingsStore(context: Context) {
     private val sp = context.getSharedPreferences("v2settings", Context.MODE_PRIVATE)
@@ -75,8 +85,12 @@ class SettingsStore(context: Context) {
         downIcon = sp.getInt("downIcon", 6),
         upColor = java.lang.Long.valueOf(sp.getString("upColor", "-1")!!),
         downColor = java.lang.Long.valueOf(sp.getString("downColor", "-1")!!),
+        upSpeed = sp.getFloat("upSpeed", 1f),
+        downSpeed = sp.getFloat("downSpeed", 1f),
         navColors = sp.getString("navColors", "-1,-1,-1,-1,-1")!!,
         routeColors = sp.getString("routeColors", "-1,-1,-1")!!,
+        navSpeeds = sp.getString("navSpeeds", "1,1,1,1,1")!!,
+        routeSpeeds = sp.getString("routeSpeeds", "1,1,1")!!,
         routeIcons = sp.getString("routeIcons", "0,1,2")!!,
         antiFilter = sp.getBoolean("antiFilter", false),
         antiFilterApps = sp.getString("antiFilterApps", "")!!,
@@ -109,8 +123,12 @@ class SettingsStore(context: Context) {
             .putInt("downIcon", s.downIcon)
             .putString("upColor", s.upColor.toString())
             .putString("downColor", s.downColor.toString())
+            .putFloat("upSpeed", s.upSpeed)
+            .putFloat("downSpeed", s.downSpeed)
             .putString("navColors", s.navColors)
             .putString("routeColors", s.routeColors)
+            .putString("navSpeeds", s.navSpeeds)
+            .putString("routeSpeeds", s.routeSpeeds)
             .putString("routeIcons", s.routeIcons)
             .putBoolean("antiFilter", s.antiFilter)
             .putString("antiFilterApps", s.antiFilterApps)

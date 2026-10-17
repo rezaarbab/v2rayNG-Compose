@@ -78,6 +78,7 @@ fun StickerCharacter(
     gaze: Offset? = null,
     bg: Boolean = false,
     decorative: Boolean = false,
+    speedScale: Float = 1f,
 ) {
     val env = LocalStickerEnv.current
     var rootPos by remember { mutableStateOf(Offset.Zero) }
@@ -129,7 +130,7 @@ fun StickerCharacter(
         val clock = StickerTicker.anim.longValue
         val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue
         val spMul = if (bg) 0.6f else 1f
-        val t = clock / 1000f * us * spMul * (moodSpeed(mood) * (if (tiny) 1.8f else 1f)) + phaseOf(sticker.art)
+        val t = clock / 1000f * us * spMul * (moodSpeed(mood) * speedScale) * (if (tiny) 1.8f else 1f) + phaseOf(sticker.art)
         val w = 2.0 * PI * t
         val breathe = sin(w).toFloat()
         val sp = ((1.0 - cos(w)) / 2.0).toFloat()
@@ -233,11 +234,11 @@ fun StickerCharacter(
                         frozenPhase
                     } else if (sizeDp.value <= 48f) {
                         val us = env.speed.floatValue
-                        StickerTicker.wave.longValue / 1000f * us * (moodSpeed(mood) * 1.35f) + phaseOf(art)
+                        StickerTicker.wave.longValue / 1000f * us * (moodSpeed(mood) * speedScale * 1.35f) + phaseOf(art)
                     } else {
                         val clock = StickerTicker.anim.longValue
                         val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue
-                        clock / 1000f * us * (if (bg) 0.6f else 1f) * moodSpeed(mood) + phaseOf(art)
+                        clock / 1000f * us * (if (bg) 0.6f else 1f) * (moodSpeed(mood) * speedScale) + phaseOf(art)
                     }
                     val wt = 2.0 * PI * t
                     val cw = cos(wt).toFloat()

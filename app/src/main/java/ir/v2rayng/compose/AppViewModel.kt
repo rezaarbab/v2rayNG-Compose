@@ -11,9 +11,11 @@ import ir.v2rayng.compose.data.SettingsStore
 import ir.v2rayng.compose.data.TimeKit
 import ir.v2rayng.compose.data.VpnState
 import ir.v2rayng.compose.data.packList
+import ir.v2rayng.compose.data.packFloatList
 import ir.v2rayng.compose.data.packLongList
 import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.data.parseLongList
+import ir.v2rayng.compose.data.parseFloatList
 import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.ui.S
 import java.net.HttpURLConnection
@@ -96,6 +98,23 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         val cur = parseLongList(s.routeColors, listOf(-1L, -1L, -1L)).toMutableList()
         cur[slot.coerceIn(0, cur.size - 1)] = v
         s.copy(routeColors = packLongList(cur))
+    }
+
+    fun setUpSpeed(v: Float) = setSettings { it.copy(upSpeed = v) }
+    fun setDownSpeed(v: Float) = setSettings { it.copy(downSpeed = v) }
+
+    fun setNavSpeed(slot: Int, v: Float) = setSettings { s ->
+        val cur = parseFloatList(s.navSpeeds, listOf(1f, 1f, 1f, 1f, 1f)).toMutableList()
+        while (cur.size < 5) cur.add(1f)
+        cur[slot.coerceIn(0, 4)] = v
+        s.copy(navSpeeds = packFloatList(cur))
+    }
+
+    fun setRouteSpeed(slot: Int, v: Float) = setSettings { s ->
+        val cur = parseFloatList(s.routeSpeeds, listOf(1f, 1f, 1f)).toMutableList()
+        while (cur.size < 3) cur.add(1f)
+        cur[slot.coerceIn(0, 2)] = v
+        s.copy(routeSpeeds = packFloatList(cur))
     }
 
     fun srvStickerIndex(id: String): Int =
