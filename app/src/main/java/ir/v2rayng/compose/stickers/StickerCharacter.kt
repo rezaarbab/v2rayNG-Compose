@@ -229,8 +229,11 @@ fun StickerCharacter(
                 if (tb == null) {
                     drawCircle(bodyColor, radius = 0.34f * s, center = p(0.5f, 0.5f))
                 } else {
-                    val t = if (static || sizeDp.value <= 48f) {
+                    val t = if (static) {
                         frozenPhase
+                    } else if (sizeDp.value <= 48f) {
+                        val us = env.speed.floatValue
+                        StickerTicker.wave.longValue / 1000f * us * (moodSpeed(mood) * 1.35f) + phaseOf(art)
                     } else {
                         val clock = StickerTicker.anim.longValue
                         val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue

@@ -79,6 +79,8 @@ fun AppRoot() {
     LaunchedEffect(Unit) {
         var prev = 0L
         var animMs = 0L
+        var waveMs = 0L
+        var lastWave = 0L
         var debt = 0.0
         while (true) {
             withFrameMillis { v ->
@@ -87,11 +89,17 @@ fun AppRoot() {
                     val step = raw.coerceAtMost(25.0)
                     debt += (raw - step)
                     val extra = debt.coerceAtMost(12.5)
-                    animMs += (step + extra).toLong()
+                    val adv = (step + extra).toLong()
+                    animMs += adv
                     debt -= extra
+                    if (v - lastWave >= 15L) {
+                        lastWave = v
+                        waveMs += adv
+                    }
                 }
                 prev = v
                 StickerTicker.anim.longValue = animMs
+                StickerTicker.wave.longValue = waveMs
             }
         }
     }

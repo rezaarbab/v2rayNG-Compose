@@ -7,6 +7,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 
 object StickerTicker {
     val anim = mutableLongStateOf(0L)
+    val wave = mutableLongStateOf(0L)
 }
 
 class StickerEnv {
