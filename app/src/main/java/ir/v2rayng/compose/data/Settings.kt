@@ -158,6 +158,12 @@ class SettingsStore(context: Context) {
 
     fun loadSelectedId(): String = sp.getString("selectedId", "s1") ?: "s1"
 
+    fun loadCustom(): String? = sp.getString("customStickers", null)
+
+    fun saveCustom(raw: String) {
+        sp.edit().putString("customStickers", raw).apply()
+    }
+
     fun saveSelectedId(id: String) {
         sp.edit().putString("selectedId", id).apply()
     }

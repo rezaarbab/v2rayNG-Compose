@@ -270,7 +270,16 @@ object V2Stickers {
 
     private val sets = listOf(blobs, toys, ir.v2rayng.compose.stickers.CountryFlags.list)
 
-    fun setFor(style: Int): List<Sticker> = sets[((style % 3) + 3) % 3]
+    fun toyOps(kind: Int): List<ToyOp> = shapeOps[((kind % shapeOps.size) + shapeOps.size) % shapeOps.size]
+
+    fun toyEyes(kind: Int): List<ToyEye> = eyeSets[((kind % eyeSets.size) + eyeSets.size) % eyeSets.size]
+
+    fun setFor(style: Int): List<Sticker> = when (((style % 4) + 4) % 4) {
+        0 -> blobs
+        1 -> toys
+        2 -> ir.v2rayng.compose.stickers.CountryFlags.list
+        else -> CustomStickers.snapshot().ifEmpty { blobs }
+    }
 
     fun byIndex(style: Int, i: Int): Sticker {
         val set = setFor(style)

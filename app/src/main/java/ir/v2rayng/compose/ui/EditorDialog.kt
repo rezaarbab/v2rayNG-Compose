@@ -90,6 +90,12 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
     }
 
     fun pick(i: Int) {
+        if (isMain) {
+            val def = CustomStickers.all().firstOrNull { "cus-${it.id}" == set.getOrNull(i)?.id }
+            if (def != null && def.size >= 60) {
+                vm.setMainSize(def.size)
+            }
+        }
         when {
             isWall -> vm.setWallpaper(i)
             isMain -> vm.setMainIndex(i)
@@ -140,6 +146,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                         MiniChip(S.STYLE_BLOB, settings.wallpaperStyle == 0, { vm.setWallpaperStyle(0) })
                         MiniChip(S.STYLE_TOY, settings.wallpaperStyle == 1, { vm.setWallpaperStyle(1) })
                         MiniChip(S.STYLE_FLAG, settings.wallpaperStyle == 2, { vm.setWallpaperStyle(2) })
+                        MiniChip(S.MINE, settings.wallpaperStyle == 3, { vm.setWallpaperStyle(3) })
                     }
                 }
 
@@ -151,6 +158,12 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                             settings.mainIndex >= 0,
                             { if (settings.mainIndex < 0) vm.setMainIndex(0) },
                         )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        MiniChip(S.STYLE_BLOB, settings.stickerStyle == 0, { vm.setStickerStyle(0) })
+                        MiniChip(S.STYLE_TOY, settings.stickerStyle == 1, { vm.setStickerStyle(1) })
+                        MiniChip(S.STYLE_FLAG, settings.stickerStyle == 2, { vm.setStickerStyle(2) })
+                        MiniChip(S.MINE, settings.stickerStyle == 3, { vm.setStickerStyle(3) })
                     }
                 }
 

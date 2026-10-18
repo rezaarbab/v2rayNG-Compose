@@ -78,6 +78,7 @@ fun AppRoot() {
     )
     val settings by vm.settings.collectAsState()
     val env = remember { StickerEnv() }
+    remember { ir.v2rayng.compose.stickers.CustomStickers.init(context) }
     androidx.compose.runtime.LaunchedEffect(settings.dark) {
         (context as? ir.v2rayng.compose.MainActivity)?.applySystemBars(settings.dark)
     }

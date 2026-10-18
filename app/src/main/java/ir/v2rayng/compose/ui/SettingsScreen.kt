@@ -68,6 +68,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var moveHome by remember { mutableStateOf(false) }
     var showAppPicker by remember { mutableStateOf(false) }
     var showNotifHex by remember { mutableStateOf(false) }
+    var showCreator by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadApps(context) }
 
@@ -120,6 +121,11 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     SelectChip(S.STYLE_BLOB, settings.stickerStyle == 0, { vm.setStickerStyle(0) })
                     SelectChip(S.STYLE_TOY, settings.stickerStyle == 1, { vm.setStickerStyle(1) })
                     SelectChip(S.STYLE_FLAG, settings.stickerStyle == 2, { vm.setStickerStyle(2) })
+                    SelectChip(S.MINE, settings.stickerStyle == 3, { vm.setStickerStyle(3) })
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(S.CREATOR_TITLE, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    SelectChip(S.CREATOR_TITLE, false, { showCreator = true })
                 }
 
                 ToggleRow(S.ANIMATION, S.ANIMATION_SUB, settings.animate) { vm.setAnimate(it) }
@@ -284,6 +290,9 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     }
     if (showNotifHex) {
         NotifColorDialog(settings.notifColor, vm) { showNotifHex = false }
+    }
+    if (showCreator) {
+        CreatorDialog(vm) { showCreator = false }
     }
     editNavSlot?.let { slot ->
         StickerEditorDialog("nav:$slot", settings, vm) { editNavSlot = null }
