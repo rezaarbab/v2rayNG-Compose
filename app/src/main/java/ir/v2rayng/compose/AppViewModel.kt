@@ -76,7 +76,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             val sel = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
                             if (sel?.link != null) {
                                 viewModelScope.launch {
-                                    var res: Pair<String, String>? = null
+                                    var res: Triple<String, String, String>? = null
                                     var attempt = 0
                                     while (res == null && attempt < 3) {
                                         attempt++
@@ -93,7 +93,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                             )
                                         }
                                         store.saveServers(_state.value.servers, _state.value.selectedId)
-                                        log("INFO", "Exit IP: ${res.first} (${res.second})")
+                                        log("INFO", "Exit IP: ${res.first} (${res.second}) ${res.third}")
                                     } else {
                                         log("WARN", S.LOG_IP_FAIL)
                                     }
@@ -180,7 +180,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             val res = ipCountryNow()
             if (res != null) {
                 put { s -> s.copy(myIp = res.first) }
-                log("INFO", "IP ${res.first} (${res.second})")
+                log("INFO", "IP ${res.first} (${res.second}) ${res.third}")
             } else {
                 log("WARN", S.LOG_IP_FAIL)
             }
@@ -457,10 +457,33 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      * sent through the local SOCKS inbound of the core, so it reports the EXIT
      * ip/country of the server (Germany for a German exit), not the user's own IP.
      */
-    private suspend fun ipCountryNow(): Pair<String, String>? {
+    private suspend fun ipCountryNow(): Triple<String, String, String>? {
         val throughTunnel = _state.value.vpnState == VpnState.CONNECTED &&
-            _state.value.selected.link != null
+            _state.value.servers.firstOrNull { it.id == _state.value.selectedId }?.link != null
         return withContext(Dispatchers.IO) {
+            var cfIp: String? = null
+            var cfCode: String? = null
+            var whoCode: String? = null
+            var apiCode: String? = null
+
+            // 1) cloudflare trace - fastest truth for exit ip + country
+            try {
+                val url = java.net.URL("https://www.cloudflare.com/cdn-cgi/trace")
+                val conn = if (throughTunnel) {
+                    val socks = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", 10890))
+                    url.openConnection(socks)
+                } else {
+                    url.openConnection()
+                } as java.net.HttpURLConnection
+                conn.connectTimeout = 6000
+                conn.readTimeout = 6000
+                val text = conn.inputStream.bufferedReader().use { it.readText() }
+                cfIp = Regex("^ip=([0-9a-fA-F.:]+)$", RegexOption.MULTILINE).find(text)?.groupValues?.get(1)
+                cfCode = Regex("^loc=([A-Za-z]{2})$", RegexOption.MULTILINE).find(text)?.groupValues?.get(1)
+            } catch (_: Exception) {
+            }
+
+            // 2) ipwho.is
             try {
                 val url = java.net.URL("https://ipwho.is/")
                 val conn = if (throughTunnel) {
@@ -472,24 +495,29 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 conn.connectTimeout = 6000
                 conn.readTimeout = 6000
                 val text = conn.inputStream.bufferedReader().use { it.readText() }
-                val ip = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
-                var code = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)?.uppercase()
-                if (ip != null && code != null) {
-                    // cross-check with a second database to avoid single-source mistakes
-                    try {
-                        val c2 = java.net.URL("https://ipapi.co/$ip/json/").openConnection() as java.net.HttpURLConnection
-                        c2.connectTimeout = 4000
-                        c2.readTimeout = 4000
-                        val t2 = c2.inputStream.bufferedReader().use { it.readText() }
-                        val code2 = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(t2)?.groupValues?.get(1)?.uppercase()
-                        if (code2 != null && code2 != code) code = code2
-                    } catch (_: Exception) {
-                    }
+                whoCode = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)
+                if (cfIp == null) {
+                    cfIp = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
                 }
-                if (ip != null && code != null) ip to code else null
             } catch (_: Exception) {
-                null
             }
+
+            // 3) ipapi.co with the resolved ip
+            val ipForApi = cfIp
+            if (ipForApi != null) {
+                try {
+                    val conn = java.net.URL("https://ipapi.co/$ipForApi/json/").openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 5000
+                    conn.readTimeout = 5000
+                    val text = conn.inputStream.bufferedReader().use { it.readText() }
+                    apiCode = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)
+                } catch (_: Exception) {
+                }
+            }
+
+            val votes = listOfNotNull(cfCode?.uppercase(), whoCode?.uppercase(), apiCode?.uppercase())
+            val code = votes.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
+            if (code == null) null else Triple(cfIp ?: "", code, "loc=$cfCode who=$whoCode api=$apiCode")
         }
     }
 

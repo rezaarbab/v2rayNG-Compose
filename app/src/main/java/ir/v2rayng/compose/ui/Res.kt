@@ -97,7 +97,7 @@ object S {
     const val FLAG_AVATARS = "Server flags"
     const val FLAG_AVATARS_SUB = "Show each server's real-IP country flag sticker"
     const val CONNECT_FLAG_DANCER = "Connect button is the server flag"
-    const val CONNECT_FLAG_DANCER_SUB = "Flag style only: the main sticker dances as the connected country"
+    const val CONNECT_FLAG_DANCER_SUB = "After the server exit IP is found, the main sticker dances as that country"
     const val MY_IP = "My IP"
     const val CREATOR_TITLE = "Sticker creator"
     const val CREATOR_NAME = "Name"
