@@ -23,8 +23,6 @@ data class CustomStickerDef(
     val emoji: String = "",
     val imageB64: String = "",
     val eyesOn: Boolean = false,
-    val speed: Float = 1f,
-    val size: Int = 190,
 ) {
     fun bandColors(): List<Long> = flagBands.split(",").mapNotNull { it.trim().toLongOrNull() }
 
