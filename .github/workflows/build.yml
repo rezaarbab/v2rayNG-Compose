@@ -31,7 +31,7 @@ jobs:
       - name: Fetch Xray core library
         run: |
           mkdir -p app/libs
-          curl -L --fail -o app/libs/libv2ray.aar "https://github.com/2dust/AndroidLibXrayLite/releases/download/v26.10.10/libv2ray.aar"
+          curl -L --fail -o app/libs/libv2ray.aar "https://github.com/2dust/AndroidLibXrayLite/releases/download/v26.7.5/libv2ray.aar"
           ls -la app/libs || dir app/libs || true
 
       - name: Build release APK

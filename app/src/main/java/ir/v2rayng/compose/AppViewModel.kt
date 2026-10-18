@@ -165,6 +165,44 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setNotifSticker(v: Boolean) = setSettings { it.copy(notifSticker = v) }
     fun setNotifColor(v: Long) = setSettings { it.copy(notifColor = v) }
     fun setFlagAvatars(v: Boolean) = setSettings { it.copy(flagAvatars = v) }
+    fun setConnectFlagDancer(v: Boolean) = setSettings { it.copy(connectFlagDancer = v) }
+
+    fun checkMyIp() {
+        viewModelScope.launch {
+            val res = withContext(Dispatchers.IO) {
+                try {
+                    val conn = java.net.URL("https://ipwho.is/").openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 4000
+                    conn.readTimeout = 4000
+                    val text = conn.inputStream.bufferedReader().use { it.readText() }
+                    val ip = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
+                    val code = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)?.uppercase()
+                    if (ip != null && code != null) ip to code else null
+                } catch (_: Exception) {
+                    try {
+                        val conn = java.net.URL("https://ipapi.co/json/").openConnection() as java.net.HttpURLConnection
+                        conn.connectTimeout = 4000
+                        conn.readTimeout = 4000
+                        val text = conn.inputStream.bufferedReader().use { it.readText() }
+                        val ip = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
+                        val code = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)?.uppercase()
+                        if (ip != null && code != null) ip to code else null
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            }
+            if (res != null) {
+                put { s -> s.copy(myIp = res.first, ipCountry = res.second) }
+                if (_settings.value.autoFlag) {
+                    applyFlag(res.second)
+                }
+                log("INFO", S.LOG_IP_OK.format(res.second))
+            } else {
+                log("WARN", S.LOG_IP_FAIL)
+            }
+        }
+    }
 
     fun resetAllServerTraffic() {
         put { s -> s.copy(servers = s.servers.map { it.copy(up = 0, down = 0) }) }

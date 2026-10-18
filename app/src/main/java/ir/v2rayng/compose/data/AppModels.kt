@@ -48,6 +48,7 @@ data class AppState(
         "udp443" to false,
     ),
     val ipCountry: String = "",
+    val myIp: String = "",
     val apps: List<AppInfo> = emptyList(),
 ) {
     val selected: ServerProfile

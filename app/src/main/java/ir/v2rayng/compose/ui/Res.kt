@@ -96,6 +96,9 @@ object S {
     const val NOTIF_COLOR = "Notification sticker color"
     const val FLAG_AVATARS = "Server flags"
     const val FLAG_AVATARS_SUB = "Show each server's real-IP country flag sticker"
+    const val CONNECT_FLAG_DANCER = "Connect button is the server flag"
+    const val CONNECT_FLAG_DANCER_SUB = "Flag style only: the main sticker dances as the connected country"
+    const val MY_IP = "My IP"
     const val SEARCH_STICKERS = "Search"
 
     const val EDITOR_MAIN = "Customize main sticker"

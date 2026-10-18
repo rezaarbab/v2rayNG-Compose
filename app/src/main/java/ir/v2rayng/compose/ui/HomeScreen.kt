@@ -95,7 +95,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
 
     val mainSticker = when {
         settings.mainIndex >= 0 -> V2Stickers.byIndex(settings.stickerStyle, settings.mainIndex)
-        settings.stickerStyle == 2 && state.ipCountry.isNotBlank() -> {
+        settings.connectFlagDancer && settings.stickerStyle == 2 && state.ipCountry.isNotBlank() -> {
             val fi = CountryFlags.byCode(state.ipCountry)
             if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byIndex(2, sel.stickerIndex)
         }
@@ -116,23 +116,30 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                 0 -> {
                     Spacer(Modifier.height(10.dp))
                     StatusPill(state.vpnState)
-                    if (settings.autoFlag && state.ipCountry.isNotBlank()) {
-                        Spacer(Modifier.height(6.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            val fi = ir.v2rayng.compose.stickers.CountryFlags.byCode(state.ipCountry)
-                            if (fi >= 0) {
-                                StickerCharacter(
-                                    ir.v2rayng.compose.stickers.CountryFlags.list[fi],
-                                    sizeDp = 26.dp,
-                                )
-                                Spacer(Modifier.width(6.dp))
-                            }
-                            Text(
-                                text = S.IP_COUNTRY.format(state.ipCountry),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val flagCode = if (state.vpnState == VpnState.IDLE) state.ipCountry else state.ipCountry
+                        val fi = if (flagCode.isNotBlank()) ir.v2rayng.compose.stickers.CountryFlags.byCode(flagCode) else -1
+                        if (fi >= 0) {
+                            StickerCharacter(
+                                ir.v2rayng.compose.stickers.CountryFlags.list[fi],
+                                sizeDp = 26.dp,
                             )
+                            Spacer(Modifier.width(6.dp))
                         }
+                        Text(
+                            text = if (state.myIp.isBlank()) {
+                                flagCode.ifBlank { S.MY_IP }
+                            } else {
+                                "${S.MY_IP}: ${state.myIp}${if (flagCode.isNotBlank()) " ($flagCode)" else ""}"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        androidx.compose.material3.TextButton(
+                            onClick = { vm.checkMyIp() },
+                        ) { Text(S.MY_IP, style = MaterialTheme.typography.labelMedium) }
                     }
                 }
                 1 -> {
