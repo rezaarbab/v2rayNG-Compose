@@ -207,8 +207,8 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), settings.upIcon, settings.upPack, settings.upColor, settings.upSpeed, { editZone.value = "up" }, settings.navStickers)
-                        TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), settings.downIcon, settings.downPack, settings.downColor, settings.downSpeed, { editZone.value = "down" }, settings.navStickers)
+                        TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), settings.upIcon, settings.upPack, settings.stickerStyle, settings.upColor, settings.upSpeed, { editZone.value = "up" }, settings.navStickers)
+                        TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), settings.downIcon, settings.downPack, settings.stickerStyle, settings.downColor, settings.downSpeed, { editZone.value = "down" }, settings.navStickers)
                     }
                     androidx.compose.material3.TextButton(
                         onClick = { vm.resetTotalTraffic() },
@@ -239,6 +239,7 @@ private fun RowScope.TrafficCard(
     accent: Color,
     iconIndex: Int,
     iconPack: Int,
+    fallbackStyle: Int,
     iconColor: Long,
     iconSpeed: Float,
     onIconHold: () -> Unit,
@@ -264,7 +265,7 @@ private fun RowScope.TrafficCard(
                 if (stickers && iconIndex >= 0) {
                     StickerCharacter(
                         sticker = tinted(
-                            V2Stickers.byPack(iconPack, iconIndex, stickerStyle, if (title == S.UPLOAD) 5 else 6),
+                            V2Stickers.byPack(iconPack, iconIndex, fallbackStyle, if (title == S.UPLOAD) 5 else 6),
                             iconColor,
                         ),
                         sizeDp = 30.dp,
