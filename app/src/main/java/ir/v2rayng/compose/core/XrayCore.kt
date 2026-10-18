@@ -322,9 +322,16 @@ fun buildXrayConfig(link: ProxyLink): String {
         .put("protocol", "tun")
         .put("settings", tunSettings)
 
+    val socksIn = JSONObject()
+        .put("tag", "socks-in")
+        .put("protocol", "socks")
+        .put("listen", "127.0.0.1")
+        .put("port", 10890)
+        .put("settings", JSONObject().put("udp", false))
+
     val config = JSONObject()
         .put("log", JSONObject().put("loglevel", "warning"))
-        .put("inbounds", JSONArray().put(tunIn))
+        .put("inbounds", JSONArray().put(tunIn).put(socksIn))
         .put(
             "outbounds",
             JSONArray()

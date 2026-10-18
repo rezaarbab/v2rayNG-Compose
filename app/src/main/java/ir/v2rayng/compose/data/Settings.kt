@@ -126,6 +126,7 @@ class SettingsStore(context: Context) {
                         host = o.optString("host"),
                         stickerIndex = o.optInt("stickerIndex", i),
                         country = o.optString("country", ""),
+                        pinned = o.optBoolean("pinned", false),
                         link = link.takeIf { it.isNotBlank() },
                     ),
                 )
@@ -146,6 +147,7 @@ class SettingsStore(context: Context) {
                     .put("host", s.host)
                     .put("stickerIndex", s.stickerIndex)
                     .put("country", s.country)
+                    .put("pinned", s.pinned)
                 if (s.link != null) o.put("link", s.link)
                 arr.put(o)
             }

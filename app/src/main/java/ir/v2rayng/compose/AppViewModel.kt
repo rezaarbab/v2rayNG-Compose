@@ -76,16 +76,18 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             val sel = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
                             if (sel?.link != null) {
                                 viewModelScope.launch {
-                                    val code = serverCountry(sel.host.substringBefore(":"))
-                                    if (code != null) {
-                                        applyFlag(code)
+                                    val res = ipCountryNow()
+                                    if (res != null) {
+                                        applyFlag(res.second)
                                         put { s ->
                                             s.copy(
-                                                servers = s.servers.map { if (it.id == sel.id) it.copy(country = code) else it },
-                                                ipCountry = code,
+                                                servers = s.servers.map { if (it.id == sel.id) it.copy(country = res.second) else it },
+                                                ipCountry = res.second,
+                                                myIp = res.first,
                                             )
                                         }
-                                        log("INFO", S.LOG_IP_OK.format(code))
+                                        store.saveServers(_state.value.servers, _state.value.selectedId)
+                                        log("INFO", "Exit IP: ${res.first} (${res.second})")
                                     } else {
                                         log("WARN", S.LOG_IP_FAIL)
                                     }
@@ -169,35 +171,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun checkMyIp() {
         viewModelScope.launch {
-            val res = withContext(Dispatchers.IO) {
-                try {
-                    val conn = java.net.URL("https://ipwho.is/").openConnection() as java.net.HttpURLConnection
-                    conn.connectTimeout = 4000
-                    conn.readTimeout = 4000
-                    val text = conn.inputStream.bufferedReader().use { it.readText() }
-                    val ip = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
-                    val code = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)?.uppercase()
-                    if (ip != null && code != null) ip to code else null
-                } catch (_: Exception) {
-                    try {
-                        val conn = java.net.URL("https://ipapi.co/json/").openConnection() as java.net.HttpURLConnection
-                        conn.connectTimeout = 4000
-                        conn.readTimeout = 4000
-                        val text = conn.inputStream.bufferedReader().use { it.readText() }
-                        val ip = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
-                        val code = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)?.uppercase()
-                        if (ip != null && code != null) ip to code else null
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
-            }
+            val res = ipCountryNow()
             if (res != null) {
                 put { s -> s.copy(myIp = res.first, ipCountry = res.second) }
-                if (_settings.value.autoFlag) {
+                if (_settings.value.autoFlag && _state.value.vpnState != VpnState.CONNECTED) {
                     applyFlag(res.second)
                 }
-                log("INFO", S.LOG_IP_OK.format(res.second))
+                log("INFO", "IP ${res.first} (${res.second})")
             } else {
                 log("WARN", S.LOG_IP_FAIL)
             }
@@ -457,28 +437,29 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private val countryCache = mutableMapOf<String, String>()
 
-    private suspend fun serverCountry(host: String): String? {
+    /**
+     * Returns (ip, countryCode). While a real tunnel is CONNECTED the request is
+     * sent through the local SOCKS inbound of the core, so it reports the EXIT
+     * ip/country of the server (Germany for a German exit), not the user's own IP.
+     */
+    private suspend fun ipCountryNow(): Pair<String, String>? {
+        val throughTunnel = _state.value.vpnState == VpnState.CONNECTED &&
+            _state.value.selected.link != null
         return withContext(Dispatchers.IO) {
-            countryCache[host]?.let { return@withContext it }
             try {
-                val ip = java.net.InetAddress.getByName(host).hostAddress ?: return@withContext null
-                val urls = listOf("https://ipwho.is/$ip", "https://ipapi.co/$ip/json/", "https://ipinfo.io/$ip/json")
-                for (u in urls) {
-                    try {
-                        val conn = java.net.URL(u).openConnection() as java.net.HttpURLConnection
-                        conn.connectTimeout = 3500
-                        conn.readTimeout = 3500
-                        val text = conn.inputStream.bufferedReader().use { it.readText() }
-                        val code = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"")
-                            .find(text)?.groupValues?.get(1)?.uppercase()
-                        if (code != null) {
-                            countryCache[host] = code
-                            return@withContext code
-                        }
-                    } catch (_: Exception) {
-                    }
-                }
-                null
+                val url = java.net.URL("https://ipwho.is/")
+                val conn = if (throughTunnel) {
+                    val socks = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", 10890))
+                    url.openConnection(socks)
+                } else {
+                    url.openConnection()
+                } as java.net.HttpURLConnection
+                conn.connectTimeout = 6000
+                conn.readTimeout = 6000
+                val text = conn.inputStream.bufferedReader().use { it.readText() }
+                val ip = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
+                val code = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)?.uppercase()
+                if (ip != null && code != null) ip to code else null
             } catch (_: Exception) {
                 null
             }
@@ -506,17 +487,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
         log("INFO", S.LOG_ADDED.format(shownName))
         store.saveServers(_state.value.servers, _state.value.selectedId)
-        viewModelScope.launch {
-            val code = serverCountry(link.address)
-            if (code != null) {
-                put { s ->
-                    s.copy(
-                        servers = s.servers.map { if (it.id == newId) it.copy(country = code) else it },
-                    )
-                }
-                store.saveServers(_state.value.servers, _state.value.selectedId)
-            }
-        }
     }
 
     fun resetTraffic() {
@@ -532,6 +502,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private var appUp = 0L
     private var appDown = 0L
+
+    fun togglePin(id: String) {
+        put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(pinned = !it.pinned) else it }) }
+        store.saveServers(_state.value.servers, _state.value.selectedId)
+    }
 
     fun resetTotalTraffic() {
         appUp = 0

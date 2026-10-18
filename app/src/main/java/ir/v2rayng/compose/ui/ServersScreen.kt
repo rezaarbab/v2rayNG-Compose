@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -91,7 +92,11 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(state.servers, key = { it.id }) { srv ->
+                val sorted = state.servers.sortedWith(
+                    compareByDescending<ir.v2rayng.compose.data.ServerProfile> { it.pinned }
+                        .thenBy { state.servers.indexOfFirst { x -> x.id == it.id } },
+                )
+                items(sorted, key = { it.id }) { srv ->
                     val avatar = if (settings.flagAvatars && srv.country.isNotBlank()) {
                         val fi = CountryFlags.byCode(srv.country)
                         if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byIndex(settings.stickerStyle, srv.stickerIndex)
@@ -104,6 +109,7 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                         selected = srv.id == state.selectedId,
                         onPick = { vm.select(srv.id) },
                         onIconHold = { editSrv = srv.id },
+                        onPin = { vm.togglePin(srv.id) },
                     )
                 }
             }
@@ -154,6 +160,7 @@ private fun ServerRow(
     selected: Boolean,
     onPick: () -> Unit,
     onIconHold: () -> Unit,
+    onPin: () -> Unit,
 ) {
     val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
     Card(
@@ -200,6 +207,13 @@ private fun ServerRow(
                 }
             }
             PingChip(profile.ping)
+            IconButton(onClick = onPin) {
+                Icon(
+                    Icons.Filled.Star,
+                    contentDescription = "Pin",
+                    tint = if (profile.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                )
+            }
             if (selected) {
                 Icon(
                     Icons.Filled.Check,
