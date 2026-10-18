@@ -76,8 +76,18 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
 
     val srvId = if (zone.startsWith("srv:")) zone.removePrefix("srv:") else null
 
-    val pickStyle = if (isWall) settings.wallpaperStyle else settings.stickerStyle
-    val set = V2Stickers.setFor(pickStyle)
+    val slotPack = when {
+        isWall -> settings.wallpaperStyle
+        isMain -> settings.stickerStyle
+        zone.startsWith("nav:") -> parseList(settings.navPacks, listOf(-1, -1, -1, -1, -1)).getOrNull(slot) ?: -1
+        zone == "up" -> settings.upPack
+        zone == "down" -> settings.downPack
+        srvId != null -> vm.srvPack(srvId)
+        zone.startsWith("route:") -> parseList(settings.routePacks, listOf(-1, -1, -1)).getOrNull(slot) ?: -1
+        else -> -1
+    }
+    var browsePack by remember(zone) { mutableStateOf(if (slotPack in 0..3) slotPack else (if (isWall) settings.wallpaperStyle else settings.stickerStyle)) }
+    val set = V2Stickers.setFor(browsePack)
 
     val current = when {
         isWall -> settings.wallpaperIndex
@@ -89,6 +99,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
         zone.startsWith("route:") -> parseList(settings.routeIcons, listOf(0, 1, 2)).getOrNull(slot) ?: slot
         else -> -1
     }
+    val currentSelected = if (slotPack == browsePack || isMain || isWall) current else -1
 
     fun pick(i: Int) {
         if (isMain) {
@@ -100,11 +111,26 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
         when {
             isWall -> vm.setWallpaper(i)
             isMain -> vm.setMainIndex(i)
-            zone.startsWith("nav:") -> vm.setNavIcon(slot, i)
-            zone == "up" -> vm.setUpIcon(i)
-            zone == "down" -> vm.setDownIcon(i)
-            srvId != null -> vm.setServerIcon(srvId, i)
-            zone.startsWith("route:") -> vm.setRouteIcon(slot, i)
+            zone.startsWith("nav:") -> vm.setNavIcon(slot, i, browsePack)
+            zone == "up" -> vm.setUpIcon(i, browsePack)
+            zone == "down" -> vm.setDownIcon(i, browsePack)
+            srvId != null -> vm.setServerIcon(srvId, i, browsePack)
+            zone.startsWith("route:") -> vm.setRouteIcon(slot, i, browsePack)
+        }
+    }
+
+    fun resetDefault() {
+        when {
+            isWall -> vm.setWallpaperStyle(0)
+            isMain -> {
+                vm.setMainIndex(-1)
+                vm.setStickerStyle(0)
+            }
+            zone.startsWith("nav:") -> vm.setNavIcon(slot, slot, -1)
+            zone == "up" -> vm.setUpIcon(5, -1)
+            zone == "down" -> vm.setDownIcon(6, -1)
+            srvId != null -> vm.setServerIcon(srvId, vm.srvStickerIndex(srvId), -1)
+            zone.startsWith("route:") -> vm.setRouteIcon(slot, slot, -1)
         }
     }
 
@@ -168,6 +194,15 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                     }
                 }
 
+                Text(S.PICK_PACK, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    MiniChip(S.STYLE_BLOB, browsePack == 0, { browsePack = 0 })
+                    MiniChip(S.STYLE_TOY, browsePack == 1, { browsePack = 1 })
+                    MiniChip(S.STYLE_FLAG, browsePack == 2, { browsePack = 2 })
+                    MiniChip(S.MINE, browsePack == 3, { browsePack = 3 })
+                    MiniChip(S.DEF, false, { resetDefault(); browsePack = if (isWall) settings.wallpaperStyle else settings.stickerStyle })
+                }
+
                 Text(
                     S.PICK_STICKER.format(set.size),
                     style = MaterialTheme.typography.labelMedium,
@@ -187,7 +222,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                     itemsIndexed(shown) { _, entry ->
                         val i = entry.index
                         val sticker = entry.value
-                        val selected = current == i
+                        val selected = currentSelected == i
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier

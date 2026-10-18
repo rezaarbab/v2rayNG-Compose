@@ -202,14 +202,18 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun setNavOrder(order: List<Int>) = setSettings { it.copy(navOrder = packList(order)) }
 
-    fun setNavIcon(slot: Int, idx: Int) = setSettings { s ->
+    fun setNavIcon(slot: Int, idx: Int, pack: Int = -1) = setSettings { s ->
         val cur = parseList(s.navIcons, (0..4).toList()).toMutableList()
+        while (cur.size < 5) cur.add(cur.size)
         cur[slot.coerceIn(0, cur.size - 1)] = idx
-        s.copy(navIcons = packList(cur))
+        val packs = parseList(s.navPacks, listOf(-1, -1, -1, -1, -1)).toMutableList()
+        while (packs.size < 5) packs.add(-1)
+        packs[slot.coerceIn(0, packs.size - 1)] = pack
+        s.copy(navIcons = packList(cur), navPacks = packList(packs))
     }
 
-    fun setUpIcon(i: Int) = setSettings { it.copy(upIcon = i) }
-    fun setDownIcon(i: Int) = setSettings { it.copy(downIcon = i) }
+    fun setUpIcon(i: Int, pack: Int = -1) = setSettings { it.copy(upIcon = i, upPack = pack) }
+    fun setDownIcon(i: Int, pack: Int = -1) = setSettings { it.copy(downIcon = i, downPack = pack) }
     fun setUpColor(v: Long) = setSettings { it.copy(upColor = v) }
     fun setDownColor(v: Long) = setSettings { it.copy(downColor = v) }
 
@@ -245,15 +249,23 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun srvStickerIndex(id: String): Int =
         _state.value.servers.firstOrNull { it.id == id }?.stickerIndex ?: 0
 
-    fun setServerIcon(id: String, idx: Int) {
-        put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(stickerIndex = idx) else it }) }
+    fun setServerIcon(id: String, idx: Int, pack: Int = -1) {
+        put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(stickerIndex = idx, pack = pack) else it }) }
+        store.saveServers(_state.value.servers, _state.value.selectedId)
     }
 
-    fun setRouteIcon(slot: Int, idx: Int) = setSettings { s ->
+    fun setRouteIcon(slot: Int, idx: Int, pack: Int = -1) = setSettings { s ->
         val cur = parseList(s.routeIcons, listOf(0, 1, 2)).toMutableList()
+        while (cur.size < 3) cur.add(cur.size)
         cur[slot.coerceIn(0, 2)] = idx
-        s.copy(routeIcons = packList(cur))
+        val packs = parseList(s.routePacks, listOf(-1, -1, -1)).toMutableList()
+        while (packs.size < 3) packs.add(-1)
+        packs[slot.coerceIn(0, 2)] = pack
+        s.copy(routeIcons = packList(cur), routePacks = packList(packs))
     }
+
+    fun srvPack(id: String): Int =
+        _state.value.servers.firstOrNull { it.id == id }?.pack ?: -1
 
     fun resetSettings() = setSettings { Settings() }
 
@@ -464,7 +476,19 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 conn.readTimeout = 6000
                 val text = conn.inputStream.bufferedReader().use { it.readText() }
                 val ip = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
-                val code = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)?.uppercase()
+                var code = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)?.uppercase()
+                if (ip != null && code != null) {
+                    // cross-check with a second database to avoid single-source mistakes
+                    try {
+                        val c2 = java.net.URL("https://ipapi.co/$ip/json/").openConnection() as java.net.HttpURLConnection
+                        c2.connectTimeout = 4000
+                        c2.readTimeout = 4000
+                        val t2 = c2.inputStream.bufferedReader().use { it.readText() }
+                        val code2 = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(t2)?.groupValues?.get(1)?.uppercase()
+                        if (code2 != null && code2 != code) code = code2
+                    } catch (_: Exception) {
+                    }
+                }
                 if (ip != null && code != null) ip to code else null
             } catch (_: Exception) {
                 null

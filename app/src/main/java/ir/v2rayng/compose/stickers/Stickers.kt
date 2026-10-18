@@ -286,6 +286,15 @@ object V2Stickers {
         val n = set.size
         return set[((i % n) + n) % n]
     }
+
+    /** pack -1 = follow the fallback style with fallbackIndex (legacy/default slots). */
+    fun byPack(pack: Int, index: Int, fallbackStyle: Int, fallbackIndex: Int): Sticker {
+        return if (pack in 0..3) {
+            byIndex(pack, index)
+        } else {
+            byIndex(fallbackStyle, fallbackIndex)
+        }
+    }
 }
 
 fun tinted(sticker: Sticker, color: Long): Sticker {

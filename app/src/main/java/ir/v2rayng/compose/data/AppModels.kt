@@ -22,6 +22,7 @@ data class ServerProfile(
     val up: Long = 0L,
     val down: Long = 0L,
     val pinned: Boolean = false,
+    val pack: Int = -1,
 )
 
 data class TrafficStat(

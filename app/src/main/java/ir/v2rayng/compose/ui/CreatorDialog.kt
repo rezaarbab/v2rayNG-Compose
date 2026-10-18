@@ -61,6 +61,7 @@ fun CreatorDialog(vm: AppViewModel, onDismiss: () -> Unit) {
     var vertical by remember { mutableStateOf(false) }
     var emblem by remember { mutableStateOf(0) }
     var emblemColor by remember { mutableStateOf(0xFFF7CE1BL) }
+    var emblemX by remember { mutableStateOf(0.5f) }
     var speed by remember { mutableStateOf(1f) }
     var size by remember { mutableStateOf(190f) }
     var editingId by remember { mutableStateOf<String?>(null) }
@@ -69,7 +70,9 @@ fun CreatorDialog(vm: AppViewModel, onDismiss: () -> Unit) {
         "Drop", "Triangle", "Cloud", "Ball", "Capsule", "Bean", "Fire", "Star",
         "Heart", "Bolt", "Moon", "Cup", "Rocket", "Balloon", "Shroom", "Gem",
     )
-    val emblemNames = listOf("None", "Circle", "Star", "Crescent", "Cross", "Diamond")
+    val emblemNames = listOf("None", "Circle", "Star", "Crescent", "Cross", "Diamond", "Sun")
+    var showExitConfirm by remember { mutableStateOf(false) }
+    var savedHash by remember { mutableStateOf(Int.MIN_VALUE) }
 
     fun currentDef(): CustomStickerDef = CustomStickerDef(
         id = editingId ?: "c${System.currentTimeMillis()}",
@@ -83,11 +86,16 @@ fun CreatorDialog(vm: AppViewModel, onDismiss: () -> Unit) {
         flagVertical = vertical,
         emblem = emblem,
         emblemColor = emblemColor,
+        emblemX = emblemX,
         speed = speed,
         size = size.toInt(),
     )
 
-    Dialog(onDismissRequest = onDismiss) {
+    fun previewDef(): CustomStickerDef = currentDef().copy(id = editingId ?: "preview")
+
+    fun isDirty(): Boolean = previewDef().hashCode() != savedHash
+
+    Dialog(onDismissRequest = { if (isDirty()) showExitConfirm = true else onDismiss() }) {
         Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) {
             Column(
                 Modifier
@@ -179,6 +187,11 @@ fun CreatorDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                             emblemNames.forEachIndexed { i, n -> SelectChip(n, emblem == i, { emblem = i }) }
                         }
                         if (emblem > 0) {
+                            Text(S.CREATOR_EMBLEM_POS, style = MaterialTheme.typography.labelMedium)
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                SelectChip(S.CREATOR_POS_CENTER, emblemX == 0.5f, { emblemX = 0.5f })
+                                SelectChip(S.CREATOR_POS_LEFT, emblemX == 0.35f, { emblemX = 0.35f })
+                            }
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 CreatorPalette.forEach { c -> ColorDot(Color(c), "", emblemColor == c) { emblemColor = c } }
                             }
@@ -197,6 +210,7 @@ fun CreatorDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                             val def = currentDef().copy(id = editingId ?: "c${System.currentTimeMillis()}")
                             CustomStickers.upsert(def)
                             editingId = def.id
+                            savedHash = previewDef().hashCode()
                         },
                     ) { Text(S.CREATOR_SAVE) }
                     TextButton(onClick = onDismiss) { Text(S.CLOSE) }
@@ -214,17 +228,46 @@ fun CreatorDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                                     name = def.name; kind = def.kind; color = def.color
                                     blobA = def.blobA; blobB = def.blobB; toyShape = def.toyShape
                                     bands = def.bandColors(); vertical = def.flagVertical
-                                    emblem = def.emblem; emblemColor = def.emblemColor
+                                    emblem = def.emblem; emblemColor = def.emblemColor; emblemX = def.emblemX
                                     speed = def.speed; size = def.size.toFloat(); editingId = def.id
+                                    savedHash = previewDef().hashCode()
                                 }
                                 .padding(6.dp),
-                        ) {
+                        )                          {
                             StickerCharacter(def.toSticker(), sizeDp = 40.dp)
+                            Text(def.name, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                             TextButton(onClick = { CustomStickers.delete(def.id) }) { Text("Del", style = MaterialTheme.typography.labelSmall) }
                         }
                     }
                 }
             }
         }
+    }
+
+    if (showExitConfirm) {
+        AlertDialog(
+            onDismissRequest = { showExitConfirm = false },
+            title = { Text("Unsaved changes") },
+            text = { Text("Do you want to save your sticker before closing?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val def = currentDef().copy(id = editingId ?: "c${System.currentTimeMillis()}")
+                        CustomStickers.upsert(def)
+                        editingId = def.id
+                        showExitConfirm = false
+                        onDismiss()
+                    },
+                ) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showExitConfirm = false
+                        onDismiss()
+                    },
+                ) { Text("Discard") }
+            },
+        )
     }
 }

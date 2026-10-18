@@ -32,6 +32,10 @@ data class Settings(
     val navIcons: String = "0,1,2,3,4",
     val upIcon: Int = 5,
     val downIcon: Int = 6,
+    val upPack: Int = -1,
+    val downPack: Int = -1,
+    val navPacks: String = "-1,-1,-1,-1,-1",
+    val routePacks: String = "-1,-1,-1",
     val upColor: Long = -1L,
     val downColor: Long = -1L,
     val upSpeed: Float = 1f,
@@ -95,6 +99,10 @@ class SettingsStore(context: Context) {
         navIcons = sp.getString("navIcons", "0,1,2,3,4")!!,
         upIcon = sp.getInt("upIcon", 5),
         downIcon = sp.getInt("downIcon", 6),
+        upPack = sp.getInt("upPack", -1),
+        downPack = sp.getInt("downPack", -1),
+        navPacks = sp.getString("navPacks", "-1,-1,-1,-1,-1")!!,
+        routePacks = sp.getString("routePacks", "-1,-1,-1")!!,
         upColor = java.lang.Long.valueOf(sp.getString("upColor", "-1")!!),
         downColor = java.lang.Long.valueOf(sp.getString("downColor", "-1")!!),
         upSpeed = sp.getFloat("upSpeed", 1f),
@@ -127,6 +135,7 @@ class SettingsStore(context: Context) {
                         stickerIndex = o.optInt("stickerIndex", i),
                         country = o.optString("country", ""),
                         pinned = o.optBoolean("pinned", false),
+                        pack = o.optInt("pack", -1),
                         link = link.takeIf { it.isNotBlank() },
                     ),
                 )
@@ -148,6 +157,7 @@ class SettingsStore(context: Context) {
                     .put("stickerIndex", s.stickerIndex)
                     .put("country", s.country)
                     .put("pinned", s.pinned)
+                    .put("pack", s.pack)
                 if (s.link != null) o.put("link", s.link)
                 arr.put(o)
             }
@@ -196,6 +206,10 @@ class SettingsStore(context: Context) {
             .putString("navIcons", s.navIcons)
             .putInt("upIcon", s.upIcon)
             .putInt("downIcon", s.downIcon)
+            .putInt("upPack", s.upPack)
+            .putInt("downPack", s.downPack)
+            .putString("navPacks", s.navPacks)
+            .putString("routePacks", s.routePacks)
             .putString("upColor", s.upColor.toString())
             .putString("downColor", s.downColor.toString())
             .putFloat("upSpeed", s.upSpeed)

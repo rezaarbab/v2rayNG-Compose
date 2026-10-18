@@ -17,6 +17,7 @@ data class CustomStickerDef(
     val flagVertical: Boolean = false,
     val emblem: Int = 0,
     val emblemColor: Long = 0xFFF7CE1B,
+    val emblemX: Float = 0.5f,
     val speed: Float = 1f,
     val size: Int = 190,
 ) {
@@ -58,7 +59,7 @@ data class CustomStickerDef(
         }
         if (emblem > 0) {
             val hole = Color(colors[colors.size / 2])
-            bands.add(FlagBand(Color(emblemColor), emblemOps(emblem, hole)))
+            bands.add(FlagBand(Color(emblemColor), emblemOps(emblem, emblemX, hole)))
         }
         return bands
     }
@@ -87,26 +88,53 @@ internal fun scaledMoon(cx: Float, cy: Float, s: Float): List<Offset> {
     return src.map { Offset(cx + (it.x - 0.5f) * s, cy + (it.y - 0.5f) * s) }
 }
 
-internal fun emblemOps(kind: Int, hole: Color): List<ToyOp> = when (kind) {
-    1 -> listOf(ToyCircle(0.5f, 0.5f, 0.17f))
-    2 -> listOf(ToyPoly(chaikin(starPts(0.5f, 0.5f, 0.22f), 1)))
-    3 -> listOf(ToyPoly(chaikin(scaledMoon(0.5f, 0.5f, 0.5f), 1)))
+internal fun emblemOps(kind: Int, cx: Float, hole: Color): List<ToyOp> = when (kind) {
+    1 -> listOf(ToyCircle(cx, 0.5f, 0.17f))
+    2 -> listOf(ToyPoly(chaikin(starPts(cx, 0.5f, 0.22f), 1)))
+    3 -> listOf(ToyPoly(chaikin(scaledMoon(cx, 0.5f, 0.5f), 1)))
     4 -> listOf(
-        ToyPoly(straightRect(0.44f, 0.24f, 0.56f, 0.76f)),
-        ToyPoly(straightRect(0.30f, 0.44f, 0.70f, 0.56f)),
+        ToyPoly(straightRect(cx - 0.06f, 0.24f, cx + 0.06f, 0.76f)),
+        ToyPoly(straightRect(cx - 0.20f, 0.44f, cx + 0.20f, 0.56f)),
     )
     5 -> listOf(
         ToyPoly(
             chaikin(
                 listOf(
-                    Offset(0.5f, 0.26f), Offset(0.61f, 0.29f), Offset(0.68f, 0.38f),
-                    Offset(0.57f, 0.51f), Offset(0.5f, 0.74f), Offset(0.43f, 0.51f),
-                    Offset(0.32f, 0.38f), Offset(0.39f, 0.29f),
+                    Offset(cx, 0.26f), Offset(cx + 0.11f, 0.29f), Offset(cx + 0.18f, 0.38f),
+                    Offset(cx + 0.07f, 0.51f), Offset(cx, 0.74f), Offset(cx - 0.07f, 0.51f),
+                    Offset(cx - 0.18f, 0.38f), Offset(cx - 0.11f, 0.29f),
                 ),
                 1,
             ),
         ),
     )
+    6 -> {
+        // sun with rays: central disc + 8 triangular rays
+        val ops = ArrayList<ToyOp>()
+        ops.add(ToyCircle(cx, 0.5f, 0.13f))
+        for (i in 0 until 8) {
+            val ang = Math.PI * i / 4.0
+            val dx = Math.cos(ang).toFloat()
+            val dy = Math.sin(ang).toFloat()
+            val r0 = 0.16f
+            val r1 = 0.26f
+            val px = cx + dx * r1
+            val py = 0.5f + dy * r1
+            val bx = cx + dx * r0
+            val by = 0.5f + dy * r0
+            val w = 0.045f
+            ops.add(
+                ToyPoly(
+                    listOf(
+                        Offset(bx - dy * w, by - dx * w),
+                        Offset(bx + dy * w, by + dx * w),
+                        Offset(px, py),
+                    ),
+                ),
+            )
+        }
+        ops
+    }
     else -> emptyList()
 }
 
@@ -177,6 +205,7 @@ object CustomStickers {
                     .put("flagVertical", d.flagVertical)
                     .put("emblem", d.emblem)
                     .put("emblemColor", d.emblemColor)
+                    .put("emblemX", d.emblemX.toDouble())
                     .put("speed", d.speed.toDouble())
                     .put("size", d.size),
             )
@@ -204,6 +233,7 @@ object CustomStickers {
                         flagVertical = o.optBoolean("flagVertical", false),
                         emblem = o.optInt("emblem", 0),
                         emblemColor = o.optLong("emblemColor", 0xFFF7CE1B),
+                        emblemX = o.optDouble("emblemX", 0.5).toFloat(),
                         speed = o.optDouble("speed", 1.0).toFloat(),
                         size = o.optInt("size", 190),
                     ),

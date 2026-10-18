@@ -160,11 +160,17 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                                 )
                             ) {
                                 if (settings.navStickers) {
-                                    val s = V2Stickers.byIndex(settings.stickerStyle, navIcons.getOrNull(real) ?: real)
-                                    val tint = parseLongList(settings.navColors, listOf(-1L, -1L, -1L, -1L, -1L)).getOrNull(real) ?: -1L
                                     val spd = parseFloatList(settings.navSpeeds, listOf(1f, 1f, 1f, 1f, 1f)).getOrNull(real) ?: 1f
+                                    val navPacks = parseList(settings.navPacks, listOf(-1, -1, -1, -1, -1))
+                                    val st = V2Stickers.byPack(
+                                        navPacks.getOrNull(real) ?: -1,
+                                        navIcons.getOrNull(real) ?: real,
+                                        settings.stickerStyle,
+                                        real,
+                                    )
+                                    val tint = parseLongList(settings.navColors, listOf(-1L, -1L, -1L, -1L, -1L)).getOrNull(real) ?: -1L
                                     StickerCharacter(
-                                        sticker = tinted(s, tint),
+                                        sticker = tinted(st, tint),
                                         mood = if (tab == pos) StickerMood.HAPPY else StickerMood.NORMAL,
                                         sizeDp = 26.dp,
                                         speedScale = spd,

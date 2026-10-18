@@ -99,9 +99,9 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 items(sorted, key = { it.id }) { srv ->
                     val avatar = if (settings.flagAvatars && srv.country.isNotBlank()) {
                         val fi = CountryFlags.byCode(srv.country)
-                        if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byIndex(settings.stickerStyle, srv.stickerIndex)
+                        if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byPack(srv.pack, srv.stickerIndex, settings.stickerStyle, srv.stickerIndex)
                     } else {
-                        V2Stickers.byIndex(settings.stickerStyle, srv.stickerIndex)
+                        V2Stickers.byPack(srv.pack, srv.stickerIndex, settings.stickerStyle, srv.stickerIndex)
                     }
                     ServerRow(
                         profile = srv,
