@@ -44,6 +44,7 @@ import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.parseFloatList
 import ir.v2rayng.compose.data.parseLongList
 import ir.v2rayng.compose.data.parseList
+import ir.v2rayng.compose.stickers.CustomStickers
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.StickerMood
 import ir.v2rayng.compose.stickers.V2Stickers
