@@ -264,6 +264,44 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun srvPack(id: String): Int =
         _state.value.servers.firstOrNull { it.id == id }?.pack ?: -1
 
+    /** Def on a server: back to the default sticker AND re-detect its country flag. */
+    fun resetServerIcon(id: String) {
+        put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(pack = -1) else it }) }
+        store.saveServers(_state.value.servers, _state.value.selectedId)
+        log("INFO", "Server sticker reset - detecting country...")
+        viewModelScope.launch {
+            val connectedSel = _state.value.vpnState == VpnState.CONNECTED && _state.value.selectedId == id
+            val host = _state.value.servers.firstOrNull { it.id == id }?.host?.substringBefore(":")
+            val code = if (connectedSel) {
+                ipCountryNow()?.second
+            } else {
+                if (host.isNullOrBlank()) null else dnsCountry(host)
+            }
+            if (code != null) {
+                put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(country = code) else it }) }
+                if (connectedSel) {
+                    applyFlag(code)
+                }
+                log("INFO", "Server country: $code")
+            } else {
+                log("WARN", S.LOG_IP_FAIL)
+            }
+        }
+    }
+
+    private suspend fun dnsCountry(host: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val ip = java.net.InetAddress.getByName(host).hostAddress ?: return@withContext null
+            val conn = java.net.URL("https://ipwho.is/$ip").openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            val text = conn.inputStream.bufferedReader().use { it.readText() }
+            Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)?.uppercase()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     fun resetSettings() = setSettings { Settings() }
 
     fun setAntiFilter(v: Boolean) {

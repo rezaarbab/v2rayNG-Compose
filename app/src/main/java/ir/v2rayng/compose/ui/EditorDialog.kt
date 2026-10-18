@@ -129,7 +129,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
             zone.startsWith("nav:") -> vm.setNavIcon(slot, slot, -1)
             zone == "up" -> vm.setUpIcon(5, -1)
             zone == "down" -> vm.setDownIcon(6, -1)
-            srvId != null -> vm.setServerIcon(srvId, vm.srvStickerIndex(srvId), -1)
+            srvId != null -> vm.resetServerIcon(srvId)
             zone.startsWith("route:") -> vm.setRouteIcon(slot, slot, -1)
         }
     }
