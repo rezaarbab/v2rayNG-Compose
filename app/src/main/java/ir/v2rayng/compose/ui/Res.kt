@@ -94,6 +94,8 @@ object S {
     const val NOTIF_STICKER = "Sticker"
     const val NOTIF_LOCK = "Lock icon"
     const val NOTIF_COLOR = "Notification sticker color"
+    const val FLAG_AVATARS = "Server flags"
+    const val FLAG_AVATARS_SUB = "Show each server's real-IP country flag sticker"
     const val SEARCH_STICKERS = "Search"
 
     const val EDITOR_MAIN = "Customize main sticker"

@@ -134,7 +134,7 @@ private fun parseVlessLike(uri: String, kind: LinkKind): ProxyLink? {
     val at = main.indexOf('@')
     if (at <= 0) return null
     val cred = main.substring(0, at).trim()
-    val hp = hostPortOf(main, at) ?: return null
+    val hp = hostPortOf(main, at + 1) ?: return null
     val params = paramsOf(main)
     val security = params["security"]?.takeIf { it.isNotBlank() } ?: if (kind == LinkKind.TROJAN) "tls" else "none"
     return ProxyLink(

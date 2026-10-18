@@ -92,7 +92,7 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(state.servers, key = { it.id }) { srv ->
-                    val avatar = if (srv.country.isNotBlank()) {
+                    val avatar = if (settings.flagAvatars && srv.country.isNotBlank()) {
                         val fi = CountryFlags.byCode(srv.country)
                         if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byIndex(settings.stickerStyle, srv.stickerIndex)
                     } else {

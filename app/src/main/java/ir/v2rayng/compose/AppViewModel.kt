@@ -164,6 +164,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setShowNotification(v: Boolean) = setSettings { it.copy(showNotification = v) }
     fun setNotifSticker(v: Boolean) = setSettings { it.copy(notifSticker = v) }
     fun setNotifColor(v: Long) = setSettings { it.copy(notifColor = v) }
+    fun setFlagAvatars(v: Boolean) = setSettings { it.copy(flagAvatars = v) }
 
     fun resetAllServerTraffic() {
         put { s -> s.copy(servers = s.servers.map { it.copy(up = 0, down = 0) }) }

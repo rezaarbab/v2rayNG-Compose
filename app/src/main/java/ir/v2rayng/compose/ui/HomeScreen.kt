@@ -169,7 +169,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
                         ) {
-                            val selAvatar = if (sel.country.isNotBlank()) {
+                            val selAvatar = if (settings.flagAvatars && sel.country.isNotBlank()) {
                                 val fi = CountryFlags.byCode(sel.country)
                                 if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
                             } else {

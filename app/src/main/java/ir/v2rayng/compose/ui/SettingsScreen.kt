@@ -153,6 +153,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     }
                 }
 
+                ToggleRow(S.FLAG_AVATARS, S.FLAG_AVATARS_SUB, settings.flagAvatars) { vm.setFlagAvatars(it) }
                 ToggleRow(S.FOLLOW_FINGER, S.FOLLOW_SUB, settings.followFinger) { vm.setFollowFinger(it) }
             }
         }
