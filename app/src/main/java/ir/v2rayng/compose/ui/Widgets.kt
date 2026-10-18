@@ -29,6 +29,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ir.v2rayng.compose.data.StickerFx
+import ir.v2rayng.compose.data.isDefault
 import ir.v2rayng.compose.data.VpnState
 
 private fun statusColor(s: VpnState): Color = when (s) {
