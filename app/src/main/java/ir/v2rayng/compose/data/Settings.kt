@@ -20,6 +20,8 @@ data class Settings(
     val animate: Boolean = true,
     val stateMotion: Boolean = true,
     val showNotification: Boolean = true,
+    val notifSticker: Boolean = true,
+    val notifColor: Long = -1L,
     val speed: Float = 1f,
     val bgSpeed: Float = 1f,
     val navStickers: Boolean = true,
@@ -79,6 +81,8 @@ class SettingsStore(context: Context) {
         animate = sp.getBoolean("animate", true),
         stateMotion = sp.getBoolean("stateMotion", true),
         showNotification = sp.getBoolean("showNotification", true),
+        notifSticker = sp.getBoolean("notifSticker", true),
+        notifColor = java.lang.Long.valueOf(sp.getString("notifColor", "-1")!!),
         speed = sp.getFloat("speed", 1f),
         bgSpeed = sp.getFloat("bgSpeed", 1f),
         navStickers = sp.getBoolean("navStickers", true),
@@ -168,6 +172,8 @@ class SettingsStore(context: Context) {
             .putBoolean("animate", s.animate)
             .putBoolean("stateMotion", s.stateMotion)
             .putBoolean("showNotification", s.showNotification)
+            .putBoolean("notifSticker", s.notifSticker)
+            .putString("notifColor", s.notifColor.toString())
             .putFloat("speed", s.speed)
             .putFloat("bgSpeed", s.bgSpeed)
             .putBoolean("navStickers", s.navStickers)

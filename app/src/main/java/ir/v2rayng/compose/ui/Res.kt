@@ -90,6 +90,10 @@ object S {
     const val STATE_MOTION_SUB = "Sticker reacts while connecting / connected / on error"
     const val NOTIF_TITLE = "Sticker notification"
     const val NOTIF_SUB = "Your sticker shown at the phone notification shade"
+    const val NOTIF_STYLE = "Notification look"
+    const val NOTIF_STICKER = "Sticker"
+    const val NOTIF_LOCK = "Lock icon"
+    const val NOTIF_COLOR = "Notification sticker color"
     const val SEARCH_STICKERS = "Search"
 
     const val EDITOR_MAIN = "Customize main sticker"

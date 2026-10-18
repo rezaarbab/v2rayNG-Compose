@@ -129,14 +129,19 @@ class XrayVpnService : VpnService() {
         }
     }
 
-    private fun stickerBitmap(colorHex: Long, dark: Boolean, show: Boolean): Bitmap? {
-        if (!show) return null
+    private fun stickerBitmap(settings: ir.v2rayng.compose.data.Settings): Bitmap? {
+        if (!settings.notifSticker) return null
         val size = 256
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         paint.style = Paint.Style.FILL
-        paint.color = if (colorHex >= 0) colorHex.toInt() else if (dark) 0xFF7FD8E8.toInt() else 0xFF2C5BD6.toInt()
+        paint.color = when {
+            settings.notifColor >= 0 -> settings.notifColor.toInt()
+            settings.mainColor >= 0 -> settings.mainColor.toInt()
+            settings.dark -> 0xFF7FD8E8.toInt()
+            else -> 0xFF2C5BD6.toInt()
+        }
         c.drawCircle(size / 2f, size / 2f, size * 0.34f, paint)
         paint.color = 0x2EFFFFFF.toInt()
         c.drawCircle(size * 0.40f, size * 0.36f, size * 0.11f, paint)
@@ -165,11 +170,7 @@ class XrayVpnService : VpnService() {
             manager?.createNotificationChannel(channel)
         }
         val settings = SettingsStore(applicationContext).load()
-        val big = stickerBitmap(
-            colorHex = settings.mainColor,
-            dark = settings.dark,
-            show = settings.showNotification,
-        )
+        val big = stickerBitmap(settings)
         val builder = NotificationCompat.Builder(this, "blob_vpn")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentTitle("Blob")

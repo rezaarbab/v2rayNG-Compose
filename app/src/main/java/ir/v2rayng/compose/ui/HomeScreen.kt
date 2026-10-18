@@ -93,10 +93,13 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
         proceedAfterNotif()
     }
 
-    val mainSticker = if (settings.mainIndex >= 0) {
-        V2Stickers.byIndex(settings.stickerStyle, settings.mainIndex)
-    } else {
-        V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
+    val mainSticker = when {
+        settings.mainIndex >= 0 -> V2Stickers.byIndex(settings.stickerStyle, settings.mainIndex)
+        settings.stickerStyle == 2 && state.ipCountry.isNotBlank() -> {
+            val fi = CountryFlags.byCode(state.ipCountry)
+            if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byIndex(2, sel.stickerIndex)
+        }
+        else -> V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
     }
 
     val order = parseList(settings.homeOrder, listOf(0, 1, 2, 3)).take(4)

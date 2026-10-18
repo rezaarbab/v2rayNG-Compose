@@ -162,6 +162,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setAnimate(v: Boolean) = setSettings { it.copy(animate = v) }
     fun setStateMotion(v: Boolean) = setSettings { it.copy(stateMotion = v) }
     fun setShowNotification(v: Boolean) = setSettings { it.copy(showNotification = v) }
+    fun setNotifSticker(v: Boolean) = setSettings { it.copy(notifSticker = v) }
+    fun setNotifColor(v: Long) = setSettings { it.copy(notifColor = v) }
+
+    fun resetAllServerTraffic() {
+        put { s -> s.copy(servers = s.servers.map { it.copy(up = 0, down = 0) }) }
+        ir.v2rayng.compose.core.XrayBridge.requestCounterReset()
+        log("INFO", "All server traffic reset")
+    }
     fun setSpeed(v: Float) = setSettings { it.copy(speed = v) }
     fun setBgSpeed(v: Float) = setSettings { it.copy(bgSpeed = v) }
     fun setNavStickers(v: Boolean) = setSettings { it.copy(navStickers = v) }

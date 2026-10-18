@@ -67,6 +67,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var moveMenu by remember { mutableStateOf(false) }
     var moveHome by remember { mutableStateOf(false) }
     var showAppPicker by remember { mutableStateOf(false) }
+    var showNotifHex by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadApps(context) }
 
@@ -131,6 +132,27 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
 
                 ToggleRow(S.STATE_MOTION, S.STATE_MOTION_SUB, settings.stateMotion) { vm.setStateMotion(it) }
                 ToggleRow(S.NOTIF_TITLE, S.NOTIF_SUB, settings.showNotification) { vm.setShowNotification(it) }
+
+                Text(S.NOTIF_STYLE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SelectChip(S.NOTIF_STICKER, settings.notifSticker, { vm.setNotifSticker(true) })
+                    SelectChip(S.NOTIF_LOCK, !settings.notifSticker, { vm.setNotifSticker(false) })
+                }
+
+                if (settings.notifSticker) {
+                    Text(S.NOTIF_COLOR, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        ColorDot(Color(0xFF888888), "", settings.notifColor < 0) { vm.setNotifColor(-1) }
+                        NotifPalette.forEach { c ->
+                            ColorDot(Color(c), "", settings.notifColor == c) { vm.setNotifColor(c) }
+                        }
+                        SelectChip("Custom", false, { showNotifHex = true })
+                    }
+                }
+
                 ToggleRow(S.FOLLOW_FINGER, S.FOLLOW_SUB, settings.followFinger) { vm.setFollowFinger(it) }
             }
         }
@@ -258,6 +280,9 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     }
     if (showCustomAccent) {
         CustomAccentDialog(settings.customAccent, vm) { showCustomAccent = false }
+    }
+    if (showNotifHex) {
+        NotifColorDialog(settings.notifColor, vm) { showNotifHex = false }
     }
     editNavSlot?.let { slot ->
         StickerEditorDialog("nav:$slot", settings, vm) { editNavSlot = null }
@@ -451,11 +476,53 @@ private fun ColorDot(color: Color, name: String, isSel: Boolean, onClick: () -> 
                     RoundedCornerShape(50),
                 )
         )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = name,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (name.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = name,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
+}
+
+private val NotifPalette = longArrayOf(
+    0xFF2BD48A, 0xFF60A5FA, 0xFFB39BF5, 0xFFFFA94D,
+    0xFFEC6E6E, 0xFFF4D27A, 0xFF96B6F5, 0xFF8CDDB2,
+    0xFF7FD8E8, 0xFFC9E87F, 0xFFE689C3, 0xFF23262B,
+)
+
+@Composable
+private fun NotifColorDialog(current: Long, vm: AppViewModel, onDismiss: () -> Unit) {
+    var hex by remember { mutableStateOf(if (current >= 0) String.format("%08X", current) else "#FF8CDDB2") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(S.NOTIF_COLOR) },
+        text = {
+            OutlinedTextField(
+                value = hex,
+                onValueChange = { hex = it },
+                singleLine = true,
+                label = { Text("#AARRGGBB") },
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val cleaned = hex.removePrefix("#").trim()
+                    val v = cleaned.toLongOrNull(16)
+                    if (cleaned.length == 6) {
+                        vm.setNotifColor(0xFF000000L or v!!)
+                    } else if (cleaned.length == 8) {
+                        vm.setNotifColor(v!!)
+                    }
+                    onDismiss()
+                },
+            ) { Text(S.APPLY) }
+        },
+        dismissButton = {
+            TextButton(onClick = { vm.setNotifColor(-1L); onDismiss() }) { Text(S.CANCEL) }
+        },
+    )
 }
