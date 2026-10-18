@@ -314,6 +314,7 @@ fun tinted(sticker: Sticker, color: Long): Sticker {
     return when (val a = sticker.art) {
         is BlobArt -> sticker.copy(art = a.copy(color = c))
         is ToyArt -> sticker.copy(art = a.copy(color = c))
+        is ImageArt -> sticker.copy(art = a.copy(color = c))
         is FlagArt -> sticker
     }
 }

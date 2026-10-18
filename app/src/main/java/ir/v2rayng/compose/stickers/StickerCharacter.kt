@@ -15,6 +15,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -112,7 +113,7 @@ fun StickerCharacter(
     val tables: BlobTables? = remember(sticker) {
         when (val art = sticker.art) {
             is BlobArt -> buildTables(art.a, art.b, art.p, art.q)
-            is ImageArt -> buildTables(art.a, art.b, 0.0, 0.0)
+            is ImageArt -> buildTables(art.a, art.b, 0f, 0f)
             else -> null
         }
     }
@@ -377,7 +378,7 @@ fun StickerCharacter(
                             val dw = bmp.width * sc
                             val dh = bmp.height * sc
                             drawImage(
-                                bmp,
+                                bmp.asImageBitmap(),
                                 dstOffset = androidx.compose.ui.unit.IntOffset(
                                     (0.5f * s - dw / 2f).toInt(),
                                     (0.5f * s - dh / 2f).toInt(),
