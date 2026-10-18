@@ -371,7 +371,7 @@ fun StickerCharacter(
 
                 clipPath(shapePath) {
                     if (art.imageB64.isNotBlank()) {
-                        val bmp = ImageStickerCache.get(sticker.id, art.imageB64)
+                        val bmp = ImageStickerCache.get(art.imageB64)
                         if (bmp != null) {
                             val box = 0.56f * s
                             val sc = maxOf(box / bmp.width, box / bmp.height)

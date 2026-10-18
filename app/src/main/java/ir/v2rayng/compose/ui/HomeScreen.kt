@@ -1,5 +1,6 @@
 ﻿package ir.v2rayng.compose.ui
 
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -51,7 +52,7 @@ import ir.v2rayng.compose.stickers.V2Stickers
 import ir.v2rayng.compose.stickers.tinted
 
 @Composable
-fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offset? = null) {
+fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offset? = null, onGoServers: () -> Unit = {}) {
     val sel = state.selected
     val mood = if (settings.stateMotion) {
         when (state.vpnState) {
@@ -84,6 +85,11 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
     }
     fun connectOrConsent() {
         val ctx = ir.v2rayng.compose.AppCtx.app
+        if (state.servers.isEmpty()) {
+            Toast.makeText(ctx, "Select a server first", Toast.LENGTH_SHORT).show()
+            onGoServers()
+            return
+        }
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
             androidx.core.content.ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {

@@ -156,7 +156,12 @@ fun CustomStickerDef.suggestion(): String = when (kind) {
 object ImageStickerCache {
     private val map = HashMap<String, android.graphics.Bitmap>()
 
-    fun get(key: String, b64: String): android.graphics.Bitmap? {
+    private fun keyOf(b64: String): String =
+        Integer.toHexString(b64.hashCode()) + ":" + b64.length
+
+    fun get(b64: String): android.graphics.Bitmap? {
+        if (b64.isBlank()) return null
+        val key = keyOf(b64)
         map[key]?.let { return it }
         return try {
             val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)

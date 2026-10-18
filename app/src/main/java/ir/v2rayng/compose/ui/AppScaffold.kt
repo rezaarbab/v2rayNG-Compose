@@ -229,7 +229,7 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
             }
 
             when (val real = order[tab]) {
-                0 -> HomeScreen(state, settings, vm, gaze)
+                0 -> HomeScreen(state, settings, vm, gaze, onGoServers = { tab = 1 })
                 1 -> ServersScreen(state, settings, vm)
                 2 -> RoutingScreen(state, settings, vm)
                 3 -> LogScreen(state, vm)
