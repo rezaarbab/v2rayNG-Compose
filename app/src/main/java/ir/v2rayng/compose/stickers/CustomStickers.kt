@@ -72,7 +72,7 @@ internal fun starPts(cx: Float, cy: Float, r: Float): List<Offset> {
     val pts = ArrayList<Offset>(10)
     for (i in 0 until 10) {
         val ang = Math.PI * i / 5.0 - Math.PI / 2.0
-        val rr = if (i % 2 == 0) r else (r * 0.42f).toDouble()
+        val rr = if (i % 2 == 0) r.toDouble() else (r * 0.42f).toDouble()
         pts.add(Offset((cx + rr * Math.cos(ang)).toFloat(), (cy + rr * Math.sin(ang)).toFloat()))
     }
     return pts

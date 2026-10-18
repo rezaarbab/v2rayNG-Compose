@@ -130,6 +130,7 @@ fun StickerCharacter(
         val clock = StickerTicker.anim.longValue
         val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue
         val customSpeed = CustomStickers.speedOf(sticker)
+        val customSpeed = CustomStickers.speedOf(sticker)
         val spMul = if (bg) 0.6f else 1f
         val t = clock / 1000f * us * spMul * (moodSpeed(mood) * speedScale * customSpeed) * (if (tiny) 1.8f else 1f) + phaseOf(sticker.art)
         val w = 2.0 * PI * t
@@ -166,6 +167,7 @@ fun StickerCharacter(
             .then(dance)
     ) {
         val s = size.width
+        val customSpeed = CustomStickers.speedOf(sticker)
         val animOn = env.enabled.value
         val static = mood == StickerMood.SLEEP || !animOn || decorative
 

@@ -39,6 +39,7 @@ import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.stickers.CustomStickerDef
 import ir.v2rayng.compose.stickers.CustomStickers
 import ir.v2rayng.compose.stickers.StickerCharacter
+import ir.v2rayng.compose.stickers.suggestion
 
 private val CreatorPalette = longArrayOf(
     0xFF2BD48A, 0xFF60A5FA, 0xFFB39BF5, 0xFFFFA94D,

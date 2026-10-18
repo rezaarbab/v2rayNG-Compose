@@ -1,4 +1,4 @@
-package ir.v2rayng.compose.ui
+﻿package ir.v2rayng.compose.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -450,7 +450,7 @@ private fun CustomAccentDialog(current: Long, vm: AppViewModel, onDismiss: () ->
 }
 
 @Composable
-private fun SelectChip(text: String, selected: Boolean, onClick: () -> Unit) {
+fun SelectChip(text: String, selected: Boolean, onClick: () -> Unit) {
     val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
     val bg = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant
     Box(
@@ -471,7 +471,7 @@ private fun SelectChip(text: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ColorDot(color: Color, name: String, isSel: Boolean, onClick: () -> Unit) {
+fun ColorDot(color: Color, name: String, isSel: Boolean, onClick: () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.clickable { onClick() },
@@ -536,3 +536,4 @@ private fun NotifColorDialog(current: Long, vm: AppViewModel, onDismiss: () -> U
         },
     )
 }
+
