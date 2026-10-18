@@ -243,7 +243,6 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(S.ANTI_FILTER, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                ToggleRow(S.ANTI_FILTER, S.ANTI_FILTER_SUB, settings.antiFilter) { vm.setAntiFilter(it) }
 
                 val selectedApps = settings.antiFilterApps.split(",").filter { it.isNotBlank() }
                 Row(verticalAlignment = Alignment.CenterVertically) {

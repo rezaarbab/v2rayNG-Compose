@@ -26,6 +26,8 @@ data class ProxyLink(
     val alterId: Int = 0,
     val path: String = "",
     val hostHeader: String = "",
+    val earlyData: Int = 0,
+    val earlyDataHeader: String = "",
 )
 
 enum class RealState { IDLE, CONNECTING, CONNECTED, BROKEN }
@@ -155,6 +157,8 @@ private fun parseVlessLike(uri: String, kind: LinkKind): ProxyLink? {
         spx = params["spx"] ?: "",
         path = params["path"] ?: "",
         hostHeader = params["host"] ?: "",
+        earlyData = params["ed"]?.toIntOrNull() ?: 0,
+        earlyDataHeader = params["eh"] ?: "",
     )
 }
 
@@ -384,6 +388,12 @@ private fun streamOf(link: ProxyLink): JSONObject {
             val ws = JSONObject().put("path", link.path.ifBlank { "/" })
             if (link.hostHeader.isNotBlank()) {
                 ws.put("headers", JSONObject().put("Host", link.hostHeader))
+            }
+            if (link.earlyData > 0) {
+                ws.put("maxEarlyData", link.earlyData)
+                if (link.earlyDataHeader.isNotBlank()) {
+                    ws.put("earlyDataHeaderName", link.earlyDataHeader)
+                }
             }
             stream.put("wsSettings", ws)
         }
