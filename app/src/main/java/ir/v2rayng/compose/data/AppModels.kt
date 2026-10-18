@@ -51,6 +51,8 @@ data class AppState(
     ),
     val ipCountry: String = "",
     val myIp: String = "",
+    val altIp: String = "",
+    val altCountry: String = "",
     val apps: List<AppInfo> = emptyList(),
 ) {
     val selected: ServerProfile

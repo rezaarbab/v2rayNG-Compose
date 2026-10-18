@@ -80,7 +80,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             val sel = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
                             if (sel?.link != null) {
                                 viewModelScope.launch {
-                                    var res: Triple<String, String, String>? = null
+                                    var res: IpProbe? = null
                                     var attempt = 0
                                     while (res == null && attempt < 3) {
                                         attempt++
@@ -88,16 +88,18 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                         res = ipCountryNow()
                                     }
                                     if (res != null) {
-                                        applyFlag(res.second)
+                                        applyFlag(res.code)
                                         put { s ->
                                             s.copy(
-                                                servers = s.servers.map { if (it.id == sel.id) it.copy(country = res.second) else it },
-                                                ipCountry = res.second,
-                                                myIp = res.first,
+                                                servers = s.servers.map { if (it.id == sel.id) it.copy(country = res.code) else it },
+                                                ipCountry = res.code,
+                                                myIp = res.ip,
+                                                altIp = res.altIp,
+                                                altCountry = res.altCountry,
                                             )
                                         }
                                         store.saveServers(_state.value.servers, _state.value.selectedId)
-                                        log("INFO", "Exit IP: ${res.first} (${res.second}) ${res.third}")
+                                        log("INFO", "Exit IP: ${res.ip} (${res.code}) ${res.detail}")
                                     } else {
                                         log("WARN", S.LOG_IP_FAIL)
                                     }
@@ -183,8 +185,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         viewModelScope.launch {
             val res = ipCountryNow()
             if (res != null) {
-                put { s -> s.copy(myIp = res.first) }
-                log("INFO", "IP ${res.first} (${res.second}) ${res.third}")
+                put { s -> s.copy(myIp = res.ip, ipCountry = res.code, altIp = res.altIp, altCountry = res.altCountry) }
+                log("INFO", "IP ${res.ip} (${res.code}) ${res.detail}")
             } else {
                 log("WARN", S.LOG_IP_FAIL)
             }
@@ -296,7 +298,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             val connectedSel = _state.value.vpnState == VpnState.CONNECTED && _state.value.selectedId == id
             val host = _state.value.servers.firstOrNull { it.id == id }?.host?.substringBefore(":")
             val code = if (connectedSel) {
-                ipCountryNow()?.second
+                ipCountryNow()?.code
             } else {
                 if (host.isNullOrBlank()) null else dnsCountry(host)
             }
@@ -525,17 +527,22 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private val countryCache = mutableMapOf<String, String>()
 
-    /**
-     * Returns (ip, countryCode). While a real tunnel is CONNECTED the request is
-     * sent through the local SOCKS inbound of the core, so it reports the EXIT
-     * ip/country of the server (Germany for a German exit), not the user's own IP.
-     */
-    private suspend fun ipCountryNow(): Triple<String, String, String>? {
+    /** Probe result: cloudflare trace row plus the ipwho.is row when they disagree. */
+    data class IpProbe(
+        val ip: String,
+        val code: String,
+        val altIp: String,
+        val altCountry: String,
+        val detail: String,
+    )
+
+    private suspend fun ipCountryNow(): IpProbe? {
         val throughTunnel = _state.value.vpnState == VpnState.CONNECTED &&
             _state.value.servers.firstOrNull { it.id == _state.value.selectedId }?.link != null
         return withContext(Dispatchers.IO) {
             var cfIp: String? = null
             var cfCode: String? = null
+            var whoIp: String? = null
             var whoCode: String? = null
             var apiCode: String? = null
 
@@ -556,7 +563,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             } catch (_: Exception) {
             }
 
-            // 2) ipwho.is
+            // 2) ipwho.is - has its own ip + country view
             try {
                 val url = java.net.URL("https://ipwho.is/")
                 val conn = if (throughTunnel) {
@@ -568,10 +575,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 conn.connectTimeout = 6000
                 conn.readTimeout = 6000
                 val text = conn.inputStream.bufferedReader().use { it.readText() }
+                whoIp = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
                 whoCode = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)
-                if (cfIp == null) {
-                    cfIp = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
-                }
             } catch (_: Exception) {
             }
 
@@ -590,7 +595,22 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
             val votes = listOfNotNull(cfCode?.uppercase(), whoCode?.uppercase(), apiCode?.uppercase())
             val code = votes.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
-            if (code == null) null else Triple(cfIp ?: "", code, "loc=$cfCode who=$whoCode api=$apiCode")
+            if (code == null) {
+                null
+            } else {
+                // main row = cloudflare (fall back to ipwho when cloudflare failed)
+                val mainIp = cfIp ?: whoIp ?: ""
+                val mainCode = cfCode?.uppercase() ?: whoCode?.uppercase() ?: code
+                // alt row only when ipwho sees a different country
+                val al = if (whoIp != null && whoCode != null &&
+                    whoCode.uppercase() != mainCode && mainIp != "" && mainIp != whoIp
+                ) {
+                    IpProbe(mainIp, mainCode, whoIp ?: "", whoCode?.uppercase() ?: "", "loc=$cfCode who=$whoCode api=$apiCode")
+                } else {
+                    IpProbe(mainIp, mainCode, "", "", "loc=$cfCode who=$whoCode api=$apiCode")
+                }
+                al
+            }
         }
     }
 

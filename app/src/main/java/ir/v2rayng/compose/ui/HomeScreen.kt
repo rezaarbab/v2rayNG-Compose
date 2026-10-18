@@ -125,29 +125,15 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                     Spacer(Modifier.height(10.dp))
                     StatusPill(state.vpnState)
                     Spacer(Modifier.height(6.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        val flagCode = if (state.vpnState == VpnState.IDLE) state.ipCountry else state.ipCountry
-                        val fi = if (flagCode.isNotBlank()) ir.v2rayng.compose.stickers.CountryFlags.byCode(flagCode) else -1
-                        if (fi >= 0) {
-                            StickerCharacter(
-                                ir.v2rayng.compose.stickers.CountryFlags.list[fi],
-                                sizeDp = 26.dp,
-                            )
-                            Spacer(Modifier.width(6.dp))
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        val flagCode = state.ipCountry.uppercase()
+                        val altCode = state.altCountry.uppercase()
+                        val disagree = state.altCountry.isNotBlank() && altCode != flagCode && state.altIp.isNotBlank()
+                        IpRow(flagCode, state.myIp, { vm.checkMyIp() }, "CF")
+                        if (disagree) {
+                            Spacer(Modifier.height(2.dp))
+                            IpRow(altCode, state.altIp, { vm.checkMyIp() }, "WHO")
                         }
-                        Text(
-                            text = if (state.myIp.isBlank()) {
-                                flagCode.ifBlank { S.MY_IP }
-                            } else {
-                                "${S.MY_IP}: ${state.myIp}${if (flagCode.isNotBlank()) " ($flagCode)" else ""}"
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        androidx.compose.material3.TextButton(
-                            onClick = { vm.checkMyIp() },
-                        ) { Text(S.MY_IP, style = MaterialTheme.typography.labelMedium) }
                     }
                 }
                 1 -> {
@@ -331,3 +317,31 @@ private fun TrafficArrow(up: Boolean, accent: Color) {
     }
 }
 
+
+
+@Composable
+private fun IpRow(flagCode: String, ip: String, onCheck: () -> Unit, prefix: String = "CF") {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        val fi = if (flagCode.isNotBlank()) ir.v2rayng.compose.stickers.CountryFlags.byCode(flagCode) else -1
+        if (fi >= 0) {
+            StickerCharacter(
+                ir.v2rayng.compose.stickers.CountryFlags.list[fi],
+                sizeDp = 22.dp,
+            )
+            Spacer(Modifier.width(5.dp))
+        }
+        Text(
+            text = if (ip.isBlank()) {
+                "$prefix: ".plus(flagCode.ifBlank { S.MY_IP })
+            } else {
+                "$prefix ${S.MY_IP}: $ip".plus(if (flagCode.isNotBlank()) " ($flagCode)" else "")
+            },
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(7.dp))
+        androidx.compose.material3.TextButton(onClick = onCheck) {
+            Text(S.MY_IP, style = MaterialTheme.typography.labelMedium)
+        }
+    }
+}
