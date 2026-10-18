@@ -24,6 +24,8 @@ data class ProxyLink(
     val spx: String = "",
     val method: String = "",
     val alterId: Int = 0,
+    val path: String = "",
+    val hostHeader: String = "",
 )
 
 enum class RealState { IDLE, CONNECTING, CONNECTED, BROKEN }
@@ -146,11 +148,13 @@ private fun parseVlessLike(uri: String, kind: LinkKind): ProxyLink? {
         security = security,
         type = params["type"]?.takeIf { it.isNotBlank() } ?: "tcp",
         flow = params["flow"] ?: "",
-        sni = params["sni"] ?: params["host"] ?: "",
+        sni = params["sni"] ?: "",
         fp = params["fp"] ?: "",
         pbk = params["pbk"] ?: "",
         sid = params["sid"] ?: "",
         spx = params["spx"] ?: "",
+        path = params["path"] ?: "",
+        hostHeader = params["host"] ?: "",
     )
 }
 
@@ -368,6 +372,26 @@ private fun streamOf(link: ProxyLink): JSONObject {
     val stream = JSONObject()
         .put("network", link.type)
         .put("security", link.security)
+    when (link.type) {
+        "ws" -> {
+            val ws = JSONObject().put("path", link.path.ifBlank { "/" })
+            if (link.hostHeader.isNotBlank()) {
+                ws.put("headers", JSONObject().put("Host", link.hostHeader))
+            }
+            stream.put("wsSettings", ws)
+        }
+        "grpc" -> {
+            val g = JSONObject()
+            if (link.path.isNotBlank()) g.put("serviceName", link.path)
+            if (link.hostHeader.isNotBlank()) g.put("authority", link.hostHeader)
+            stream.put("grpcSettings", g)
+        }
+        "httpupgrade" -> {
+            val h = JSONObject().put("path", link.path.ifBlank { "/" })
+            if (link.hostHeader.isNotBlank()) h.put("host", link.hostHeader)
+            stream.put("httpupgradeSettings", h)
+        }
+    }
     when (link.security) {
         "tls" -> {
             val tls = JSONObject()
