@@ -76,7 +76,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             val sel = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
                             if (sel?.link != null) {
                                 viewModelScope.launch {
-                                    val res = ipCountryNow()
+                                    var res: Pair<String, String>? = null
+                                    var attempt = 0
+                                    while (res == null && attempt < 3) {
+                                        attempt++
+                                        delay(800L * attempt)
+                                        res = ipCountryNow()
+                                    }
                                     if (res != null) {
                                         applyFlag(res.second)
                                         put { s ->
