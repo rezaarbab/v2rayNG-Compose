@@ -44,6 +44,7 @@ import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.parseFloatList
 import ir.v2rayng.compose.data.parseLongList
 import ir.v2rayng.compose.data.parseList
+import ir.v2rayng.compose.data.parseFxPack
 import ir.v2rayng.compose.stickers.CustomStickers
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.StickerMood
@@ -78,7 +79,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
 
     val slotPack = when {
         isWall -> settings.wallpaperStyle
-        isMain -> settings.stickerStyle
+        isMain -> if (settings.mainIndex >= 0) settings.mainPack else settings.stickerStyle
         zone.startsWith("nav:") -> parseList(settings.navPacks, listOf(-1, -1, -1, -1, -1)).getOrNull(slot) ?: -1
         zone == "up" -> settings.upPack
         zone == "down" -> settings.downPack
@@ -110,7 +111,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
         }
         when {
             isWall -> vm.setWallpaper(i)
-            isMain -> vm.setMainIndex(i)
+            isMain -> vm.setMainIndex(i, browsePack)
             zone.startsWith("nav:") -> vm.setNavIcon(slot, i, browsePack)
             zone == "up" -> vm.setUpIcon(i, browsePack)
             zone == "down" -> vm.setDownIcon(i, browsePack)
@@ -125,6 +126,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
             isMain -> {
                 vm.setMainIndex(-1)
                 vm.setStickerStyle(0)
+                vm.setMainFx(1f, 0f, 1f)
             }
             zone.startsWith("nav:") -> vm.setNavIcon(slot, slot, -1)
             zone == "up" -> vm.setUpIcon(5, -1)
@@ -158,6 +160,17 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
         }
     }
 
+    fun setFx(a: Float, bl: Float, sc: Float) {
+        when {
+            isWall -> vm.setWallFx(a, bl, sc)
+            isMain -> vm.setMainFx(a, bl, sc)
+            zone == "up" -> vm.setUpFx(a, bl, sc)
+            zone == "down" -> vm.setDownFx(a, bl, sc)
+            zone.startsWith("nav:") -> vm.setNavFx(slot, a, bl, sc)
+            zone.startsWith("route:") -> vm.setRouteFx(slot, a, bl, sc)
+        }
+    }
+
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) {
             Column(
@@ -169,12 +182,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                 Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
 
                 if (isWall) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        MiniChip(S.STYLE_BLOB, settings.wallpaperStyle == 0, { vm.setWallpaperStyle(0) })
-                        MiniChip(S.STYLE_TOY, settings.wallpaperStyle == 1, { vm.setWallpaperStyle(1) })
-                        MiniChip(S.STYLE_FLAG, settings.wallpaperStyle == 2, { vm.setWallpaperStyle(2) })
-                        MiniChip(S.MINE, settings.wallpaperStyle == 3, { vm.setWallpaperStyle(3) })
-                    }
+                    Text(S.SUB_WALL, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
 
                 if (isMain) {
@@ -183,14 +191,8 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                         MiniChip(
                             S.CHOSEN,
                             settings.mainIndex >= 0,
-                            { if (settings.mainIndex < 0) vm.setMainIndex(0) },
+                            { if (settings.mainIndex < 0) vm.setMainIndex(0, settings.stickerStyle) },
                         )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        MiniChip(S.STYLE_BLOB, settings.stickerStyle == 0, { vm.setStickerStyle(0) })
-                        MiniChip(S.STYLE_TOY, settings.stickerStyle == 1, { vm.setStickerStyle(1) })
-                        MiniChip(S.STYLE_FLAG, settings.stickerStyle == 2, { vm.setStickerStyle(2) })
-                        MiniChip(S.MINE, settings.stickerStyle == 3, { vm.setStickerStyle(3) })
                     }
                 }
 
@@ -327,6 +329,54 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                             valueRange = 80f..340f,
                         )
                     }
+                }
+
+                val fxCur = when {
+                    isWall -> parseFxPack(settings.wallFx)
+                    isMain -> parseFxPack(settings.mainFx)
+                    zone == "up" -> parseFxPack(settings.upFx)
+                    zone == "down" -> parseFxPack(settings.downFx)
+                    zone.startsWith("nav:") -> parseFxPack(settings.navFx.split(";").getOrNull(slot) ?: "")
+                    zone.startsWith("route:") -> parseFxPack(settings.routeFx.split(";").getOrNull(slot) ?: "")
+                    else -> null
+                }
+                if (fxCur != null) {
+                    Text(S.SFX, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                    Text(
+                        text = "${S.OPACITY}: ${(fxCur.alpha * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Slider(
+                        value = fxCur.alpha,
+                        onValueChange = { v -> setFx(v, fxCur.blur, fxCur.scale) },
+                        valueRange = 0.05f..1f,
+                    )
+
+                    Text(
+                        text = "${S.BLUR}: ${fxCur.blur.toInt()}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Slider(
+                        value = fxCur.blur,
+                        onValueChange = { v -> setFx(fxCur.alpha, v, fxCur.scale) },
+                        valueRange = 0f..30f,
+                    )
+
+                    Text(
+                        text = "${S.STRETCH}: %.2fx".format(fxCur.scale),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Slider(
+                        value = fxCur.scale,
+                        onValueChange = { v -> setFx(fxCur.alpha, fxCur.blur, v) },
+                        valueRange = 0.5f..2.0f,
+                    )
+
+                    MiniChip(S.SFX_RESET, false, { setFx(1f, 0f, 1f) })
                 }
 
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {

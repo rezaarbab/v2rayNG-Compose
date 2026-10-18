@@ -8,6 +8,7 @@ import ir.v2rayng.compose.data.LogLine
 import ir.v2rayng.compose.data.ServerProfile
 import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.SettingsStore
+import ir.v2rayng.compose.data.StickerFx
 import ir.v2rayng.compose.data.TimeKit
 import ir.v2rayng.compose.data.VpnState
 import ir.v2rayng.compose.data.packList
@@ -16,6 +17,9 @@ import ir.v2rayng.compose.data.packLongList
 import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.data.parseLongList
 import ir.v2rayng.compose.data.parseFloatList
+import ir.v2rayng.compose.data.packFx
+import ir.v2rayng.compose.data.packStickerFx
+import ir.v2rayng.compose.data.parseFxPack
 import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.ui.S
 import java.net.HttpURLConnection
@@ -165,7 +169,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setWallpaperSize(v: Int) = setSettings { it.copy(wallpaperSize = v) }
     fun setMainColor(v: Long) = setSettings { it.copy(mainColor = v) }
     fun setMainSize(v: Int) = setSettings { it.copy(mainSize = v) }
-    fun setMainIndex(v: Int) = setSettings { it.copy(mainIndex = v) }
+    fun setMainIndex(v: Int, pack: Int = -1) = setSettings { it.copy(mainIndex = v, mainPack = pack) }
     fun setFollowFinger(v: Boolean) = setSettings { it.copy(followFinger = v) }
     fun setAnimate(v: Boolean) = setSettings { it.copy(animate = v) }
     fun setStateMotion(v: Boolean) = setSettings { it.copy(stateMotion = v) }
@@ -228,6 +232,25 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun setUpSpeed(v: Float) = setSettings { it.copy(upSpeed = v) }
     fun setDownSpeed(v: Float) = setSettings { it.copy(downSpeed = v) }
+
+    fun setMainFx(alpha: Float, blur: Float, scale: Float) = setSettings { it.copy(mainFx = packStickerFx(alpha, blur, scale)) }
+    fun setWallFx(alpha: Float, blur: Float, scale: Float) = setSettings { it.copy(wallFx = packStickerFx(alpha, blur, scale)) }
+    fun setUpFx(alpha: Float, blur: Float, scale: Float) = setSettings { it.copy(upFx = packStickerFx(alpha, blur, scale)) }
+    fun setDownFx(alpha: Float, blur: Float, scale: Float) = setSettings { it.copy(downFx = packStickerFx(alpha, blur, scale)) }
+
+    fun setNavFx(slot: Int, alpha: Float, blur: Float, scale: Float) = setSettings { s ->
+        val segs = s.navFx.split(";").map { parseFxPack(it) }.toMutableList()
+        while (segs.size < 5) segs.add(StickerFx())
+        segs[slot.coerceIn(0, 4)] = StickerFx(alpha, blur, scale)
+        s.copy(navFx = segs.joinToString(";") { packFx(it) })
+    }
+
+    fun setRouteFx(slot: Int, alpha: Float, blur: Float, scale: Float) = setSettings { s ->
+        val segs = s.routeFx.split(";").map { parseFxPack(it) }.toMutableList()
+        while (segs.size < 3) segs.add(StickerFx())
+        segs[slot.coerceIn(0, 2)] = StickerFx(alpha, blur, scale)
+        s.copy(routeFx = segs.joinToString(";") { packFx(it) })
+    }
 
     fun setNavSpeed(slot: Int, v: Float) = setSettings { s ->
         val cur = parseFloatList(s.navSpeeds, listOf(1f, 1f, 1f, 1f, 1f)).toMutableList()

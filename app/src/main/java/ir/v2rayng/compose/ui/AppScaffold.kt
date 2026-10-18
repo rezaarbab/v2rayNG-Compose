@@ -58,6 +58,7 @@ import ir.v2rayng.compose.data.SettingsStore
 import ir.v2rayng.compose.data.parseFloatList
 import ir.v2rayng.compose.data.parseLongList
 import ir.v2rayng.compose.data.parseList
+import ir.v2rayng.compose.data.parseFxPack
 import ir.v2rayng.compose.stickers.LocalStickerEnv
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.StickerEnv
@@ -169,11 +170,13 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                                         real,
                                     )
                                     val tint = parseLongList(settings.navColors, listOf(-1L, -1L, -1L, -1L, -1L)).getOrNull(real) ?: -1L
+                                    val nfx = parseFxPack(settings.navFx.split(";").getOrNull(real) ?: "")
                                     StickerCharacter(
                                         sticker = tinted(st, tint),
                                         mood = if (tab == pos) StickerMood.HAPPY else StickerMood.NORMAL,
                                         sizeDp = 26.dp,
                                         speedScale = spd,
+                                        modifier = Modifier.stickerFx(nfx),
                                     )
                                 } else {
                                     Icon(tabIcons[real], contentDescription = S.TABS[real])
@@ -221,7 +224,9 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                         sticker = wall,
                         mood = StickerMood.HAPPY,
                         sizeDp = if (settings.wallpaperSize > 0) settings.wallpaperSize.dp else 300.dp,
-                        modifier = Modifier.padding(bottom = 8.dp),
+                        modifier = Modifier
+                            .padding(bottom = 8.dp)
+                            .stickerFx(parseFxPack(settings.wallFx)),
                         gaze = gaze,
                         bg = true,
                     )

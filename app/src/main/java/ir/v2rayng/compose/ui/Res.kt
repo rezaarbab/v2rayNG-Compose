@@ -137,6 +137,13 @@ object S {
     const val EDITOR_ROUTE = "Routing rule sticker"
     const val PICK_STICKER = "Pick a sticker from the pack (%d):"
     const val PICK_PACK = "Browse pack:"
+
+    const val SUB_WALL = "Background"
+    const val OPACITY = "Transparency"
+    const val BLUR = "Blur"
+    const val STRETCH = "Stretch"
+    const val SFX = "Sticker effects"
+    const val SFX_RESET = "Reset effects"
     const val DEF = "Def"
     const val COLOR = "Custom color"
     const val SIZE = "Size"

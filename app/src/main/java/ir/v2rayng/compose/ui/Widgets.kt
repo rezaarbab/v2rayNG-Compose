@@ -20,12 +20,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import ir.v2rayng.compose.data.StickerFx
 import ir.v2rayng.compose.data.VpnState
 
 private fun statusColor(s: VpnState): Color = when (s) {
@@ -104,6 +107,21 @@ fun SectionTitle(text: String, subtitle: String = "") {
             )
         }
     }
+}
+
+/** Applies per-sticker transparency / blur / stretch on top of any modifier chain. */
+fun Modifier.stickerFx(fx: StickerFx): Modifier {
+    if (fx.isDefault()) return this
+    var m = this
+    if (fx.blur > 0.05f) m = m.blur(fx.blur.dp)
+    m = m.then(
+        Modifier.graphicsLayer {
+            scaleX = fx.scale
+            scaleY = fx.scale
+            alpha = fx.alpha
+        },
+    )
+    return m
 }
 
 fun Modifier.holdFor(

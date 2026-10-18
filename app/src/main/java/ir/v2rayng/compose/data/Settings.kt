@@ -4,15 +4,32 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
+data class StickerFx(
+    val alpha: Float = 1f,
+    val blur: Float = 0f,
+    val scale: Float = 1f,
+)
+
+fun StickerFx.isDefault(): Boolean = alpha >= 0.995f && blur <= 0.05f && scale in 0.995f..1.005f
+
+/**
+ * Slots packed as "alpha,blur,scale" triplets joined by ";" (one triplet per slot; single-slot
+ * groups hold exactly one).
+ */
+fun packFx(l: StickerFx): String = l.let { "%.2f,%.1f,%.2f".format(it.alpha, it.blur, it.scale) }
+
 data class Settings(
     val dark: Boolean = true,
     val accent: Int = 0,
     val customAccent: Long = -1L,
     val stickerStyle: Int = 0,
+    val mainPack: Int = -1,
+    val mainFx: String = "",
     val wallpaperStyle: Int = 0,
     val wallpaperIndex: Int = -1,
     val wallpaperColor: Long = -1L,
     val wallpaperSize: Int = 0,
+    val wallFx: String = "",
     val mainColor: Long = -1L,
     val mainSize: Int = 0,
     val mainIndex: Int = -1,
@@ -45,6 +62,10 @@ data class Settings(
     val navSpeeds: String = "1,1,1,1,1",
     val routeSpeeds: String = "1,1,1",
     val routeIcons: String = "0,1,2",
+    val upFx: String = "",
+    val downFx: String = "",
+    val navFx: String = "",
+    val routeFx: String = "",
     val antiFilter: Boolean = false,
     val antiFilterApps: String = "",
     val homeOrder: String = "0,1,2,3,4",
@@ -68,6 +89,17 @@ fun parseFloatList(s: String, def: List<Float>): List<Float> {
 
 fun packFloatList(l: List<Float>): String = l.joinToString(",")
 
+fun packStickerFx(alpha: Float, blur: Float, scale: Float): String = packFx(StickerFx(alpha, blur, scale))
+
+fun parseFxPack(s: String, def: StickerFx = StickerFx()): StickerFx {
+    val seg = s.trim().split(",").mapNotNull { it.trim().toFloatOrNull() }
+    return StickerFx(
+        alpha = seg.getOrNull(0)?.coerceIn(0.05f, 1f) ?: def.alpha,
+        blur = seg.getOrNull(1)?.coerceIn(0f, 40f) ?: def.blur,
+        scale = seg.getOrNull(2)?.coerceIn(0.5f, 2.5f) ?: def.scale,
+    )
+}
+
 class SettingsStore(context: Context) {
     private val sp = context.getSharedPreferences("v2settings", Context.MODE_PRIVATE)
 
@@ -76,10 +108,13 @@ class SettingsStore(context: Context) {
         accent = sp.getInt("accent", 0),
         customAccent = java.lang.Long.valueOf(sp.getString("customAccent", "-1")!!),
         stickerStyle = sp.getInt("style", 0),
+        mainPack = sp.getInt("mainPack", -1),
+        mainFx = sp.getString("mainFx", "")!!,
         wallpaperStyle = sp.getInt("wallStyle", 0),
         wallpaperIndex = sp.getInt("wallpaper", -1),
         wallpaperColor = java.lang.Long.valueOf(sp.getString("wallColor", "-1")!!),
         wallpaperSize = sp.getInt("wallSize", 0),
+        wallFx = sp.getString("wallFx", "")!!,
         mainColor = java.lang.Long.valueOf(sp.getString("mainColor", "-1")!!),
         mainSize = sp.getInt("mainSize", 0),
         mainIndex = sp.getInt("mainIndex", -1),
@@ -112,6 +147,10 @@ class SettingsStore(context: Context) {
         navSpeeds = sp.getString("navSpeeds", "1,1,1,1,1")!!,
         routeSpeeds = sp.getString("routeSpeeds", "1,1,1")!!,
         routeIcons = sp.getString("routeIcons", "0,1,2")!!,
+        upFx = sp.getString("upFx", "")!!,
+        downFx = sp.getString("downFx", "")!!,
+        navFx = sp.getString("navFx", "")!!,
+        routeFx = sp.getString("routeFx", "")!!,
         antiFilter = sp.getBoolean("antiFilter", false),
         antiFilterApps = sp.getString("antiFilterApps", "")!!,
         homeOrder = sp.getString("homeOrder", "0,1,2,3,4")!!,
@@ -183,10 +222,13 @@ class SettingsStore(context: Context) {
             .putInt("accent", s.accent)
             .putString("customAccent", s.customAccent.toString())
             .putInt("style", s.stickerStyle)
+            .putInt("mainPack", s.mainPack)
+            .putString("mainFx", s.mainFx)
             .putInt("wallStyle", s.wallpaperStyle)
             .putInt("wallpaper", s.wallpaperIndex)
             .putString("wallColor", s.wallpaperColor.toString())
             .putInt("wallSize", s.wallpaperSize)
+            .putString("wallFx", s.wallFx)
             .putString("mainColor", s.mainColor.toString())
             .putInt("mainSize", s.mainSize)
             .putInt("mainIndex", s.mainIndex)
@@ -219,6 +261,10 @@ class SettingsStore(context: Context) {
             .putString("navSpeeds", s.navSpeeds)
             .putString("routeSpeeds", s.routeSpeeds)
             .putString("routeIcons", s.routeIcons)
+            .putString("upFx", s.upFx)
+            .putString("downFx", s.downFx)
+            .putString("navFx", s.navFx)
+            .putString("routeFx", s.routeFx)
             .putBoolean("antiFilter", s.antiFilter)
             .putString("antiFilterApps", s.antiFilterApps)
             .putString("homeOrder", s.homeOrder)

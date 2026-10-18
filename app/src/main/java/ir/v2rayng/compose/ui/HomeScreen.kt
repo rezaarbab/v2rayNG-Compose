@@ -42,9 +42,11 @@ import androidx.compose.ui.unit.dp
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.Settings
+import ir.v2rayng.compose.data.StickerFx
 import ir.v2rayng.compose.data.TimeKit
 import ir.v2rayng.compose.data.VpnState
 import ir.v2rayng.compose.data.parseList
+import ir.v2rayng.compose.data.parseFxPack
 import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.StickerMood
@@ -100,10 +102,10 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
     }
 
     val mainSticker = when {
-        settings.mainIndex >= 0 -> V2Stickers.byIndex(settings.stickerStyle, settings.mainIndex)
+        settings.mainIndex >= 0 -> V2Stickers.byPack(settings.mainPack, settings.mainIndex, settings.stickerStyle, 0)
         settings.connectFlagDancer && sel.country.isNotBlank() -> {
             val fi = CountryFlags.byCode(sel.country)
-            if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byIndex(2, sel.stickerIndex)
+            if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byPack(settings.mainPack, settings.mainIndex, settings.stickerStyle, sel.stickerIndex)
         }
         else -> V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
     }
@@ -162,6 +164,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                             mood = mood,
                             sizeDp = if (settings.mainSize > 0) settings.mainSize.dp else 190.dp,
                             gaze = gaze,
+                            modifier = Modifier.stickerFx(parseFxPack(settings.mainFx)),
                         )
                     }
                     Spacer(Modifier.height(6.dp))
@@ -213,8 +216,8 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), settings.upIcon, settings.upPack, settings.stickerStyle, settings.upColor, settings.upSpeed, { editZone.value = "up" }, settings.navStickers)
-                        TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), settings.downIcon, settings.downPack, settings.stickerStyle, settings.downColor, settings.downSpeed, { editZone.value = "down" }, settings.navStickers)
+                        TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), settings.upIcon, settings.upPack, settings.stickerStyle, settings.upColor, settings.upSpeed, { editZone.value = "up" }, settings.navStickers, parseFxPack(settings.upFx))
+                        TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), settings.downIcon, settings.downPack, settings.stickerStyle, settings.downColor, settings.downSpeed, { editZone.value = "down" }, settings.navStickers, parseFxPack(settings.downFx))
                     }
                     androidx.compose.material3.TextButton(
                         onClick = { vm.resetTotalTraffic() },
@@ -250,6 +253,7 @@ private fun RowScope.TrafficCard(
     iconSpeed: Float,
     onIconHold: () -> Unit,
     stickers: Boolean,
+    fx: StickerFx = StickerFx(),
 ) {
     Card(
         modifier = Modifier.weight(1f),
@@ -276,6 +280,7 @@ private fun RowScope.TrafficCard(
                         ),
                         sizeDp = 30.dp,
                         speedScale = iconSpeed,
+                        modifier = Modifier.stickerFx(fx),
                     )
                 } else {
                     TrafficArrow(up = title == S.UPLOAD, accent = accent)
