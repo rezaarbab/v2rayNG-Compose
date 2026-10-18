@@ -388,21 +388,33 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun fetchIpFlag() {
         viewModelScope.launch {
-            val code = withContext(Dispatchers.IO) {
+            val res = withContext(Dispatchers.IO) {
                 try {
-                    val conn = URL("https://ipapi.co/json/").openConnection() as HttpURLConnection
-                    conn.connectTimeout = 4500
-                    conn.readTimeout = 4500
+                    val conn = java.net.URL("https://ipwho.is/").openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 5000
+                    conn.readTimeout = 5000
                     val text = conn.inputStream.bufferedReader().use { it.readText() }
-                    Regex("\"country_code\"\\s*:\\s*\"([A-Z]{2})\"").find(text)?.groupValues?.get(1)
+                    val ip = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
+                    val code = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)
+                    if (code != null) (ip ?: "") to code else null
                 } catch (e: Exception) {
-                    null
+                    try {
+                        val conn = URL("https://ipapi.co/json/").openConnection() as HttpURLConnection
+                        conn.connectTimeout = 4500
+                        conn.readTimeout = 4500
+                        val text = conn.inputStream.bufferedReader().use { it.readText() }
+                        val ip = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
+                        val code = Regex("\"country_code\"\\s*:\\s*\"([A-Z]{2})\"").find(text)?.groupValues?.get(1)
+                        if (code != null) (ip ?: "") to code else null
+                    } catch (e2: Exception) {
+                        null
+                    }
                 }
             }
-            if (code != null) {
-                val applied = applyFlag(code)
-                put { s -> s.copy(ipCountry = code) }
-                log("INFO", S.LOG_IP_OK.format(code))
+            if (res != null) {
+                applyFlag(res.second)
+                put { s -> s.copy(ipCountry = res.second.uppercase(), myIp = res.first) }
+                log("INFO", S.LOG_IP_OK.format(res.second.uppercase()))
             } else {
                 log("WARN", S.LOG_IP_FAIL)
             }
@@ -584,9 +596,31 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun select(id: String) {
         val name = _state.value.servers.firstOrNull { it.id == id }?.name ?: return
+        val tunnelUp = _state.value.vpnState == VpnState.CONNECTED || _state.value.vpnState == VpnState.CONNECTING
         put { s -> s.copy(selectedId = id) }
         store.saveSelectedId(id)
         log("INFO", S.LOG_SELECTED.format(name))
+        if (tunnelUp) {
+            // hot swap: drop the old tunnel and bring the newly selected one up
+            ir.v2rayng.compose.core.XrayVpnService.stop(appCtx())
+            val sel = _state.value.servers.firstOrNull { it.id == id }
+            if (sel?.link != null) {
+                val parsed = ir.v2rayng.compose.core.parseProxyLink(sel.link)
+                if (parsed != null) {
+                    log("INFO", S.LOG_CONNECTING.format(sel.name))
+                    ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed, sel.link)
+                } else {
+                    put { s -> s.copy(vpnState = VpnState.BROKEN) }
+                }
+            } else {
+                connectJob?.cancel()
+                trafficJob?.cancel()
+                put { s -> s.copy(vpnState = VpnState.IDLE) }
+                if (_settings.value.autoFlag) {
+                    fetchIpFlag()
+                }
+            }
+        }
     }
 
     fun addServer(name: String, host: String) {
