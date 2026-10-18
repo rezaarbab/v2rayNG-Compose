@@ -60,6 +60,17 @@ data class FlagArt(
 ) : StickerArt
 
 @Immutable
+data class ImageArt(
+    val color: Color,
+    val emoji: String = "",
+    val imageB64: String = "",
+    val a: Float = 1f,
+    val b: Float = 1f,
+    val eyes: Boolean = false,
+    val phase: Float = 0f,
+) : StickerArt
+
+@Immutable
 sealed interface StickerArt
 
 @Immutable

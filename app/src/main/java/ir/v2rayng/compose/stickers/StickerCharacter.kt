@@ -20,6 +20,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -37,6 +42,24 @@ private data class BlobTables(
     val B: FloatArray,
     val C: FloatArray,
 )
+
+private fun buildTables(a: Float, b: Float, p: Float, q: Float): BlobTables {
+    val n = 48
+    val A = FloatArray(n)
+    val B = FloatArray(n)
+    val C = FloatArray(n)
+    for (i in 0 until n) {
+        val th = 2.0 * PI * i / n
+        val b1 = (0.08f * a) * sin(2 * th + p).toFloat()
+        val c1 = (0.08f * a) * cos(2 * th + p).toFloat()
+        val b2 = (0.06f * b) * sin(3 * th + q).toFloat()
+        val c2 = (0.06f * b) * cos(3 * th + q).toFloat()
+        A[i] = 1f + b1 + b2
+        B[i] = b1 + b2
+        C[i] = c1 - c2
+    }
+    return BlobTables(A, B, C)
+}
 
 private fun moodSpeed(mood: StickerMood): Float = when (mood) {
     StickerMood.SLEEP -> 0.55f
@@ -65,6 +88,7 @@ private fun phaseOf(art: StickerArt): Float = when (art) {
     is BlobArt -> art.phase
     is ToyArt -> art.phase
     is FlagArt -> art.phase
+    is ImageArt -> art.phase
 }
 
 @Composable
@@ -86,22 +110,11 @@ fun StickerCharacter(
     val frozenPhase = remember(sticker) { ((sticker.id.hashCode() and 0x3FF) % 997) / 997f }
 
     val tables: BlobTables? = remember(sticker) {
-        val a = sticker.art as? BlobArt ?: return@remember null
-        val n = 48
-        val A = FloatArray(n)
-        val B = FloatArray(n)
-        val C = FloatArray(n)
-        for (i in 0 until n) {
-            val th = 2.0 * PI * i / n
-            val b1 = (0.08f * a.a) * sin(2 * th + a.p).toFloat()
-            val c1 = (0.08f * a.a) * cos(2 * th + a.p).toFloat()
-            val b2 = (0.06f * a.b) * sin(3 * th + a.q).toFloat()
-            val c2 = (0.06f * a.b) * cos(3 * th + a.q).toFloat()
-            A[i] = 1f + b1 + b2
-            B[i] = b1 + b2
-            C[i] = c1 - c2
+        when (val art = sticker.art) {
+            is BlobArt -> buildTables(art.a, art.b, art.p, art.q)
+            is ImageArt -> buildTables(art.a, art.b, 0.0, 0.0)
+            else -> null
         }
-        BlobTables(A, B, C)
     }
 
     val shapePath = remember { Path() }
@@ -118,6 +131,7 @@ fun StickerCharacter(
     }
 
     val blinkCur = remember(mood) { mutableFloatStateOf(if (mood == StickerMood.SLEEP) 0.14f else 1f) }
+    val textMeasurer = rememberTextMeasurer()
 
     val dance = Modifier.graphicsLayer {
         if (mood == StickerMood.SLEEP || decorative || !env.enabled.value) {
@@ -169,6 +183,13 @@ fun StickerCharacter(
         val customSpeed = CustomStickers.speedOf(sticker)
         val animOn = env.enabled.value
         val static = mood == StickerMood.SLEEP || !animOn || decorative
+        val tImg = if (static) {
+            frozenPhase
+        } else {
+            val clock = if (bg || sizeDp.value <= 48f) StickerTicker.wave.longValue else StickerTicker.anim.longValue
+            val us = if (bg) env.bgSpeed.floatValue else env.speed.floatValue
+            clock / 1000f * us * (if (bg) 0.6f else 1f) * (moodSpeed(mood) * speedScale * customSpeed) + phaseOf(sticker.art)
+        }
 
         fun p(x: Float, y: Float): Offset = Offset(x * s, y * s)
 
@@ -322,6 +343,77 @@ fun StickerCharacter(
                         radius = hw * 0.34f,
                         center = c + Offset(-hw * 0.34f, -hh * 0.4f),
                     )
+                }
+            }
+
+            is ImageArt -> {
+                val tb = tables
+                if (tb != null && !static) {
+                    val wt = 2.0 * PI * tImg
+                    val cw = cos(wt).toFloat()
+                    val sw = sin(wt).toFloat()
+                    val n = 48
+                    shapePath.rewind()
+                    for (i in 0 until n) {
+                        val th = 2.0 * PI * i / n
+                        val r = 0.34f * (tb.A[i] + tb.B[i] * cw + tb.C[i] * sw)
+                        val x = 0.5f + r * cos(th).toFloat()
+                        val y = 0.5f + r * sin(th).toFloat()
+                        val q = p(x, y)
+                        if (i == 0) shapePath.moveTo(q.x, q.y) else shapePath.lineTo(q.x, q.y)
+                    }
+                    shapePath.close()
+                    drawPath(shapePath, art.color)
+                } else {
+                    drawCircle(art.color, radius = 0.34f * s, center = p(0.5f, 0.5f))
+                }
+
+                clipPath(shapePath) {
+                    if (art.imageB64.isNotBlank()) {
+                        val bmp = ImageStickerCache.get(sticker.id, art.imageB64)
+                        if (bmp != null) {
+                            val box = 0.56f * s
+                            val sc = maxOf(box / bmp.width, box / bmp.height)
+                            val dw = bmp.width * sc
+                            val dh = bmp.height * sc
+                            drawImage(
+                                bmp,
+                                dstOffset = androidx.compose.ui.unit.IntOffset(
+                                    (0.5f * s - dw / 2f).toInt(),
+                                    (0.5f * s - dh / 2f).toInt(),
+                                ),
+                                dstSize = androidx.compose.ui.unit.IntSize(dw.toInt(), dh.toInt()),
+                            )
+                        }
+                    } else if (art.emoji.isNotBlank()) {
+                        drawText(
+                            textMeasurer,
+                            art.emoji,
+                            topLeft = Offset(0.5f * s - 0.30f * s, 0.5f * s - 0.36f * s),
+                            style = TextStyle(fontSize = (0.52f * s).toSp(), textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+                        )
+                    }
+                }
+
+                drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
+
+                if (art.eyes) {
+                    val hw = 0.036f * s
+                    val hh = 0.07f * blinkCur.floatValue * s
+                    val eyes = listOf(0.38f to 0.47f, 0.62f to 0.47f)
+                    for ((ex, ey) in eyes) {
+                        val c = p(ex, ey) + Offset(gx, gy)
+                        drawOval(
+                            color = EyeDark,
+                            topLeft = Offset(c.x - hw, c.y - hh),
+                            size = Size(2 * hw, 2 * hh),
+                        )
+                        drawCircle(
+                            color = Color.White.copy(alpha = 0.55f),
+                            radius = hw * 0.36f,
+                            center = c + Offset(-hw * 0.34f, -hh * 0.4f),
+                        )
+                    }
                 }
             }
         }

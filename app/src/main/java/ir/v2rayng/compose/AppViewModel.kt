@@ -179,10 +179,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         viewModelScope.launch {
             val res = ipCountryNow()
             if (res != null) {
-                put { s -> s.copy(myIp = res.first, ipCountry = res.second) }
-                if (_settings.value.autoFlag && _state.value.vpnState != VpnState.CONNECTED) {
-                    applyFlag(res.second)
-                }
+                put { s -> s.copy(myIp = res.first) }
                 log("INFO", "IP ${res.first} (${res.second})")
             } else {
                 log("WARN", S.LOG_IP_FAIL)

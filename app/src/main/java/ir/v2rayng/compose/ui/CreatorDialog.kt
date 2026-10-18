@@ -42,6 +42,18 @@ import ir.v2rayng.compose.stickers.CustomStickers
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.suggestion
 
+@Composable
+private fun ColorDotSel(current: Long, c: Long, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(30.dp)
+            .clip(RoundedCornerShape(50))
+            .background(Color(c))
+            .border(2.dp, if (current == c) androidx.compose.ui.graphics.Color.White else MaterialTheme.colorScheme.outline, RoundedCornerShape(50))
+            .clickable { onClick() },
+    )
+}
+
 private val CreatorPalette = longArrayOf(
     0xFF2BD48A, 0xFF60A5FA, 0xFFB39BF5, 0xFFFFA94D,
     0xFFEC6E6E, 0xFFF4D27A, 0xFF96B6F5, 0xFF8CDDB2,
@@ -65,7 +77,38 @@ fun CreatorDialog(vm: AppViewModel, onDismiss: () -> Unit) {
     var emblemX by remember { mutableStateOf(0.5f) }
     var speed by remember { mutableStateOf(1f) }
     var size by remember { mutableStateOf(190f) }
+    var emoji by remember { mutableStateOf("") }
+    var imageB64 by remember { mutableStateOf("") }
+    var eyesOn by remember { mutableStateOf(false) }
     var editingId by remember { mutableStateOf<String?>(null) }
+    val imagePicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val ctx = ir.v2rayng.compose.AppCtx.app
+                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                ctx.contentResolver.openInputStream(uri)?.use {
+                    android.graphics.BitmapFactory.decodeStream(it, null, bounds)
+                }
+                var sample = 1
+                while (bounds.outWidth / (sample * 2) >= 256 && bounds.outHeight / (sample * 2) >= 256) {
+                    sample *= 2
+                }
+                val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+                val bmp = ctx.contentResolver.openInputStream(uri)?.use {
+                    android.graphics.BitmapFactory.decodeStream(it, null, opts)
+                }
+                if (bmp != null) {
+                    val out = java.io.ByteArrayOutputStream()
+                    bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                    imageB64 = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+                    emoji = ""
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     val shapeNames = listOf(
         "Drop", "Triangle", "Cloud", "Ball", "Capsule", "Bean", "Fire", "Star",
@@ -88,9 +131,14 @@ fun CreatorDialog(vm: AppViewModel, onDismiss: () -> Unit) {
         emblem = emblem,
         emblemColor = emblemColor,
         emblemX = emblemX,
+        emoji = emoji,
+        imageB64 = imageB64,
+        eyesOn = eyesOn,
         speed = speed,
         size = size.toInt(),
     )
+
+    // kind: 0 blob, 1 shape, 3 emoji/image (flag tab removed per request)
 
     fun previewDef(): CustomStickerDef = currentDef().copy(id = editingId ?: "preview")
 
@@ -131,14 +179,14 @@ fun CreatorDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SelectChip(S.CREATOR_BLOB, kind == 0, { kind = 0 })
                     SelectChip(S.CREATOR_SHAPE, kind == 1, { kind = 1 })
-                    SelectChip(S.CREATOR_FLAG, kind == 2, { kind = 2 })
+                    SelectChip(S.CREATOR_EMOJI, kind == 3, { kind = 3 })
                 }
 
                 when (kind) {
                     0 -> {
                         Text(S.CREATOR_COLOR, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            CreatorPalette.forEach { c -> ColorDot(Color(c), "", color == c) { color = c } }
+                            CreatorPalette.forEach { c -> ColorDotSel(color, c) { color = c } }
                         }
                         Text(S.CREATOR_WOBBLE.format(blobA, blobB), style = MaterialTheme.typography.labelMedium)
                         Slider(value = blobA, onValueChange = { blobA = it }, valueRange = 0.1f..2f)
@@ -151,52 +199,38 @@ fun CreatorDialog(vm: AppViewModel, onDismiss: () -> Unit) {
                         }
                         Text(S.CREATOR_COLOR, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            CreatorPalette.forEach { c -> ColorDot(Color(c), "", color == c) { color = c } }
+                            CreatorPalette.forEach { c -> ColorDotSel(color, c) { color = c } }
                         }
                     }
                     else -> {
-                        Text(S.CREATOR_DIRECTION, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Text(S.CREATOR_EMOJI_HINT, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        OutlinedTextField(
+                            value = emoji,
+                            onValueChange = {
+                                emoji = it.take(8)
+                                if (it.isNotBlank()) imageB64 = ""
+                            },
+                            singleLine = true,
+                            label = { Text(S.CREATOR_EMOJI_LABEL) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SelectChip(S.CREATOR_H, !vertical, { vertical = false })
-                            SelectChip(S.CREATOR_V, vertical, { vertical = true })
+                            val quick = listOf("🤔", "🇩🇪", "🇮🇷", "🔥", "⭐", "🌙")
+                            quick.forEach { e -> SelectChip(e, emoji == e, { emoji = e; imageB64 = "" }) }
                         }
-                        Text(S.CREATOR_BANDS, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        SelectChip(S.CREATOR_PICK_IMAGE, imageB64.isNotBlank(), { imagePicker.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly)) })
+                        Text(S.CREATOR_COLOR, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            bands.forEachIndexed { bi, bc ->
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                                ) {
-                                    Box(
-                                        Modifier
-                                            .size(26.dp)
-                                            .clip(RoundedCornerShape(50))
-                                            .background(Color(bc)),
-                                    )
-                                    TextButton(onClick = { bands = bands.filterIndexed { i, _ -> i != bi } }) { Text("x") }
-                                }
-                            }
+                            CreatorPalette.forEach { c -> ColorDotSel(color, c) { color = c } }
                         }
-                        Text(S.CREATOR_BAND_ADD, style = MaterialTheme.typography.labelMedium)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            CreatorPalette.forEach { c ->
-                                ColorDot(Color(c), "", false) { bands = bands + c }
-                            }
+                        Text(S.CREATOR_EYES.format(if (eyesOn) "On" else "Off"), style = MaterialTheme.typography.labelMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SelectChip("On", eyesOn, { eyesOn = true })
+                            SelectChip("Off", !eyesOn, { eyesOn = false })
                         }
-                        Text(S.CREATOR_EMBLEM, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            emblemNames.forEachIndexed { i, n -> SelectChip(n, emblem == i, { emblem = i }) }
-                        }
-                        if (emblem > 0) {
-                            Text(S.CREATOR_EMBLEM_POS, style = MaterialTheme.typography.labelMedium)
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                SelectChip(S.CREATOR_POS_CENTER, emblemX == 0.5f, { emblemX = 0.5f })
-                                SelectChip(S.CREATOR_POS_LEFT, emblemX == 0.35f, { emblemX = 0.35f })
-                            }
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                CreatorPalette.forEach { c -> ColorDot(Color(c), "", emblemColor == c) { emblemColor = c } }
-                            }
-                        }
+                        Text(S.CREATOR_WOBBLE.format(blobA, blobB), style = MaterialTheme.typography.labelMedium)
+                        Slider(value = blobA, onValueChange = { blobA = it }, valueRange = 0.1f..2f)
+                        Slider(value = blobB, onValueChange = { blobB = it }, valueRange = 0.1f..2f)
                     }
                 }
 

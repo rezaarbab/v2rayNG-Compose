@@ -195,7 +195,8 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                 }
 
                 Text(S.PICK_PACK, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                @OptIn(ExperimentalLayoutApi::class)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     MiniChip(S.STYLE_BLOB, browsePack == 0, { browsePack = 0 })
                     MiniChip(S.STYLE_TOY, browsePack == 1, { browsePack = 1 })
                     MiniChip(S.STYLE_FLAG, browsePack == 2, { browsePack = 2 })
@@ -388,6 +389,7 @@ private fun MiniChip(text: String, selected: Boolean, onClick: () -> Unit) {
             style = MaterialTheme.typography.labelLarge,
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
         )
     }

@@ -20,6 +20,11 @@ data class CustomStickerDef(
     val emblemX: Float = 0.5f,
     val speed: Float = 1f,
     val size: Int = 190,
+    val emoji: String = "",
+    val imageB64: String = "",
+    val eyesOn: Boolean = false,
+    val speed: Float = 1f,
+    val size: Int = 190,
 ) {
     fun bandColors(): List<Long> = flagBands.split(",").mapNotNull { it.trim().toLongOrNull() }
 
@@ -32,6 +37,11 @@ data class CustomStickerDef(
                 ToyArt(Color(color), V2Stickers.toyOps(toyShape), V2Stickers.toyEyes(toyShape), phase),
             )
             2 -> Sticker("cus-$id", name, FlagArt(Color(bandColors().firstOrNull() ?: 0xFF23262B), flagBands(), phase))
+            3 -> Sticker(
+                "cus-$id",
+                name,
+                ImageArt(Color(color), emoji = emoji, imageB64 = imageB64, a = blobA, b = blobB, eyes = eyesOn, phase = phase),
+            )
             else -> Sticker(
                 "cus-$id",
                 name,
@@ -141,7 +151,24 @@ internal fun emblemOps(kind: Int, cx: Float, hole: Color): List<ToyOp> = when (k
 fun CustomStickerDef.suggestion(): String = when (kind) {
     1 -> "Toy pack"
     2 -> "Flag pack"
+    3 -> "Blob pack"
     else -> "Blob pack"
+}
+
+object ImageStickerCache {
+    private val map = HashMap<String, android.graphics.Bitmap>()
+
+    fun get(key: String, b64: String): android.graphics.Bitmap? {
+        map[key]?.let { return it }
+        return try {
+            val bytes = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+            val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+            map[key] = bmp
+            bmp
+        } catch (_: Exception) {
+            null
+        }
+    }
 }
 
 object CustomStickers {
@@ -206,6 +233,9 @@ object CustomStickers {
                     .put("emblem", d.emblem)
                     .put("emblemColor", d.emblemColor)
                     .put("emblemX", d.emblemX.toDouble())
+                    .put("emoji", d.emoji)
+                    .put("imageB64", d.imageB64)
+                    .put("eyesOn", d.eyesOn)
                     .put("speed", d.speed.toDouble())
                     .put("size", d.size),
             )
@@ -234,6 +264,9 @@ object CustomStickers {
                         emblem = o.optInt("emblem", 0),
                         emblemColor = o.optLong("emblemColor", 0xFFF7CE1B),
                         emblemX = o.optDouble("emblemX", 0.5).toFloat(),
+                        emoji = o.optString("emoji", ""),
+                        imageB64 = o.optString("imageB64", ""),
+                        eyesOn = o.optBoolean("eyesOn", false),
                         speed = o.optDouble("speed", 1.0).toFloat(),
                         size = o.optInt("size", 190),
                     ),
