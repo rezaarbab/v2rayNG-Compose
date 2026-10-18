@@ -24,7 +24,8 @@ object S {
     const val PING_TEST = "Ping test"
     const val ADD_SERVER = "Add server"
     const val IMPORT_TITLE = "Import from link"
-    const val IMPORT_HINT = "vless:// ..."
+    const val IMPORT_HINT = "vless:// | vmess:// | trojan:// | ss://"
+    const val IMPORT_EMPTY = "No servers yet - import a real link with the + button"
     const val FIELD_NAME = "Name"
     const val FIELD_ADDRESS = "Address"
     const val ADD = "Add"
@@ -110,7 +111,7 @@ object S {
     const val MENU_LAYOUT_TITLE = "Menu layout"
     const val MENU_LAYOUT_HINT = "This dialog also opens by holding a menu icon for 1s"
     const val HOME_LAYOUT_TITLE = "Home screen layout"
-    val HOME_SECTIONS = listOf("Status", "Connect sticker", "Server card", "Traffic cards", "Totals")
+    val HOME_SECTIONS = listOf("Status", "Connect sticker", "Server card", "Traffic cards")
 
     const val LOG_CONNECTING = "Connecting to '%s' …"
     const val LOG_CONNECTED = "Connected — tunnel is up"

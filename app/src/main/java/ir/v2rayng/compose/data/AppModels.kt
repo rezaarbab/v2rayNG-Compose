@@ -37,21 +37,8 @@ data class LogLine(
 )
 
 data class AppState(
-    val servers: List<ServerProfile> = listOf(
-        ServerProfile("s1", "Germany - Frankfurt", "de-01.blob-vpn.net", 1, "de"),
-        ServerProfile("s2", "Turkey - Istanbul", "tr-02.blob-vpn.net", 0, "tr"),
-        ServerProfile("s3", "Sweden - Stockholm", "se-03.blob-vpn.net", 2, "se"),
-        ServerProfile("s4", "Netherlands - Amsterdam", "nl-04.blob-vpn.net", 4, "nl"),
-        ServerProfile("s5", "Japan - Tokyo", "jp-05.blob-vpn.net", 3, "jp"),
-        ServerProfile("s6", "United States - New York", "us-06.blob-vpn.net", 5, "us"),
-        ServerProfile("s7", "Iran - Tehran", "ir-07.blob-vpn.net", 6, "ir"),
-        ServerProfile("s8", "France - Paris", "fr-08.blob-vpn.net", 7, "fr"),
-        ServerProfile("s9", "Singapore", "sg-09.blob-vpn.net", 8, "sg"),
-        ServerProfile("s10", "South Korea - Seoul", "kr-10.blob-vpn.net", 9, "kr"),
-        ServerProfile("s11", "Switzerland - Zurich", "ch-11.blob-vpn.net", 10, "ch"),
-        ServerProfile("s12", "Canada - Toronto", "ca-12.blob-vpn.net", 11, "ca"),
-    ),
-    val selectedId: String = "s1",
+    val servers: List<ServerProfile> = emptyList(),
+    val selectedId: String = "",
     val vpnState: VpnState = VpnState.IDLE,
     val traffic: TrafficStat = TrafficStat(),
     val logs: List<LogLine> = emptyList(),
@@ -64,7 +51,9 @@ data class AppState(
     val apps: List<AppInfo> = emptyList(),
 ) {
     val selected: ServerProfile
-        get() = servers.firstOrNull { it.id == selectedId } ?: servers.first()
+        get() = servers.firstOrNull { it.id == selectedId }
+            ?: servers.firstOrNull()
+            ?: ServerProfile("none", "-", "-", 0)
 }
 
 object TimeKit {

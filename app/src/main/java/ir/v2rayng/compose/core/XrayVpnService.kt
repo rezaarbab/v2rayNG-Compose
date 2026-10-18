@@ -1,4 +1,4 @@
-package ir.v2rayng.compose.core
+﻿package ir.v2rayng.compose.core
 
 import android.content.Intent
 import android.graphics.Bitmap
@@ -21,14 +21,14 @@ class XrayVpnService : VpnService() {
         const val ACTION_CONNECT = "ir.blob.vpn.CONNECT"
         const val ACTION_STOP = "ir.blob.vpn.STOP"
         private const val EXTRA_LINK = "link"
-        var pendingLink: VlessLink? = null
+        var pendingLink: ProxyLink? = null
 
-        fun start(context: android.content.Context, link: VlessLink, raw: String) {
+        fun start(context: android.content.Context, link: ProxyLink, raw: String) {
             pendingLink = link
-            context.startService(
+            context.startForegroundService(
                 Intent(context, XrayVpnService::class.java)
-                    .setAction(ACTION_CONNECT)
-                    .putExtra(EXTRA_LINK, raw),
+                .setAction(ACTION_CONNECT)
+                .putExtra(EXTRA_LINK, raw),
             )
         }
 
@@ -105,7 +105,7 @@ class XrayVpnService : VpnService() {
             }
             else -> {
                 val raw = intent?.getStringExtra(EXTRA_LINK)
-                val link = if (raw != null) parseVlessLink(raw) else null
+                val link = if (raw != null) parseProxyLink(raw) else null
                 val effective = link ?: pendingLink
                 if (effective == null) {
                     stopForegroundCompat()
@@ -158,7 +158,7 @@ class XrayVpnService : VpnService() {
         return bmp
     }
 
-    private fun startForegroundCompat(link: VlessLink) {
+    private fun startForegroundCompat(link: ProxyLink) {
         val manager = getSystemService(android.app.NotificationManager::class.java)
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             val channel = android.app.NotificationChannel("blob_vpn", "Blob VPN", android.app.NotificationManager.IMPORTANCE_LOW)
@@ -189,10 +189,10 @@ class XrayVpnService : VpnService() {
         androidx.core.app.ServiceCompat.startForeground(this, 1001, builder.build(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
     }
 
-    private fun startCore(link: VlessLink) {
+    private fun startCore(link: ProxyLink) {
         try {
             Libv2ray.initCoreEnv(File(filesDir, "core").apply { mkdirs() }.absolutePath, "")
-            XrayBridge.addLog("INFO", "Starting core: ${link.address}:${link.port} (${link.type}/${link.security})")
+                XrayBridge.addLog("INFO", "Starting core: ${link.address}:${link.port} (${link.kind}/${link.type}/${link.security})")
             XrayBridge.setState(RealState.CONNECTING)
             val builder = Builder()
                 .setSession("Blob")
@@ -264,3 +264,4 @@ class XrayVpnService : VpnService() {
         super.onDestroy()
     }
 }
+

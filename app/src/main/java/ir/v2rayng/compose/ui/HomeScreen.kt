@@ -99,7 +99,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
         V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
     }
 
-    val order = parseList(settings.homeOrder, listOf(0, 1, 2, 3, 4))
+    val order = parseList(settings.homeOrder, listOf(0, 1, 2, 3)).take(4)
 
     Column(
         modifier = Modifier
@@ -113,13 +113,23 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                 0 -> {
                     Spacer(Modifier.height(10.dp))
                     StatusPill(state.vpnState)
-                    if (settings.autoFlag && state.ipCountry.isNotBlank() && state.vpnState == VpnState.IDLE) {
+                    if (settings.autoFlag && state.ipCountry.isNotBlank()) {
                         Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = S.IP_COUNTRY.format(state.ipCountry),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val fi = ir.v2rayng.compose.stickers.CountryFlags.byCode(state.ipCountry)
+                            if (fi >= 0) {
+                                StickerCharacter(
+                                    ir.v2rayng.compose.stickers.CountryFlags.list[fi],
+                                    sizeDp = 26.dp,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text(
+                                text = S.IP_COUNTRY.format(state.ipCountry),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
                 1 -> {
@@ -190,19 +200,11 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                         TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), settings.upIcon, settings.stickerStyle, settings.upColor, settings.upSpeed, { editZone.value = "up" }, settings.navStickers)
                         TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), settings.downIcon, settings.stickerStyle, settings.downColor, settings.downSpeed, { editZone.value = "down" }, settings.navStickers)
                     }
-                }
-                else -> {
-                    Spacer(Modifier.height(12.dp))
-                    Row(
+                    androidx.compose.material3.TextButton(
+                        onClick = { vm.resetTotalTraffic() },
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        StatChip(S.TOTAL_UP, TimeKit.human(state.traffic.up), Modifier.weight(1f))
-                        StatChip(S.TOTAL_DOWN, TimeKit.human(state.traffic.down), Modifier.weight(1f))
-                        androidx.compose.material3.TextButton(
-                            onClick = { vm.resetTraffic() },
-                        ) { Text("Reset", style = MaterialTheme.typography.labelMedium) }
+                        Text("Reset traffic", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
@@ -301,29 +303,6 @@ private fun TrafficArrow(up: Boolean, accent: Color) {
             accent, tip, Offset(size.width * 0.72f, h),
             strokeWidth = sw, cap = StrokeCap.Round,
         )
-    }
-}
-
-@Composable
-private fun StatChip(title: String, value: String, modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-    ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = value,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace,
-            )
-        }
     }
 }
 

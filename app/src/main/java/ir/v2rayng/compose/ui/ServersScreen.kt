@@ -78,21 +78,31 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
         }
         Spacer(Modifier.height(10.dp))
 
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(state.servers, key = { it.id }) { srv ->
-                val avatar = if (srv.country.isNotBlank()) {
-                    val fi = CountryFlags.byCode(srv.country)
-                    if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byIndex(settings.stickerStyle, srv.stickerIndex)
-                } else {
-                    V2Stickers.byIndex(settings.stickerStyle, srv.stickerIndex)
-                }
-                ServerRow(
-                    profile = srv,
-                    sticker = avatar,
-                    selected = srv.id == state.selectedId,
-                    onPick = { vm.select(srv.id) },
-                    onIconHold = { editSrv = srv.id },
+        if (state.servers.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = S.IMPORT_EMPTY,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(state.servers, key = { it.id }) { srv ->
+                    val avatar = if (srv.country.isNotBlank()) {
+                        val fi = CountryFlags.byCode(srv.country)
+                        if (fi >= 0) CountryFlags.list[fi] else V2Stickers.byIndex(settings.stickerStyle, srv.stickerIndex)
+                    } else {
+                        V2Stickers.byIndex(settings.stickerStyle, srv.stickerIndex)
+                    }
+                    ServerRow(
+                        profile = srv,
+                        sticker = avatar,
+                        selected = srv.id == state.selectedId,
+                        onPick = { vm.select(srv.id) },
+                        onIconHold = { editSrv = srv.id },
+                    )
+                }
             }
         }
     }

@@ -95,6 +95,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     }
                     put { s ->
                         val targetId = s.selectedId
+                        if (st.state == ir.v2rayng.compose.core.RealState.CONNECTED) {
+                            appUp += st.upSpeed.toLong()
+                            appDown += st.downSpeed.toLong()
+                        }
                         s.copy(
                             vpnState = when (st.state) {
                                 ir.v2rayng.compose.core.RealState.IDLE -> if (real) VpnState.IDLE else s.vpnState
@@ -104,8 +108,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             },
                             traffic = if (st.state == ir.v2rayng.compose.core.RealState.CONNECTED) {
                                 s.traffic.copy(
-                                    up = st.up,
-                                    down = st.down,
+                                    up = appUp,
+                                    down = appDown,
                                     upSpeed = st.upSpeed,
                                     downSpeed = st.downSpeed,
                                 )
@@ -263,7 +267,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun connect() {
         val target = _state.value.selected
         if (target.link != null) {
-            val parsed = ir.v2rayng.compose.core.parseVlessLink(target.link)
+            val parsed = ir.v2rayng.compose.core.parseProxyLink(target.link)
             if (parsed == null) {
                 put { s -> s.copy(vpnState = VpnState.BROKEN) }
                 log("ERROR", S.LOG_FAILED)
@@ -375,22 +379,22 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             log("INFO", S.LOG_PING_START)
             val servers = _state.value.servers
             for (srv in servers) {
-                val ms: Int? = if (srv.link != null) {
-                    withContext(Dispatchers.IO) {
-                        try {
-                            val l = ir.v2rayng.compose.core.parseVlessLink(srv.link!!)
-                            if (l == null) {
-                                null
-                            } else {
-                                val config = ir.v2rayng.compose.core.buildXrayConfig(l)
-                                val d = libv2ray.Libv2ray.measureOutboundDelay(config, "https://www.google.com/generate_204")
-                                if (d >= 0) d.toInt() else null
-                            }
-                        } catch (_: Exception) {
+            val ms: Int? = if (srv.link != null) {
+                withContext(Dispatchers.IO) {
+                    try {
+                        val l = ir.v2rayng.compose.core.parseProxyLink(srv.link!!)
+                        if (l == null) {
                             null
+                        } else {
+                            val config = ir.v2rayng.compose.core.buildXrayConfig(l)
+                            val d = libv2ray.Libv2ray.measureOutboundDelay(config, "https://www.google.com/generate_204")
+                            if (d >= 0) d.toInt() else null
                         }
+                    } catch (_: Exception) {
+                        null
                     }
-                } else {
+                }
+            } else {
                     delay(350)
                     40 + Random.nextInt(400)
                 }
@@ -435,9 +439,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     }
 
     fun addServerFromLink(raw: String) {
-        val link = ir.v2rayng.compose.core.parseVlessLink(raw)
+        val link = ir.v2rayng.compose.core.parseProxyLink(raw)
         if (link == null) {
-            log("ERROR", "Link not recognized (vless:// only)")
+            log("ERROR", "Link not recognized (vless / vmess / trojan / ss)")
             return
         }
         val shownName = link.name.ifBlank { link.address }
@@ -477,6 +481,28 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
         ir.v2rayng.compose.core.XrayBridge.requestCounterReset()
         log("INFO", "Traffic counters reset")
+    }
+
+    private var appUp = 0L
+    private var appDown = 0L
+
+    fun resetTotalTraffic() {
+        appUp = 0
+        appDown = 0
+        put { s ->
+            s.copy(traffic = s.traffic.copy(up = 0, down = 0, upSpeed = 0.0, downSpeed = 0.0))
+        }
+        log("INFO", "Total traffic reset")
+    }
+
+    fun resetServerTraffic(id: String) {
+        put { s ->
+            s.copy(servers = s.servers.map { if (it.id == id) it.copy(up = 0, down = 0) else it })
+        }
+        if (_state.value.selectedId == id) {
+            ir.v2rayng.compose.core.XrayBridge.requestCounterReset()
+        }
+        log("INFO", "Server traffic reset")
     }
 
     fun select(id: String) {
