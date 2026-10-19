@@ -1,0 +1,12 @@
+name = "arbab-panel"
+main = "worker.js"
+compatibility_date = "2024-12-01"
+
+# keepalive of your D1 - get the id from:  wrangler d1 create arbab-db
+[[d1_databases]]
+binding = "DB"
+database_name = "arbab-db"
+database_id = "REPLACE_WITH_YOUR_D1_ID"
+
+[vars]
+# APP_TOKEN = "optional-shared-secret"   # hmm vars are visible in toml; use secret for real token

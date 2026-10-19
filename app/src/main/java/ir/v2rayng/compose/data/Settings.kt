@@ -176,6 +176,7 @@ class SettingsStore(context: Context) {
                         pinned = o.optBoolean("pinned", false),
                         pack = o.optInt("pack", -1),
                         link = link.takeIf { it.isNotBlank() },
+                        category = o.optString("category", ""),
                     ),
                 )
             }
@@ -198,6 +199,7 @@ class SettingsStore(context: Context) {
                     .put("pinned", s.pinned)
                     .put("pack", s.pack)
                 if (s.link != null) o.put("link", s.link)
+                if (s.category.isNotBlank()) o.put("category", s.category)
                 arr.put(o)
             }
             sp.edit().putString("servers", arr.toString()).putString("selectedId", selectedId).apply()
@@ -206,6 +208,18 @@ class SettingsStore(context: Context) {
     }
 
     fun loadSelectedId(): String = sp.getString("selectedId", "s1") ?: "s1"
+
+    fun loadRemoteBase(): String = sp.getString("remoteBase", "") ?: ""
+
+    fun saveRemoteBase(raw: String) {
+        sp.edit().putString("remoteBase", raw).apply()
+    }
+
+    fun loadRemote(): String = sp.getString("remoteState", "") ?: ""
+
+    fun saveRemote(raw: String) {
+        sp.edit().putString("remoteState", raw).apply()
+    }
 
     fun loadCustom(): String? = sp.getString("customStickers", null)
 

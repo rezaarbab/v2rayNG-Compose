@@ -233,7 +233,7 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                 }
             }
 
-            when (val real = order[tab]) {
+            if (state.appDisabled) AppDisabledScreen(vm) else when (val real = order[tab]) {
                 0 -> HomeScreen(state, settings, vm, gaze, onGoServers = { tab = 1 })
                 1 -> ServersScreen(state, settings, vm)
                 2 -> RoutingScreen(state, settings, vm)
@@ -241,6 +241,16 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                 else -> SettingsScreen(state, settings, vm)
             }
         }
+    }
+
+    if (state.remotePopup != null) {
+        RemotePopupDialog(state.remotePopup!!, vm)
+    }
+    if (state.remoteUpdate != null) {
+        RemoteUpdateDialog(state.remoteUpdate!!, vm)
+    }
+    if (state.remoteNotif != null) {
+        RemoteNotifDialog(state.remoteNotif!!, vm)
     }
 
     if (moveOpen) {

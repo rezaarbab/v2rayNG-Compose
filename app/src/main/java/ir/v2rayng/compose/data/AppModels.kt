@@ -23,6 +23,7 @@ data class ServerProfile(
     val down: Long = 0L,
     val pinned: Boolean = false,
     val pack: Int = -1,
+    val category: String = "",
 )
 
 data class TrafficStat(
@@ -54,6 +55,10 @@ data class AppState(
     val altIp: String = "",
     val altCountry: String = "",
     val apps: List<AppInfo> = emptyList(),
+    val appDisabled: Boolean = false,
+    val remotePopup: ir.v2rayng.compose.core.Remote.PopupCfg? = null,
+    val remoteUpdate: ir.v2rayng.compose.core.Remote.UpdateCfg? = null,
+    val remoteNotif: ir.v2rayng.compose.core.Remote.NotifLine? = null,
 ) {
     val selected: ServerProfile
         get() = servers.firstOrNull { it.id == selectedId }

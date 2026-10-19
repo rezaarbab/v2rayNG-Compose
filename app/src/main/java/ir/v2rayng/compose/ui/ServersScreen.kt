@@ -53,6 +53,14 @@ import ir.v2rayng.compose.stickers.V2Stickers
 fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var editSrv by remember { mutableStateOf<String?>(null) }
     var showImport by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var catSel by remember { mutableStateOf("") } // empty string means All
+
+    val categories = state.servers.mapNotNull { it.category.takeIf { c -> c.isNotBlank() } }.distinct()
+    val filtered = state.servers.filter { srv ->
+        (catSel.isBlank() || srv.category == catSel) &&
+            (query.isBlank() || srv.name.contains(query, true) || srv.host.contains(query, true) || srv.category.contains(query, true))
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -82,7 +90,26 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
         }
         Spacer(Modifier.height(10.dp))
 
-        if (state.servers.isEmpty()) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            singleLine = true,
+            label = { Text(S.SEARCH_SERVERS) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (categories.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(listOf("") + categories) { c ->
+                    SelectChip(c.ifBlank { S.CAT_ALL }, catSel == (c.ifBlank { S.CAT_ALL }) || (c.isBlank() && catSel.isBlank()), {
+                        catSel = if (c.isBlank()) "" else c
+                    })
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+
+        if (filtered.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     text = S.IMPORT_EMPTY,
@@ -92,7 +119,7 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                val sorted = state.servers.sortedWith(
+                val sorted = filtered.sortedWith(
                     compareByDescending<ir.v2rayng.compose.data.ServerProfile> { it.pinned }
                         .thenBy { state.servers.indexOfFirst { x -> x.id == it.id } },
                 )
@@ -197,6 +224,14 @@ private fun ServerRow(
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (profile.category.isNotBlank()) {
+                    Text(
+                        text = profile.category,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 if (profile.up > 0 || profile.down > 0) {
                     Text(
                         text = "Up ${ir.v2rayng.compose.data.TimeKit.human(profile.up)} - Down ${ir.v2rayng.compose.data.TimeKit.human(profile.down)}",

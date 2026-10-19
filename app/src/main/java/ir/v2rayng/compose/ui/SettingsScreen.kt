@@ -69,6 +69,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var showAppPicker by remember { mutableStateOf(false) }
     var showNotifHex by remember { mutableStateOf(false) }
     var showCreator by remember { mutableStateOf(false) }
+    var showRemoteUrl by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadApps(context) }
 
@@ -268,6 +269,28 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(S.REMOTE_TITLE, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = vm.remoteBase().ifBlank { "—" },
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 2,
+                    )
+                    SelectChip(S.REMOTE_SET, false, { showRemoteUrl = true })
+                    SelectChip(S.REMOTE_SYNC, false, { vm.syncNow() })
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(S.LANGUAGE_NOTE, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 }
@@ -306,6 +329,31 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     if (showAppPicker) {
         AppPickerDialog(state.apps, settings.antiFilterApps, vm) { showAppPicker = false }
     }
+    if (showRemoteUrl) {
+        RemoteUrlDialog(vm.remoteBase(), vm) { showRemoteUrl = false }
+    }
+}
+
+@Composable
+private fun RemoteUrlDialog(current: String, vm: AppViewModel, onDismiss: () -> Unit) {
+    var url by remember { mutableStateOf(current) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(S.REMOTE_TITLE) },
+        text = {
+            OutlinedTextField(
+                value = url,
+                onValueChange = { url = it },
+                singleLine = true,
+                label = { Text("https://...workers.dev") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { vm.setRemoteBase(url); onDismiss() }) { Text(S.APPLY) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(S.CANCEL) } },
+    )
 }
 
 @Composable

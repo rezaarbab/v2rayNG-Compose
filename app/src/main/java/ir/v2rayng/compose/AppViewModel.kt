@@ -20,6 +20,7 @@ import ir.v2rayng.compose.data.parseFloatList
 import ir.v2rayng.compose.data.packFx
 import ir.v2rayng.compose.data.packStickerFx
 import ir.v2rayng.compose.data.parseFxPack
+import ir.v2rayng.compose.core.Remote
 import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.ui.S
 import java.net.HttpURLConnection
@@ -62,6 +63,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         if (_state.value.servers.isNotEmpty()) {
             pingAll()
         }
+        // remote admin backend (cloudflare worker - see cloudflare/worker.js)
+        Remote.BASE = store.loadRemoteBase()
+        loadRemoteState()
+        startRemoteLoop()
         var lastRealState = ir.v2rayng.compose.core.RealState.IDLE
         viewModelScope.launch {
             ir.v2rayng.compose.core.XrayBridge.status.collect { st ->
@@ -72,9 +77,20 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                         lastRealState = st.state
                         when (st.state) {
                             ir.v2rayng.compose.core.RealState.CONNECTING -> log("INFO", "Core connecting${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
-                            ir.v2rayng.compose.core.RealState.CONNECTED -> log("INFO", S.LOG_CONNECTED)
-                            ir.v2rayng.compose.core.RealState.BROKEN -> log("ERROR", "${S.LOG_FAILED}${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
-                            ir.v2rayng.compose.core.RealState.IDLE -> log("INFO", S.LOG_DISCONNECTED)
+                            ir.v2rayng.compose.core.RealState.CONNECTED -> {
+                                log("INFO", S.LOG_CONNECTED)
+                                Remote.event(Remote.deviceId(ir.v2rayng.compose.AppCtx.app), "connect")
+                            }
+                            ir.v2rayng.compose.core.RealState.BROKEN -> {
+                                Remote.event(Remote.deviceId(ir.v2rayng.compose.AppCtx.app), "disconnect")
+                                log("ERROR", "${S.LOG_FAILED}${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
+                            }
+                            ir.v2rayng.compose.core.RealState.IDLE -> {
+                                if (lastRealState == ir.v2rayng.compose.core.RealState.CONNECTED) {
+                                    Remote.event(Remote.deviceId(ir.v2rayng.compose.AppCtx.app), "disconnect")
+                                }
+                                log("INFO", S.LOG_DISCONNECTED)
+                            }
                         }
                         if (st.state == ir.v2rayng.compose.core.RealState.CONNECTED && _settings.value.autoFlag) {
                             val sel = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
@@ -191,6 +207,139 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 log("WARN", S.LOG_IP_FAIL)
             }
         }
+    }
+
+    /* ------------ remote admin backend (cloudflare worker + d1) ------------ */
+
+    private fun loadRemoteState() {
+        try {
+            val o = JSONObject(store.loadRemote())
+            popupDismissed = o.optLong("pd", 0L)
+            updateDismiss = o.optLong("ud", 0L)
+            notifSeen = o.optLong("ns", 0L)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun saveRemoteState() {
+        store.saveRemote(
+            JSONObject()
+                .put("pd", popupDismissed)
+                .put("ud", updateDismiss)
+                .put("ns", notifSeen)
+                .toString(),
+        )
+    }
+
+    fun setRemoteBase(url: String) {
+        Remote.BASE = url.trim()
+        store.saveRemoteBase(Remote.BASE)
+    }
+
+    fun remoteBase(): String = Remote.BASE
+
+    fun syncNow() {
+        val dev = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val res = Remote.sync(dev, "sync", _state.value.vpnState == VpnState.CONNECTED)
+                if (res != null) applyRemote(res)
+            } catch (e: Exception) {
+                log("WARN", "Remote sync failed")
+            }
+        }
+    }
+
+    private fun startRemoteLoop() {
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(4000L)
+            var first = true
+            while (true) {
+                try {
+                    val connected = _state.value.vpnState == VpnState.CONNECTED
+                    val dev = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
+                    val res = Remote.sync(dev, if (first) "sync" else "heartbeat", connected)
+                    if (res != null) applyRemote(res)
+                    Remote.beat(dev, connected)
+                } catch (_: Exception) {
+                }
+                first = false
+                delay(120_000L)
+            }
+        }
+    }
+
+    /** Merge the admin-managed server list; per-remote-id user data (stats, pin, sticker) is preserved. */
+    private fun mergeRemoteServers(list: List<Remote.ServerEntry>) {
+        put { s ->
+            val kept = s.servers.filter { !it.id.startsWith("rem-") }
+            val rem = list.map { e ->
+                val ex = s.servers.firstOrNull { it.id == e.id }
+                val base = ServerProfile(
+                    id = e.id,
+                    name = e.name, // admin-provided - never the config (#NAME) tag
+                    host = "${e.address}:${e.port}",
+                    stickerIndex = ex?.stickerIndex ?: ((e.id.hashCode() and 0x3FF) % 997),
+                    country = ex?.country ?: "",
+                    ping = ex?.ping,
+                    link = e.link,
+                    pinned = ex?.pinned ?: false,
+                    pack = ex?.pack ?: -1,
+                    category = e.category,
+                )
+                base.copy(up = ex?.up ?: 0L, down = ex?.down ?: 0L)
+            }
+            val still = rem.map { it.id }.toSet()
+            val selectId = if (s.selectedId.startsWith("rem-") && !still.contains(s.selectedId)) {
+                rem.firstOrNull()?.id ?: kept.firstOrNull()?.id ?: s.selectedId
+            } else {
+                s.selectedId
+            }
+            s.copy(servers = kept + rem, selectedId = selectId)
+        }
+        store.saveServers(_state.value.servers, _state.value.selectedId)
+    }
+
+    @Volatile
+    private var popupDismissed = 0L
+    @Volatile
+    private var updateDismiss = 0L
+    @Volatile
+    private var notifSeen = 0L
+
+    private fun applyRemote(r: Remote.Result) {
+        put { s ->
+            val upd = r.update?.let {
+                if (!it.forced && updateDismiss + 24 * 3600_000L > System.currentTimeMillis() && updateDismiss > 0) null else it
+            }
+            s.copy(
+                appDisabled = !r.enabled,
+                remotePopup = r.popup?.takeIf { it.id != popupDismissed },
+                remoteUpdate = upd,
+                remoteNotif = r.notifications.firstOrNull()?.takeIf { it.id > notifSeen },
+            )
+        }
+        mergeRemoteServers(r.servers)
+    }
+
+    fun ackPopup(id: Long) {
+        popupDismissed = id
+        put { s -> s.copy(remotePopup = null) }
+        Remote.ack(Remote.deviceId(ir.v2rayng.compose.AppCtx.app), "popup", id)
+        saveRemoteState()
+    }
+
+    fun ackNotif(id: Long) {
+        notifSeen = id
+        put { s -> s.copy(remoteNotif = null) }
+        Remote.ack(Remote.deviceId(ir.v2rayng.compose.AppCtx.app), "notif", id)
+        saveRemoteState()
+    }
+
+    fun dismissUpdateDialog() {
+        updateDismiss = System.currentTimeMillis()
+        put { s -> s.copy(remoteUpdate = null) }
+        saveRemoteState()
     }
 
     fun resetAllServerTraffic() {
@@ -620,7 +769,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             log("ERROR", "Link not recognized (vless / vmess / trojan / ss)")
             return
         }
-        val shownName = link.name.ifBlank { link.address }
+        // server names are admin-generated - the name inside the config (#NAME) is never used
+        val shownName = "srv-${_state.value.servers.size + 1}"
         val newId = "rv-${_state.value.servers.size}-${Random.nextInt(999)}"
         put { s ->
             s.copy(

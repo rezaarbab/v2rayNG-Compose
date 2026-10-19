@@ -1,0 +1,182 @@
+package ir.v2rayng.compose.core
+
+import android.os.Build
+import ir.v2rayng.compose.AppCtx
+import org.json.JSONObject
+import kotlin.concurrent.thread
+
+/**
+ * Cloudflare Worker (cloudflare/worker.js) backend client.
+ * Set the worker URL here after `wrangler deploy`:
+ *   Remote.BASE = "https://your-worker.workers.dev"
+ */
+object Remote {
+    var BASE: String = ""
+
+    data class ServerEntry(
+        val id: String,
+        val name: String,
+        val address: String,
+        val port: Int,
+        val link: String?,
+        val category: String,
+    )
+
+    data class PopupCfg(
+        val id: Long,
+        val title: String,
+        val body: String,
+        val btnText: String,
+        val btnUrl: String,
+        val btnEnabled: Boolean,
+        val cancelEnabled: Boolean,
+    )
+
+    data class UpdateCfg(
+        val forced: Boolean,
+        val text: String,
+        val btnText: String,
+        val url: String,
+    )
+
+    data class NotifLine(
+        val id: Long,
+        val title: String,
+        val body: String,
+        val ts: Long,
+    )
+    data class Result(
+        val enabled: Boolean,
+        val servers: List<ServerEntry>,
+        val popup: PopupCfg?,
+        val update: UpdateCfg?,
+        val notifications: List<NotifLine>,
+    )
+
+    /** Persisted stable device id - one unique stats entry per device. */
+    @Volatile
+    private var cachedDevice: String = ""
+
+    fun deviceId(context: android.content.Context): String {
+        cachedDevice.let { if (it.isNotBlank()) return it }
+        synchronized(this) {
+            if (cachedDevice.isNotBlank()) return cachedDevice
+            val sp = context.getSharedPreferences("v2settings", android.content.Context.MODE_PRIVATE)
+            var v = sp.getString("deviceId", null)
+            if (v.isNullOrBlank()) {
+                v = java.util.UUID.randomUUID().toString()
+                sp.edit().putString("deviceId", v).apply()
+            }
+            cachedDevice = v
+            return v
+        }
+    }
+
+    private fun httpPost(path: String, body: JSONObject): JSONObject? {
+        if (BASE.isBlank()) return null
+        return try {
+            val url = java.net.URL(BASE.trimEnd('/') + path)
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 8000
+            conn.readTimeout = 15000
+            conn.doOutput = true
+            conn.setRequestProperty("content-type", "application/json")
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode !in 200..299) return null
+            conn.inputStream.bufferedReader().use { it.readText() }.let {
+                JSONObject(it)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun deviceModel(): String =
+        Build.MANUFACTURER.ifBlank { "?" } + " " + Build.MODEL
+
+    fun appVersion(): Long = try {
+        AppCtx.app.packageManager.getPackageInfo(AppCtx.app.packageName, 0).longVersionCode
+    } catch (_: Exception) {
+        0L
+    }
+
+    /** POST /api/sync - registers the device (dedup by id) and pulls everything the admin set. */
+    fun sync(device: String, type: String, connected: Boolean): Result? {
+        val body = JSONObject()
+            .put("device", device)
+            .put("model", deviceModel())
+            .put("ver", appVersion())
+            .put("type", type)
+            .put("connected", connected)
+        val res = httpPost("/api/sync", body) ?: return null
+        val servers = ArrayList<ServerEntry>()
+        val arr = res.optJSONArray("servers") ?: org.json.JSONArray()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            servers.add(
+                ServerEntry(
+                    id = "rem-" + o.optString("id"),
+                    name = o.optString("name", "srv"),
+                    address = o.optString("address", ""),
+                    port = o.optInt("port", 443),
+                    link = o.optString("link", "").takeIf { it.isNotBlank() },
+                    category = o.optString("category", ""),
+                ),
+            )
+        }
+        val popup = res.optJSONObject("popup")?.let {
+            PopupCfg(
+                id = it.optLong("id", 0L),
+                title = it.optString("title", "پیام"),
+                body = it.optString("body", ""),
+                btnText = it.optString("btnText", ""),
+                btnUrl = it.optString("btnUrl", ""),
+                btnEnabled = it.optBoolean("btnEnabled", false),
+                cancelEnabled = it.optBoolean("cancelEnabled", true),
+            )
+        }
+        val upd = res.optJSONObject("update")?.let {
+            UpdateCfg(it.optBoolean("forced", false), it.optString("text", ""), it.optString("btnText", "Update"), it.optString("url", ""))
+        }
+        val notifications = ArrayList<NotifLine>()
+        val narr = res.optJSONArray("notifications") ?: org.json.JSONArray()
+        for (i in 0 until narr.length()) {
+            val o = narr.optJSONObject(i) ?: continue
+            notifications.add(NotifLine(o.optLong("id"), o.optString("title", ""), o.optString("body", ""), o.optLong("ts", 0L)))
+        }
+        return Result(res.optBoolean("enabled", true), servers, popup, upd, notifications)
+    }
+
+    fun beat(device: String, connected: Boolean) {
+        thread(name = "remote-beat") {
+            try {
+                httpPost(
+                    "/api/beat",
+                    JSONObject().put("device", device).put("connected", connected),
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** Send a connect/disconnect stat event. */
+    fun event(device: String, name: String) {
+        thread(name = "remote-event") {
+            try {
+                httpPost("/api/ack", JSONObject().put("device", device).put("kind", "event").put("name", name))
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** Declare this device has seen a popup / notification (worker counts shows once). */
+    fun ack(device: String, kind: String, id: Long) {
+        thread(name = "remote-ack") {
+            try {
+                httpPost("/api/ack", JSONObject().put("device", device).put("kind", kind).put("id", id))
+            } catch (_: Exception) {
+            }
+        }
+    }
+}
