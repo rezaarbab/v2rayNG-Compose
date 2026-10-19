@@ -39,29 +39,16 @@ export default {
     const path = url.pathname.replace(/\/+$/, "") || "/";
 
     // ---------------- admin panel ----------------
+    // The HTML shell is public; ALL data/actions require the real ADMIN_PASSWORD
+    // sent in every /admin/api call (no cookies, no tokens, no bypass).
     if (path === "/" || path === "/admin" || path === "/panel") {
-      return adminAuthOk(env, request) ? panelPage(env) : loginPageHtml();
-    }
-    if (path === "/admin/login" && request.method === "POST") {
-      const body = await request.json().catch(() => ({}));
-      if (env.ADMIN_PASSWORD && body.pw && body.pw === env.ADMIN_PASSWORD) {
-        return new Response(JSON.stringify({ ok: true }), {
-          headers: jsonHeaders([
-            "Set-Cookie",
-            `arbab=${await adminToken(env)}; HttpOnly; Secure; SameSite=Lax; Path=/`,
-          ]),
-        });
-      }
-      return new Response(JSON.stringify({ ok: false, error: env.ADMIN_PASSWORD ? "wrong password" : "panel password not configured on worker" }), { status: 401, headers: jsonHeaders() });
-    }
-    if (path === "/admin/logout") {
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: jsonHeaders(["Set-Cookie", "arbab=; Max-Age=0; Path=/"]),
-      });
+      return panelPage(env);
     }
     if (path.startsWith("/admin/api") && request.method === "POST") {
-      if (!adminAuthOk(env, request)) return new Response("unauthorized", { status: 401 });
       const body = await request.json().catch(() => ({}));
+      if (!pwOk(env, body)) {
+        return new Response(JSON.stringify({ ok: false, error: env.ADMIN_PASSWORD ? "wrong password" : "panel password not configured on worker" }), { status: 401, headers: jsonHeaders() });
+      }
       return adminApi(env, body);
     }
 
@@ -403,18 +390,10 @@ function okJson(extra = {}) {
 
 /* ============================ auth helpers ============================ */
 
-async function adminToken(env) {
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey("raw", enc.encode(env.ADMIN_PASSWORD), "HMAC", false, ["sign"]);
-  const mac = await crypto.subtle.sign("HMAC", key, enc.encode("arbab-admin"));
-  return [...new Uint8Array(mac)].map((x) => x.toString(16).padStart(2, "0")).join("");
-}
-
-async function adminAuthOk(env, request) {
-  if (!env.ADMIN_PASSWORD) return false; // refuse if password not configured
-  const cookie = request.headers.get("cookie") || "";
-  const m = cookie.match(/arbab=([a-f0-9]+)/);
-  return !!(m && (m[1] === (await adminToken(env))));
+function pwOk(env, b) {
+  if (!env.ADMIN_PASSWORD) return false; // refuse unless password configured
+  return typeof b === "object" && b !== null && typeof b.pw === "string" &&
+    b.pw === env.ADMIN_PASSWORD;
 }
 
 /* ============================ html pages ============================ */
@@ -506,33 +485,26 @@ font-weight:800;box-shadow:0 6px 24px rgba(0,0,0,.4);display:none;z-index:99}
 .note{font-size:11px;color:var(--sub);line-height:1.8}
 .catgrp{margin:10px 0 2px;color:var(--ok);font-size:12px;font-weight:700}`;
 
-const LOGIN_HTML = `<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1"><title>ARBAB — ورود</title>
-<style>${THEME_CSS}</style></head><body>
-<header><div class=logo>A</div><h1>ARBAB<small>god-panel</small></h1></header>
-<main style="padding-top:10vh;max-width:360px">
-<div class=card style=text-align:center>
-<div class=logo style="margin:0 auto 12px;width:52px;height:52px;font-size:20px;border-radius:16px">A</div>
-<h2 style=justify-content:center>ورود به پنل</h2>
-<p class=note>رمز پنل را وارد کنید</p>
-<input id=pass type=password placeholder=رمز autofocus style=text-align:center onkeydown="if(event.key==='Enter')go()">
-<button onclick=go() style=width:100%;margin-top:14px>ورود</button>
-<p class=note id=err style="color:var(--red);display:none"></p>
-</div></main>
-<script>
-function go(){fetch('/admin/login',{method:'POST',headers:{'content-type':'application/json'},
-body:JSON.stringify({pw:document.getElementById('pass').value})}).then(r=>r.json()).then(j=>{
-if(j.ok)location.reload();else{const e=document.getElementById('err');e.style.display='block';e.textContent='⛔ '+(j.error||'رمز غلط است')}})}
-</script></body></html>`;
-
-function loginPageHtml() {
-  return new Response(LOGIN_HTML, { headers: { "content-type": "text/html; charset=utf-8" } });
-}
+/* login gate lives inside the same page; nothing here */
 
 function panelPage(env) {
   const html = `<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>ARBAB Panel</title>
-<style>${THEME_CSS}</style></head><body>
+<style>${THEME_CSS}
+#lock{position:fixed;inset:0;background:rgba(11,15,20,.97);z-index:200;display:flex;align-items:center;justify-content:center}
+#app{opacity:.25;pointer-events:none;filter:blur(6px)}
+#app.open{opacity:1;pointer-events:auto;filter:none}
+#lock .card{width:min(340px,92vw);text-align:center}
+</style></head><body>
+<div id=lock><div class=card>
+<div class=logo style="margin:0 auto 12px;width:52px;height:52px;font-size:20px;border-radius:16px">A</div>
+<h2 style=justify-content:center>ARBAB Admin</h2>
+<p class=note>رمز پنل را وارد کنید</p>
+<input id=pass type=password placeholder=رمز autocapitalize=off style=text-align:center onkeydown="if(event.key==='Enter')unlock()">
+<button onclick=unlock() style=width:100%;margin-top:14px>ورود</button>
+<p class=note id=lock_err style="color:var(--red);display:none"></p>
+</div></div>
+<div id=app>
 <header><div class=logo>A</div>
 <h1>ARBAB Admin<small>god-panel.lastofanarchy.workers.dev</small></h1>
 <button class="gray sm" onclick=logout()>خروج</button></header>
@@ -619,13 +591,21 @@ function panelPage(env) {
 
 <div class=toast id=toast>انجام شد</div>
 </main>
+</div>
 <script>
+let PW=sessionStorage.getItem('arbabpw')||'';
+
 const $=(id)=>document.getElementById(id);
 let CATS=[],SRV=[],DEVS=[],CUT=0;
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
-async function api(body){const r=await fetch('/admin/api',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const j=await r.json();if(j.error){toast('خطا: '+j.error,1)}else toast();return j}
+async function api(body){const r=await fetch('/admin/api',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...body,pw:PW})});
+if(r.status===401){showLock('⛔ '+(await r.json().then(j=>j.error).catch(()=>'رمز غلط است')));throw new Error('locked')}
+const j=await r.json();if(j.error){toast('خطا: '+j.error,1)}else toast();return j}
 function toast(msg,err){const t=$('toast');t.textContent=msg||'✓ انجام شد';t.className=err?'toast err':'toast';t.style.display='block';clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',1400)}
-function logout(){fetch('/admin/logout').then(()=>location.reload())}
+function logout(){PW='';sessionStorage.removeItem('arbabpw');renderLock();showLock()}
+async function unlock(){const v=$('pass').value.trim();if(!v)return;const saved=PW;PW=v;try{const j=await api({action:'stats'});if(j&&j.stats){PW=v;sessionStorage.setItem('arbabpw',v);hideLock();loadAll()}else{PW=saved;showLock('⛔ رمز غلط است')}}catch(e){PW=saved}}
+function showLock(err){const e=$('lock_err');if(err){e.style.display='block';e.textContent=err}else e.style.display='none';$('lock').style.display='flex';$('app').classList.remove('open');$('pass').focus()}
+function hideLock(){$('lock_err').style.display='none';$('lock').style.display='none';$('app').classList.add('open')}
 function catlist(){const l=$('catlist');if(l)l.remove();const d=document.createElement('datalist');d.id='catlist';d.innerHTML=CATS.map(c=>'<option value="'+esc(c)+'">').join('');document.body.appendChild(d)}
 
 /* ---- cats ---- */
@@ -735,9 +715,12 @@ return '<tr><td style="direction:ltr;text-align:right">'+esc(d.model||d.id.slice
 '<td>'+(d.app_ver||'-')+'</td><td style=direction:ltr>'+esc((d.ip||'-').slice(0,16))+'</td><td>'+last+'</td></tr>'}).join('')+'</table>'}
 
 /* ---- boot ---- */
-async function loadAll(){renderFilters();await loadCats();await loadServers();await loadStats();await loadNotifs();await loadPopup();await loadUpdate();await loadDevices();renderDevices()}
-loadAll();
-setInterval(()=>{loadStats().catch(()=>{});loadDevices().catch(()=>{})},30000);
+/* ---- boot: password-first, every visit ---- */
+(async()=>{
+  if(PW){try{const j=await api({action:'stats'});if(j&&j.stats){hideLock();await loadAll();return}}catch(e){}}
+  showLock();
+})();async function loadAll(){renderFilters();await loadCats();await loadServers();await loadStats();await loadNotifs();await loadPopup();await loadUpdate();await loadDevices();renderDevices()}
+setInterval(()=>{if(PW)loadStats().catch(()=>{})},30000);
 </script>
 </body></html>`;
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
