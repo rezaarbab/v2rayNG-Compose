@@ -54,6 +54,7 @@ fun RemotePopupDialog(p: Remote.PopupCfg, vm: AppViewModel) {
 
 @Composable
 fun RemoteUpdateDialog(u: Remote.UpdateCfg, vm: AppViewModel) {
+    val ctx = LocalContext.current
     AlertDialog(
         onDismissRequest = { if (!u.forced) vm.dismissUpdateDialog() },
         title = {

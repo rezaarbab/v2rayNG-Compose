@@ -13,6 +13,7 @@ import ir.v2rayng.compose.data.TimeKit
 import ir.v2rayng.compose.data.VpnState
 import ir.v2rayng.compose.data.packList
 import ir.v2rayng.compose.data.packFloatList
+import org.json.JSONObject
 import ir.v2rayng.compose.data.packLongList
 import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.data.parseLongList
