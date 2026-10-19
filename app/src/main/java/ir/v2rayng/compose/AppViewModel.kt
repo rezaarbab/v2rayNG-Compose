@@ -50,7 +50,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private val _settings = MutableStateFlow(store.load())
     val settings: StateFlow<Settings> = _settings.asStateFlow()
 
-    /* admin-driven behavior flags - MUST be before init (Kotlin field order) */
+    /** admin-driven behavior flags - MUST be before init (Kotlin field order) */
+    @Volatile
+    private var lastSrvToast: Long = 0L
     @Volatile
     private var adminFlags: Map<String, String> = HashMap()
     @Volatile
@@ -272,31 +274,29 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun remoteBase(): String = Remote.BASE
 
     fun syncNow() {
-        if (!isOnline()) {
-            netToast()
-            log("WARN", "No internet connection")
-            return
-        }
         val dev = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val res = Remote.sync(dev, "sync", _state.value.vpnState == VpnState.CONNECTED)
                 if (res != null) {
                     applyRemote(res)
-                } else if (!isOnline()) {
-                    netToast()
-                    log("WARN", "No internet connection")
                 } else {
-                    log("WARN", "Remote sync failed")
+                    handleSyncFail()
                 }
             } catch (e: Exception) {
-                if (!isOnline()) {
-                    netToast()
-                    log("WARN", "No internet connection")
-                } else {
-                    log("WARN", "Remote sync failed")
-                }
+                handleSyncFail()
             }
+        }
+    }
+
+    private suspend fun handleSyncFail() {
+        val online = withContext(Dispatchers.IO) { netOnline() }
+        if (online) {
+            srvFailToast()
+            log("WARN", "Failed to connect to server")
+        } else {
+            netToast()
+            log("WARN", "No internet connection")
         }
     }
 
@@ -317,6 +317,22 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
     }
 
+    fun srvFailToast() {
+        val now = System.currentTimeMillis()
+        if (now - lastSrvToast < 4000L) return
+        lastSrvToast = now
+        try {
+            val ctx = try { ir.v2rayng.compose.AppCtx.app } catch (e: Exception) { return }
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                try {
+                    android.widget.Toast.makeText(ctx, "Failed to connect to server", android.widget.Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
     fun isOnline(): Boolean {
         return try {
             val cm = AppCtx.app.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
@@ -330,6 +346,19 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         } catch (_: Exception) {
             false
         }
+    }
+
+    /** True connectivity: any transport present, else a real DNS attempt (caps can be stale). */
+    suspend fun netOnline(): Boolean = withContext(Dispatchers.IO) {
+        if (isOnline()) return@withContext true
+        for (host in listOf("1.1.1.1", "8.8.8.8")) {
+            try {
+                java.net.InetAddress.getByName(host)
+                return@withContext true
+            } catch (_: Exception) {
+            }
+        }
+        false
     }
 
     private fun startRemoteLoop() {
@@ -614,10 +643,21 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun connect() {
         val target = _state.value.selected
         if (!isOnline()) {
-            netToast()
-            log("WARN", "No internet connection")
+            // judge offline only after a real probe, then start
+            viewModelScope.launch {
+                if (netOnline()) {
+                    doConnect(target)
+                } else {
+                    netToast()
+                    log("WARN", "No internet connection")
+                }
+            }
             return
         }
+        doConnect(target)
+    }
+
+    private fun doConnect(target: ServerProfile) {
         if (target.link != null) {
             val parsed = ir.v2rayng.compose.core.parseProxyLink(target.link)
             if (parsed == null) {
@@ -742,12 +782,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     /** Real ping via core. ids null = all servers; wantFlag = also fetch country flag after ping. */
     fun pingServers(ids: Collection<String>?, wantFlag: Boolean) {
-        if (!isOnline()) {
-            netToast()
-            log("WARN", "No internet connection")
-            return
-        }
         viewModelScope.launch {
+            if (!netOnline()) {
+                netToast()
+                log("WARN", "No internet connection")
+                return@launch
+            }
             log("INFO", S.LOG_PING_START)
             val targets = if (ids == null) _state.value.servers else _state.value.servers.filter { ids.contains(it.id) }
             for (srv in targets) {

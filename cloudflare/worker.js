@@ -448,9 +448,17 @@ async function adminApi(env, b) {
         }), { headers: jsonHeaders() });
       }
       case "devices.list": {
-        const rows = await env.DB.prepare(
-          "SELECT id, model, app_ver, first_seen, last_seen, ip, connected, info FROM devices ORDER BY last_seen DESC LIMIT 200",
-        ).all();
+        let rows;
+        try {
+          rows = await env.DB.prepare(
+            "SELECT id, model, app_ver, first_seen, last_seen, ip, connected, info FROM devices ORDER BY last_seen DESC LIMIT 200",
+          ).all();
+        } catch (e) {
+          try { await ensureSchema(env); } catch (e2) {}
+          rows = await env.DB.prepare(
+            "SELECT id, model, app_ver, first_seen, last_seen, ip, connected, info FROM devices ORDER BY last_seen DESC LIMIT 200",
+          ).all();
+        }
         const bl = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models"]);
         return new Response(JSON.stringify({ ok: true, cut: Date.now() - 150000, devices: rows.results,
           blocked: {
