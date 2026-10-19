@@ -52,6 +52,7 @@ object Remote {
         val popup: PopupCfg?,
         val update: UpdateCfg?,
         val notifications: List<NotifLine>,
+        val flags: Map<String, String> = emptyMap(),
     )
 
     /** Persisted stable device id - one unique stats entry per device. */
@@ -147,7 +148,11 @@ object Remote {
             val o = narr.optJSONObject(i) ?: continue
             notifications.add(NotifLine(o.optLong("id"), o.optString("title", ""), o.optString("body", ""), o.optLong("ts", 0L)))
         }
-        return Result(res.optBoolean("enabled", true), servers, popup, upd, notifications)
+        val flags = HashMap<String, String>()
+        res.optJSONObject("pflags")?.let { pf ->
+            for (k in pf.keys()) flags[k] = pf.optString(k, "auto")
+        }
+        return Result(res.optBoolean("enabled", true), servers, popup, upd, notifications, flags)
     }
 
     fun beat(device: String, connected: Boolean) {

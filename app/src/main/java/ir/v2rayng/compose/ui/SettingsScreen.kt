@@ -269,25 +269,24 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(S.REMOTE_TITLE, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(S.SERVERS_TITLE, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+
+                ToggleRow(S.PING_ON_START, S.PING_ON_START_SUB, settings.pingOnStart) { vm.setPingOnStart(it) }
+                ToggleRow(S.FLAG_ON_START, S.FLAG_ON_START_SUB, settings.flagOnStart) { vm.setFlagOnStart(it) }
+                ToggleRow(S.AUTO_PING_NEW, S.AUTO_PING_NEW_SUB, settings.autoPingNew) { vm.setAutoPingNew(it) }
+                ToggleRow(S.AUTO_FLAG_NEW, S.AUTO_FLAG_NEW_SUB, settings.autoFlagNew) { vm.setAutoFlagNew(it) }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = vm.remoteBase().ifBlank { "—" },
+                        S.SERVERS_COUNT.format(state.servers.size),
                         style = MaterialTheme.typography.bodySmall,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
-                        maxLines = 2,
                     )
-                     SelectChip(S.REMOTE_SET, false, { showRemoteUrl = true })
-                     SelectChip(S.REMOTE_SYNC, false, { vm.syncNow() })
-                 }
-
-                 ToggleRow("Ping on start", "Ping all servers as soon as the app opens", settings.pingOnStart) { vm.setPingOnStart(it) }
-
-                 ToggleRow("Auto ping new servers", "Instantly ping + flag servers the admin adds", settings.autoPingNew) { vm.setAutoPingNew(it) }
-             }
-         }
+                    SelectChip(S.REMOTE_SYNC, false, { vm.syncNow() })
+                }
+            }
+        }
 
         Card(
             modifier = Modifier.fillMaxWidth(),

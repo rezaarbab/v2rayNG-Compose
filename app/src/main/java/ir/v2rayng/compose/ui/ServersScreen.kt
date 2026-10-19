@@ -81,11 +81,11 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             IconButton(onClick = { showImport = true }) {
                 Icon(Icons.Filled.Add, contentDescription = S.IMPORT_TITLE)
             }
-            androidx.compose.material3.TextButton(onClick = { vm.resetAllServerTraffic() }) {
-                Text("Reset", style = MaterialTheme.typography.labelMedium)
+            IconButton(onClick = { vm.resetAllServerTraffic() }) {
+                Text("🧹", style = MaterialTheme.typography.titleMedium)
             }
-            androidx.compose.material3.TextButton(onClick = { vm.syncNow() }) {
-                Text(S.REMOTE_SYNC, style = MaterialTheme.typography.labelMedium)
+            IconButton(onClick = { vm.syncNow() }) {
+                Text("🔄", style = MaterialTheme.typography.titleMedium)
             }
             IconButton(onClick = { vm.pingAll() }) {
                 Icon(Icons.Filled.Refresh, contentDescription = S.PING_TEST)

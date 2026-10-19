@@ -71,6 +71,8 @@ data class Settings(
     val homeOrder: String = "0,1,2,3,4",
     val pingOnStart: Boolean = true,
     val autoPingNew: Boolean = true,
+    val flagOnStart: Boolean = true,
+    val autoFlagNew: Boolean = true,
 )
 
 fun parseList(s: String, def: List<Int>): List<Int> {
@@ -158,6 +160,8 @@ class SettingsStore(context: Context) {
         homeOrder = sp.getString("homeOrder", "0,1,2,3,4")!!,
         pingOnStart = sp.getBoolean("pingOnStart", true),
         autoPingNew = sp.getBoolean("autoPingNew", true),
+        flagOnStart = sp.getBoolean("flagOnStart", true),
+        autoFlagNew = sp.getBoolean("autoFlagNew", true),
     )
 
     fun loadServers(): List<ServerProfile>? {
@@ -290,6 +294,8 @@ class SettingsStore(context: Context) {
             .putString("homeOrder", s.homeOrder)
             .putBoolean("pingOnStart", s.pingOnStart)
             .putBoolean("autoPingNew", s.autoPingNew)
+            .putBoolean("flagOnStart", s.flagOnStart)
+            .putBoolean("autoFlagNew", s.autoFlagNew)
             .apply()
     }
 }

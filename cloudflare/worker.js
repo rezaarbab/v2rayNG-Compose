@@ -100,6 +100,14 @@ async function appSync(env, request) {
     enabled: appEnabled,
     servers: await listServers(env),
   };
+  // admin-driven server behavior flags ("1"/"0" force; "" = follow user's own toggle)
+  const pf = await getSettings(env, ["ping_on_start", "flag_on_start", "auto_ping_new", "auto_flag_new"]);
+  out.pflags = {
+    ping_start: pf.ping_on_start || "auto",
+    flag_start: pf.flag_on_start || "auto",
+    auto_ping_new: pf.auto_ping_new || "auto",
+    auto_flag_new: pf.auto_flag_new || "auto",
+  };
   if (min > 0 && ver < min) {
     out.update = { forced: true, text: cfg.latest_version && latest > ver ? "نسخه جدید" : "برای ادامه باید اپدیت کنید", btnText: "Update", url: cfg.latest_url || "" };
   } else if (latest > ver && (cfg.latest_url || "") !== "") {
@@ -278,6 +286,15 @@ async function adminApi(env, b) {
       case "set.app":
         await setSetting(env, "app_enabled", b.on ? "1" : "0");
         return okJson();
+      case "set.flags": {
+        const legal = { ping_on_start: 1, flag_on_start: 1, auto_ping_new: 1, auto_flag_new: 1 };
+        for (const [k, v] of Object.entries(b.flags || {})) {
+          if (legal[k] && ["1", "0", "auto"].includes(String(v))) {
+            await setSetting(env, k, String(v));
+          }
+        }
+        return okJson();
+      }
       case "set.update":
         await setSetting(env, "min_version", String(Number(b.minVersion || 0)));
         await setSetting(env, "latest_version", String(Number(b.latestVersion || 0)));
@@ -303,8 +320,16 @@ async function adminApi(env, b) {
         return okJson({ popup: c });
       }
       case "cfg.load": {
-        const cfg = await getSettings(env, ["min_version", "latest_version", "latest_url", "app_enabled"]);
-        return okJson({ cfg, cats });
+        const cfg = await getSettings(env, ["min_version", "latest_version", "latest_url", "app_enabled", "ping_on_start", "flag_on_start", "auto_ping_new", "auto_flag_new"]);
+        return okJson({
+          cfg, cats,
+          pflags: {
+            ping_on_start: cfg.ping_on_start || "auto",
+            flag_on_start: cfg.flag_on_start || "auto",
+            auto_ping_new: cfg.auto_ping_new || "auto",
+            auto_flag_new: cfg.auto_flag_new || "auto",
+          },
+        });
       }
       case "notif.add":
         await env.DB.prepare("INSERT INTO notifs (title, body, ts, active) VALUES (?1,?2,?3,1)")
@@ -527,6 +552,16 @@ function panelPage(env) {
 <span id=app_state class=note></span>
 </div>
 <p class=note>وقتی خاموش باشه، اپ روی همه دستگاه‌ها قفل میشه.</p></div>
+
+<div class=card><h2>⚡ رفتار خودکار سرورها (فرمان به همه اپ‌ها)</h2>
+<div class=grid style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+<div><div class=lbl>پینگ هنگام باز شدن اپ</div><select id=f_ping_start><option value=auto>اختیار کاربر</option><option value=1>روشن (اجباری)</option><option value=0>خاموش (اجباری)</option></select></div>
+<div><div class=lbl>پرچم کشور هنگام باز شدن</div><select id=f_flag_start><option value=auto>اختیار کاربر</option><option value=1>روشن (اجباری)</option><option value=0>خاموش (اجباری)</option></select></div>
+<div><div class=lbl>پینگ سرورهای جدید</div><select id=f_auto_ping_new><option value=auto>اختیار کاربر</option><option value=1>روشن (اجباری)</option><option value=0>خاموش (اجباری)</option></select></div>
+<div><div class=lbl>پرچم کشور سرورهای جدید</div><select id=f_auto_flag_new><option value=auto>اختیار کاربر</option><option value=1>روشن (اجباری)</option><option value=0>خاموش (اجباری)</option></select></div>
+</div>
+<button onclick=saveFlags() style=margin-top:10px>ذخیره فرمان‌ها</button>
+<p class=note>«روشن/خاموش (اجباری)» = این رفتار روی همه اپ‌ها به همین صورت اجباری میشه؛ «اختیار کاربر» = هر کاربر از تنظیمات خودش تصمیم میگیره.</p></div>
 </div>
 
 <!-- ================= SERVERS ================= -->
@@ -667,6 +702,16 @@ port:Number($('s_port').value||443),link:$('s_link').value,category:$('s_cat').v
 await api(b);['s_name','s_addr','s_link','s_note'].forEach(i=>{$(i).value=''});loadAll()}
 async function bulkAdd(){const j=await api({action:'srv.bulk',text:$('s_bulk').value,category:$('s_bcat').value});
 $('s_bulk').value='';toast('افزوده شد: '+((j&&j.added)||0));loadAll()}
+async function loadFlags(){const j=await api({action:'cfg.load'});const p=j.pflags||{};
+$('f_ping_start').value=p.ping_on_start||'auto';
+$('f_flag_start').value=p.flag_on_start||'auto';
+$('f_auto_ping_new').value=p.auto_ping_new||'auto';
+$('f_auto_flag_new').value=p.auto_flag_new||'auto'}
+async function saveFlags(){await api({action:'set.flags',flags:{
+ ping_on_start:$('f_ping_start').value,
+ flag_on_start:$('f_flag_start').value,
+ auto_ping_new:$('f_auto_ping_new').value,
+ auto_flag_new:$('f_auto_flag_new').value}});toast('فرمان‌ها ذخیره شد — اپ‌ها با سینک بعدی اعمال میکنن')}
 async function loadServers(){
  const j=await api({action:'cfg.load'});CATS=j.cats||[];
  $('app_sw').checked=!!j.cfg.app_enabled;appState(j.cfg.app_enabled!=='0');
@@ -758,7 +803,7 @@ return '<tr><td style="direction:ltr;text-align:right">'+esc(d.model||d.id.slice
 '<td>'+(d.app_ver||'-')+'</td><td style=direction:ltr>'+esc((d.ip||'-').slice(0,16))+'</td><td>'+last+'</td></tr>'}).join('')+'</table>'}
 
 /* ---- boot ---- */
-async function loadAll(){await loadServers();loadStats().catch(()=>{});loadNotifs().catch(()=>{});loadPopup().catch(()=>{});loadUpdate().catch(()=>{});loadDevices().catch(()=>{})}
+async function loadAll(){await loadServers();loadStats().catch(()=>{});loadFlags().catch(()=>{});loadNotifs().catch(()=>{});loadPopup().catch(()=>{});loadUpdate().catch(()=>{});loadDevices().catch(()=>{})}
 (async()=>{
  if(PW){try{const j=await api({action:'stats'});if(j&&j.stats){openPanel();return}}catch(e){}}
  logout();

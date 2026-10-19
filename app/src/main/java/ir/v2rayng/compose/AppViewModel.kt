@@ -61,8 +61,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 selectedId = if (saved.any { it.id == store.loadSelectedId() }) store.loadSelectedId() else saved.first().id,
             )
         }
-        if (_state.value.servers.isNotEmpty() && _settings.value.pingOnStart) {
-            pingAll()
+        if (_state.value.servers.isNotEmpty() && effPingStart()) {
+            pingServers(null, effFlagStart())
         }
         // remote admin backend (cloudflare worker - see cloudflare/worker.js)
         Remote.BASE = store.loadRemoteBase()
@@ -283,7 +283,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             val cm = AppCtx.app.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
             val net = cm.activeNetwork ?: return false
             val caps = cm.getNetworkCapabilities(net) ?: return false
-            caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            // VPN-only caps sometimes lack INTERNET/VALIDATED - treat any real transport as online
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) ||
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)
         } catch (_: Exception) {
             false
         }
@@ -343,14 +347,32 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         store.saveServers(_state.value.servers, _state.value.selectedId)
         mergeStamp = System.currentTimeMillis()
         // auto-ping freshly delivered servers (admin added new ones)
-        if (_settings.value.autoPingNew && newIds.isNotEmpty()) {
-            pingServers(newIds)
+        if (effAutoPingNew() && newIds.isNotEmpty()) {
+            pingServers(newIds, effAutoFlagNew())
         }
     }
 
     @Volatile
     private var mergeStamp: Long = 0L
     fun lastMergeStamp(): Long = mergeStamp
+
+    /* ------- admin-driven behavior flags (panel overrides user toggles) ------- */
+    @Volatile
+    private var adminFlags: Map<String, String> = emptyMap()
+
+    /** "1"/"0" => forced by admin, "auto"/missing => follow the user's local toggle. */
+    private fun effFlag(adminKey: String, userValue: Boolean): Boolean {
+        return when (adminFlags[adminKey]) {
+            "1" -> true
+            "0" -> false
+            else -> userValue
+        }
+    }
+
+    private fun effAutoPingNew(): Boolean = effFlag("auto_ping_new", _settings.value.autoPingNew)
+    private fun effAutoFlagNew(): Boolean = effFlag("auto_flag_new", _settings.value.autoFlagNew)
+    private fun effPingStart(): Boolean = effFlag("ping_start", _settings.value.pingOnStart)
+    private fun effFlagStart(): Boolean = effFlag("flag_start", _settings.value.flagOnStart)
 
     @Volatile
     private var popupDismissed = 0L
@@ -360,6 +382,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private var notifSeen = 0L
 
     private fun applyRemote(r: Remote.Result) {
+        adminFlags = r.flags
         put { s ->
             val upd = r.update?.let {
                 if (!it.forced && updateDismiss + 24 * 3600_000L > System.currentTimeMillis() && updateDismiss > 0) null else it
@@ -405,6 +428,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setAutoFlag(v: Boolean) = setSettings { it.copy(autoFlag = v) }
     fun setPingOnStart(v: Boolean) = setSettings { it.copy(pingOnStart = v) }
     fun setAutoPingNew(v: Boolean) = setSettings { it.copy(autoPingNew = v) }
+    fun setFlagOnStart(v: Boolean) = setSettings { it.copy(flagOnStart = v) }
+    fun setAutoFlagNew(v: Boolean) = setSettings { it.copy(autoFlagNew = v) }
 
     fun setNavOrder(order: List<Int>) = setSettings { it.copy(navOrder = packList(order)) }
 
@@ -699,10 +724,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         return true
     }
 
-    fun pingAll() = pingServers(null)
+    fun pingAll() = pingServers(null, _settings.value.flagOnStart)
 
-    /** Real ping via core for the given ids (null = all servers). */
-    fun pingServers(ids: Collection<String>?) {
+    /** Real ping via core. ids null = all servers; wantFlag = also fetch country flag after ping. */
+    fun pingServers(ids: Collection<String>?, wantFlag: Boolean) {
         if (!isOnline()) {
             netToast()
             log("WARN", "No internet connection")
@@ -734,7 +759,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 put { s ->
                     s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms) else it })
                 }
-                if (ms != null && srv.country.isBlank() && !srv.host.startsWith("0.0.0.") && srv.host.isNotBlank()) {
+                if (wantFlag && ms != null && srv.country.isBlank() && !srv.host.startsWith("0.0.0.") && srv.host.isNotBlank()) {
                     // Brand-new server: grab its country flag right away
                     val code = dnsCountry(srv.host.substringBefore(":"))
                     if (code != null) {
