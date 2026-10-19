@@ -61,12 +61,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 selectedId = if (saved.any { it.id == store.loadSelectedId() }) store.loadSelectedId() else saved.first().id,
             )
         }
-        if (_state.value.servers.isNotEmpty()) {
+        if (_state.value.servers.isNotEmpty() && _settings.value.pingOnStart) {
             pingAll()
         }
         // remote admin backend (cloudflare worker - see cloudflare/worker.js)
         Remote.BASE = store.loadRemoteBase()
         loadRemoteState()
+        syncNow()
         startRemoteLoop()
         var lastRealState = ir.v2rayng.compose.core.RealState.IDLE
         viewModelScope.launch {
@@ -240,14 +241,51 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun remoteBase(): String = Remote.BASE
 
     fun syncNow() {
+        if (!isOnline()) {
+            netToast()
+            log("WARN", "No internet connection")
+            return
+        }
         val dev = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val res = Remote.sync(dev, "sync", _state.value.vpnState == VpnState.CONNECTED)
-                if (res != null) applyRemote(res)
+                if (res != null) applyRemote(res) else netToast()
             } catch (e: Exception) {
-                log("WARN", "Remote sync failed")
+                if (!isOnline()) {
+                    netToast()
+                    log("WARN", "No internet connection")
+                } else {
+                    log("WARN", "Remote sync failed")
+                }
             }
+        }
+    }
+
+    /** English user-facing network alert. */
+    private var lastNetToast = 0L
+    fun netToast() {
+        val now = System.currentTimeMillis()
+        if (now - lastNetToast < 4000L) return
+        lastNetToast = now
+        try {
+            android.widget.Toast.makeText(
+                ir.v2rayng.compose.AppCtx.app,
+                "No internet connection",
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun isOnline(): Boolean {
+        return try {
+            val cm = AppCtx.app.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val net = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(net) ?: return false
+            caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -272,10 +310,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     /** Merge the admin-managed server list; per-remote-id user data (stats, pin, sticker) is preserved. */
     private fun mergeRemoteServers(list: List<Remote.ServerEntry>) {
+        val newIds = HashSet<String>()
         put { s ->
+            val knownBefore = s.servers.filter { it.id.startsWith("rem-") }.map { it.id }.toSet()
             val kept = s.servers.filter { !it.id.startsWith("rem-") }
             val rem = list.map { e ->
                 val ex = s.servers.firstOrNull { it.id == e.id }
+                if (ex == null) newIds.add(e.id)
                 val base = ServerProfile(
                     id = e.id,
                     name = e.name, // admin-provided - never the config (#NAME) tag
@@ -287,6 +328,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     pinned = ex?.pinned ?: false,
                     pack = ex?.pack ?: -1,
                     category = e.category,
+                    note = e.msg,
                 )
                 base.copy(up = ex?.up ?: 0L, down = ex?.down ?: 0L)
             }
@@ -299,7 +341,16 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             s.copy(servers = kept + rem, selectedId = selectId)
         }
         store.saveServers(_state.value.servers, _state.value.selectedId)
+        mergeStamp = System.currentTimeMillis()
+        // auto-ping freshly delivered servers (admin added new ones)
+        if (_settings.value.autoPingNew && newIds.isNotEmpty()) {
+            pingServers(newIds)
+        }
     }
+
+    @Volatile
+    private var mergeStamp: Long = 0L
+    fun lastMergeStamp(): Long = mergeStamp
 
     @Volatile
     private var popupDismissed = 0L
@@ -352,6 +403,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setBgSpeed(v: Float) = setSettings { it.copy(bgSpeed = v) }
     fun setNavStickers(v: Boolean) = setSettings { it.copy(navStickers = v) }
     fun setAutoFlag(v: Boolean) = setSettings { it.copy(autoFlag = v) }
+    fun setPingOnStart(v: Boolean) = setSettings { it.copy(pingOnStart = v) }
+    fun setAutoPingNew(v: Boolean) = setSettings { it.copy(autoPingNew = v) }
 
     fun setNavOrder(order: List<Int>) = setSettings { it.copy(navOrder = packList(order)) }
 
@@ -521,6 +574,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private fun connect() {
         val target = _state.value.selected
+        if (!isOnline()) {
+            netToast()
+            log("WARN", "No internet connection")
+            return
+        }
         if (target.link != null) {
             val parsed = ir.v2rayng.compose.core.parseProxyLink(target.link)
             if (parsed == null) {
@@ -641,11 +699,19 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         return true
     }
 
-    fun pingAll() {
+    fun pingAll() = pingServers(null)
+
+    /** Real ping via core for the given ids (null = all servers). */
+    fun pingServers(ids: Collection<String>?) {
+        if (!isOnline()) {
+            netToast()
+            log("WARN", "No internet connection")
+            return
+        }
         viewModelScope.launch {
             log("INFO", S.LOG_PING_START)
-            val servers = _state.value.servers
-            for (srv in servers) {
+            val targets = if (ids == null) _state.value.servers else _state.value.servers.filter { ids.contains(it.id) }
+            for (srv in targets) {
             val ms: Int? = if (srv.link != null) {
                 withContext(Dispatchers.IO) {
                     try {
@@ -667,6 +733,16 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 }
                 put { s ->
                     s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms) else it })
+                }
+                if (ms != null && srv.country.isBlank() && !srv.host.startsWith("0.0.0.") && srv.host.isNotBlank()) {
+                    // Brand-new server: grab its country flag right away
+                    val code = dnsCountry(srv.host.substringBefore(":"))
+                    if (code != null) {
+                        put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(country = code) else it }) }
+                        if (_state.value.selectedId == srv.id && _state.value.vpnState != VpnState.IDLE) {
+                            applyFlag(code)
+                        }
+                    }
                 }
             }
             log("INFO", S.LOG_PING_DONE)

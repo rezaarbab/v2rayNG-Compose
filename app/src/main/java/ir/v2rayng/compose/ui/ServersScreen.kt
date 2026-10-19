@@ -84,6 +84,9 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             androidx.compose.material3.TextButton(onClick = { vm.resetAllServerTraffic() }) {
                 Text("Reset", style = MaterialTheme.typography.labelMedium)
             }
+            androidx.compose.material3.TextButton(onClick = { vm.syncNow() }) {
+                Text(S.REMOTE_SYNC, style = MaterialTheme.typography.labelMedium)
+            }
             IconButton(onClick = { vm.pingAll() }) {
                 Icon(Icons.Filled.Refresh, contentDescription = S.PING_TEST)
             }
@@ -219,10 +222,12 @@ private fun ServerRow(
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = profile.host,
+                    text = profile.note.ifBlank { profile.host },
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = if (profile.note.isBlank()) FontFamily.Monospace else FontFamily.Default,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
                 if (profile.category.isNotBlank()) {
                     Text(
@@ -234,10 +239,13 @@ private fun ServerRow(
                 }
                 if (profile.up > 0 || profile.down > 0) {
                     Text(
-                        text = "Up ${ir.v2rayng.compose.data.TimeKit.human(profile.up)} - Down ${ir.v2rayng.compose.data.TimeKit.human(profile.down)}",
+                        text = "↑ " + ir.v2rayng.compose.data.TimeKit.human(profile.up) + "   ↓ " + ir.v2rayng.compose.data.TimeKit.human(profile.down),
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
                 }
             }

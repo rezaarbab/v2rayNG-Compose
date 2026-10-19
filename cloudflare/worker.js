@@ -160,7 +160,7 @@ async function appSync(env, request) {
 }
 
 async function listServers(env) {
-  const q = "SELECT id, name, address, port, link, category FROM servers WHERE active=1 ORDER BY ord ASC, id ASC LIMIT 500";
+  const q = "SELECT id, name, address, port, link, category, msg FROM servers WHERE active=1 ORDER BY ord ASC, id ASC LIMIT 500";
   const rows = await env.DB.prepare(q).all();
   return (rows.results || []).map((r) => ({
     id: String(r.id),
@@ -169,6 +169,7 @@ async function listServers(env) {
     port: r.port || 443,
     link: r.link,
     category: r.category || "",
+    msg: r.msg || "",
   }));
 }
 
@@ -249,9 +250,9 @@ async function adminApi(env, b) {
         // name NEVER taken from the config link (#NAME) - admin provides it, or default srv-<n>
         const name = String(b.name || "").trim().slice(0, 64) || `srv-${(b.seq ?? Date.now()) % 10000}`;
         await env.DB.prepare(
-          "INSERT INTO servers (name, address, port, link, category, ord, active) VALUES (?1,?2,?3,?4,?5,?6,1)",
+          "INSERT INTO servers (name, address, port, link, category, ord, active, msg) VALUES (?1,?2,?3,?4,?5,?6,1,?7)",
         ).bind(name, String(b.address || "").slice(0, 256), Number(b.port || 443), String(b.link || "").slice(0, 4096),
-          String(b.category || "").slice(0, 64), Number(b.ord || 0)).run();
+          String(b.category || "").slice(0, 64), Number(b.ord || 0), String(b.msg || "").slice(0, 200)).run();
         return okJson();
       }
       case "srv.bulk": {
@@ -278,7 +279,7 @@ async function adminApi(env, b) {
         await env.DB.prepare("UPDATE servers SET active=?2 WHERE id=?1").bind(Number(b.id), b.on ? 1 : 0).run();
         return okJson();
       case "srv.rename":
-        await env.DB.prepare("UPDATE servers SET name=?2, category=?3 WHERE id=?1").bind(Number(b.id), String(b.name).slice(0, 64), String(b.category || "").slice(0, 64)).run();
+        await env.DB.prepare("UPDATE servers SET name=?2, category=?3, msg=?4 WHERE id=?1").bind(Number(b.id), String(b.name).slice(0, 64), String(b.category || "").slice(0, 64), String(b.msg == null ? "" : b.msg).slice(0, 200)).run();
         return okJson();
       case "srv.ord": {
         const rows = await env.DB.prepare("SELECT id, ord FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
@@ -545,6 +546,7 @@ function panelPage(env) {
 <div><div class=lbl>ترتیب</div><input id=s_ord type=number value=99></div></div>
 <div class=lbl>آدرس (اختیاری)</div><input id=s_addr>
 <div class=lbl>لینک کانفیگ</div><textarea id=s_link rows=2></textarea>
+<div class=lbl>پیام نمایشی زیر سرور (خالی = خوده آیپی:پورت نشون داده میشه)</div><input id=s_note placeholder="مثلاً: فیلترشکن پرسرعت ازپا">
 <button onclick=srvAdd() style=margin-top:10px>افزودن سرور</button>
 
 <h2 style="color:var(--blue);margin-top:18px">افزودن گروهی</h2>
@@ -629,8 +631,8 @@ const mk=(t,idx)=>{const c=document.createElement('span');c.className='chip'+(wi
 mk('همه',-1);CATS.forEach((c,i)=>mk(c,i))}
 
 /* ---- servers ---- */
-async function srvAdd(){const b={action:'srv.add',name:$('s_name').value,address:$('s_addr').value,port:Number($('s_port').value||443),link:$('s_link').value,category:$('s_cat').value,ord:Number($('s_ord').value||99)};
-await api(b);['s_name','s_addr','s_link'].forEach(i=>{$(i).value=''});loadAll()}
+async function srvAdd(){const b={action:'srv.add',name:$('s_name').value,address:$('s_addr').value,port:Number($('s_port').value||443),link:$('s_link').value,category:$('s_cat').value,ord:Number($('s_ord').value||99),msg:$('s_note').value};
+await api(b);['s_name','s_addr','s_link','s_note'].forEach(i=>{$(i).value=''});loadAll()}
 async function bulkAdd(){const j=await api({action:'srv.bulk',text:$('s_bulk').value,category:$('s_bcat').value});$('s_bulk').value='';loadAll()}
 async function loadServers(){const j=await api({action:'srv.list'});SRV=j.servers||[];
 $('app_sw').checked=!!j.app;appState(j.app);renderFilters();renderServers();renderCatUI()}
@@ -655,9 +657,12 @@ function srvRow(s,i,list){
  const dn=document.createElement('button');dn.className='gray sm';dn.textContent='▼';dn.title='پایین';dn.disabled=i===list.length-1;
  dn.onclick=()=>api({action:'srv.ord',id:s.id,up:false}).then(loadAll);ord.appendChild(dn);d.appendChild(ord);
  const nm=document.createElement('input');nm.className='nm';nm.value=s.name||'';
- nm.onchange=()=>api({action:'srv.rename',id:s.id,name:nm.value,category:s.category||''}).then(loadAll);d.appendChild(nm);
+ nm.onchange=()=>api({action:'srv.rename',id:s.id,name:nm.value,category:s.category||'',msg:s.msg||''}).then(loadAll);d.appendChild(nm);
  const ct=document.createElement('input');ct.className='ct';ct.setAttribute('list','catlist');ct.value=s.category||'';
- ct.onchange=()=>api({action:'srv.rename',id:s.id,name:s.name||'',category:ct.value}).then(loadAll);d.appendChild(ct);
+ ct.onchange=()=>api({action:'srv.rename',id:s.id,name:s.name||'',category:ct.value,msg:s.msg||''}).then(loadAll);d.appendChild(ct);
+ const nb=document.createElement('button');nb.className='gray sm';nb.textContent='💬';nb.title='پیام نمایشی زیر سرور (خالی = آیپی:پورت)';
+ nb.onclick=()=>{const n=prompt('پیام نمایشی زیر سرور (خالی = خوده آیپی:پورت):',s.msg||'');if(n==null)return;
+ api({action:'srv.rename',id:s.id,name:s.name||'',category:s.category||'',msg:n.trim()}).then(loadAll)};d.appendChild(nb);
  const bd=document.createElement('span');bd.className='badge '+(s.active?'b-on':'b-off');bd.textContent=s.active?'✓ فعال':'✕ خاموش';d.appendChild(bd);
  const tb=document.createElement('button');tb.className='gray sm';tb.textContent=s.active?'خاموش':'روشن';
  tb.onclick=()=>api({action:'srv.active',id:s.id,on:!s.active}).then(loadAll);d.appendChild(tb);
@@ -739,7 +744,7 @@ async function ensureSchema(env) {
     env.DB.prepare("CREATE TABLE IF NOT EXISTS events (device TEXT, type TEXT, ts INTEGER)"),
     env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts)"),
     env.DB.prepare(
-      "CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, address TEXT, port INTEGER DEFAULT 443, link TEXT DEFAULT '', category TEXT DEFAULT '', ord INTEGER DEFAULT 99, active INTEGER DEFAULT 1)",
+      "CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, address TEXT, port INTEGER DEFAULT 443, link TEXT DEFAULT '', category TEXT DEFAULT '', ord INTEGER DEFAULT 99, active INTEGER DEFAULT 1, msg TEXT DEFAULT '')",
     ),
     env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS popup_seen (device TEXT, popup INTEGER, PRIMARY KEY (device, popup))",
@@ -748,6 +753,9 @@ async function ensureSchema(env) {
     env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS notifs (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, body TEXT, ts INTEGER, active INTEGER DEFAULT 1)",
     ),
-  ]);
-  schemaReady = true;
-}
+    ]);
+    try {
+      await env.DB.prepare("ALTER TABLE servers ADD COLUMN msg TEXT DEFAULT ''").run();
+    } catch (e) {} // column already exists
+    schemaReady = true;
+  }

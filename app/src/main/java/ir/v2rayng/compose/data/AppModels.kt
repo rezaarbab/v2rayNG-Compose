@@ -24,6 +24,7 @@ data class ServerProfile(
     val pinned: Boolean = false,
     val pack: Int = -1,
     val category: String = "",
+    val note: String = "",
 )
 
 data class TrafficStat(

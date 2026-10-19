@@ -279,11 +279,15 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                         modifier = Modifier.weight(1f),
                         maxLines = 2,
                     )
-                    SelectChip(S.REMOTE_SET, false, { showRemoteUrl = true })
-                    SelectChip(S.REMOTE_SYNC, false, { vm.syncNow() })
-                }
-            }
-        }
+                     SelectChip(S.REMOTE_SET, false, { showRemoteUrl = true })
+                     SelectChip(S.REMOTE_SYNC, false, { vm.syncNow() })
+                 }
+
+                 ToggleRow("Ping on start", "Ping all servers as soon as the app opens", settings.pingOnStart) { vm.setPingOnStart(it) }
+
+                 ToggleRow("Auto ping new servers", "Instantly ping + flag servers the admin adds", settings.autoPingNew) { vm.setAutoPingNew(it) }
+             }
+         }
 
         Card(
             modifier = Modifier.fillMaxWidth(),

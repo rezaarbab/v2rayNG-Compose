@@ -20,6 +20,7 @@ object Remote {
         val port: Int,
         val link: String?,
         val category: String,
+        val msg: String = "",
     )
 
     data class PopupCfg(
@@ -122,6 +123,7 @@ object Remote {
                     port = o.optInt("port", 443),
                     link = o.optString("link", "").takeIf { it.isNotBlank() },
                     category = o.optString("category", ""),
+                    msg = o.optString("msg", ""),
                 ),
             )
         }

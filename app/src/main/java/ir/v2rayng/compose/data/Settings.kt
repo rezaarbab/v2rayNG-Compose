@@ -69,6 +69,8 @@ data class Settings(
     val antiFilter: Boolean = false,
     val antiFilterApps: String = "",
     val homeOrder: String = "0,1,2,3,4",
+    val pingOnStart: Boolean = true,
+    val autoPingNew: Boolean = true,
 )
 
 fun parseList(s: String, def: List<Int>): List<Int> {
@@ -154,6 +156,8 @@ class SettingsStore(context: Context) {
         antiFilter = sp.getBoolean("antiFilter", false),
         antiFilterApps = sp.getString("antiFilterApps", "")!!,
         homeOrder = sp.getString("homeOrder", "0,1,2,3,4")!!,
+        pingOnStart = sp.getBoolean("pingOnStart", true),
+        autoPingNew = sp.getBoolean("autoPingNew", true),
     )
 
     fun loadServers(): List<ServerProfile>? {
@@ -177,6 +181,7 @@ class SettingsStore(context: Context) {
                         pack = o.optInt("pack", -1),
                         link = link.takeIf { it.isNotBlank() },
                         category = o.optString("category", ""),
+                        note = o.optString("note", ""),
                     ),
                 )
             }
@@ -200,6 +205,7 @@ class SettingsStore(context: Context) {
                     .put("pack", s.pack)
                 if (s.link != null) o.put("link", s.link)
                 if (s.category.isNotBlank()) o.put("category", s.category)
+                if (s.note.isNotBlank()) o.put("note", s.note)
                 arr.put(o)
             }
             sp.edit().putString("servers", arr.toString()).putString("selectedId", selectedId).apply()
@@ -282,6 +288,8 @@ class SettingsStore(context: Context) {
             .putBoolean("antiFilter", s.antiFilter)
             .putString("antiFilterApps", s.antiFilterApps)
             .putString("homeOrder", s.homeOrder)
+            .putBoolean("pingOnStart", s.pingOnStart)
+            .putBoolean("autoPingNew", s.autoPingNew)
             .apply()
     }
 }
