@@ -301,7 +301,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     }
 
     /** English user-facing network alert (must run on main thread to not crash). */
-    private var lastNetToast = 0L
     fun netToast() {
         val now = System.currentTimeMillis()
         if (now - lastNetToast < 4000L) return

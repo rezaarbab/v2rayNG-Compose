@@ -76,10 +76,10 @@ async function appSync(env, request) {
   const now = Date.now();
   if (b.connected) {
     await env.DB.prepare(
-      "INSERT INTO devices (id, model, app_ver, first_seen, last_seen, ip, connected) VALUES (?1,?2,?3,?4,?4,?5,1) " +
-        "ON CONFLICT(id) DO UPDATE SET last_seen=?4, model=?2, app_ver=?3, ip=?5, connected=1",
+      "INSERT INTO devices (id, model, app_ver, first_seen, last_seen, ip, connected, info) VALUES (?1,?2,?3,?4,?4,?5,1,?6) " +
+        "ON CONFLICT(id) DO UPDATE SET last_seen=?4, model=?2, app_ver=?3, ip=?5, connected=1, info=?6",
     )
-      .bind(String(b.device), String(b.model || "").slice(0, 64), String(b.ver || 0), now, clientIp(request))
+      .bind(String(b.device), String(b.model || "").slice(0, 64), String(b.ver || 0), now, clientIp(request), JSON.stringify(b.info || {}))
       .run();
   } else {
     await env.DB.prepare(
@@ -449,7 +449,7 @@ async function adminApi(env, b) {
       }
       case "devices.list": {
         const rows = await env.DB.prepare(
-          "SELECT id, model, app_ver, first_seen, last_seen, ip, connected FROM devices ORDER BY last_seen DESC LIMIT 200",
+          "SELECT id, model, app_ver, first_seen, last_seen, ip, connected, info FROM devices ORDER BY last_seen DESC LIMIT 200",
         ).all();
         const bl = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models"]);
         return new Response(JSON.stringify({ ok: true, cut: Date.now() - 150000, devices: rows.results,
@@ -491,11 +491,15 @@ const THEME_CSS = `:root{--bg:#0b0f14;--card:#141a23;--card2:#0f141c;--line:#222
 *{box-sizing:border-box}
 body{background:radial-gradient(1100px 500px at 85% -10%,rgba(43,212,138,.08),transparent),var(--bg);color:var(--txt);
 font-family:system-ui,'Segoe UI',Tahoma,sans-serif;margin:0;min-height:100vh}
+body:before{content:"";position:fixed;inset:0;z-index:-1;opacity:.5;pointer-events:none;
+background-image:linear-gradient(rgba(43,212,138,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(43,212,138,.03) 1px,transparent 1px);
+background-size:34px 34px}
 ::selection{background:rgba(43,212,138,.3)}
 ::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-thumb{background:#263042;border-radius:8px}
-header{position:sticky;top:0;z-index:60;background:rgba(11,15,20,.88);backdrop-filter:blur(12px);
-border-bottom:1px solid var(--line);padding:12px 18px;display:flex;align-items:center;gap:12px}
+header{position:sticky;top:0;z-index:60;backdrop-filter:blur(12px);
+border-bottom:1px solid var(--line);padding:12px 18px;display:flex;align-items:center;gap:12px;
+background:linear-gradient(135deg,rgba(25,33,45,.95),rgba(11,15,20,.9))}
 .logo{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--ok),#22e07a);
 display:flex;align-items:center;justify-content:center;font-weight:900;color:#04281a;font-size:15px;
 box-shadow:0 4px 18px rgba(43,212,138,.35)}
@@ -761,6 +765,11 @@ function panelPage(env) {
 </div></div>
 
 <div class=toast id=toast>انجام شد</div>
+<div id=info_modal style="position:fixed;inset:0;background:rgba(11,15,20,.8);z-index:210;display:none;align-items:center;justify-content:center">
+<div class=card style="width:min(420px,92vw)">
+<h2>ℹ مشخصات دستگاه</h2>
+<div id=info_body class=note style="max-height:60vh;overflow:auto"></div>
+<button class="gray sm" style=margin-top:12px onclick=infoClose()>بستن</button></div></div>
 
 <script>
 let PW='';
@@ -769,6 +778,8 @@ const $=(id)=>document.getElementById(id);
 let CATS=[],SRV=[],DEVS=[],CUT=0,FILT=-1;
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function showErr(m){const b=$('err');if(!m){b.style.display='none';return}b.style.display='block';b.textContent=m}
+let supportModal=null;
+function infoClose(){$('info_modal').style.display='none'}
 async function api(body){
  let r;
  try{r=await fetch('/admin/api',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...body,pw:PW})})}
@@ -936,12 +947,17 @@ list.forEach(d=>{
  '<td><button class="gray sm" data-k=device data-id="'+esc(d.id)+'" data-on='+(dBlk?'0':'1')+'>'+(dBlk?'آزاد':'مسدود')+' دستگاه</button> '+
  '<button class="gray sm" data-k=ip data-id="'+esc(d.ip||'')+'" data-on='+(iBlk?'0':'1')+'>'+(iBlk?'آزاد':'مسدود')+' آیپی</button> '+
  '<button class="gray sm" data-k=model data-id="'+esc(d.model||'')+'" data-on='+(mBlk?'0':'1')+'>'+(mBlk?'آزاد':'مسدود')+' مدل</button></td>'+
- '<td><button class="red sm" data-del="'+esc(d.id)+'">حذف</button></td></tr>';
+ '<td><button class="red sm" data-del="'+esc(d.id)+'">حذف</button> '+
+ '<button class="gray sm" data-info="'+esc(JSON.stringify(d.info?d.info:{})||'{}')+'">ℹ</button></td></tr>';
 });
 html+='</table>';
 box.innerHTML=html;
 box.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>{if(!b.dataset.id){toast('خالی',1);return}devBlock(b.dataset.k,b.dataset.id,b.dataset.on==='1')});
-box.querySelectorAll('button[data-del]').forEach(b=>b.onclick=()=>{if(confirm('این دستگاه از لیست حذف شود؟'))api({action:'dev.del',id:b.dataset.del}).then(loadDevices)})}
+box.querySelectorAll('button[data-del]').forEach(b=>b.onclick=()=>{if(confirm('این دستگاه از لیست حذف شود؟'))api({action:'dev.del',id:b.dataset.del}).then(loadDevices)});
+box.querySelectorAll('button[data-info]').forEach(b=>b.onclick=()=>{
+ const d2=b.getAttribute('data-info')||'{}';let i2={};try{i2=JSON.parse(d2)}catch(e){}
+ const rows2=Object.keys(i2).map(k=>'<b>'+esc(k)+':</b> '+esc(i2[k])).join('<br>');
+ const m2=supportModal||null;if(m2)m2(rows2||'هیچ اطلاعاتی نیست')})}
 
 /* ---- boot ---- */
 /* password on EVERY visit - nothing persisted; all panels load in parallel for speed */
@@ -956,6 +972,8 @@ async function loadAll(){
   loadDevices(),
  ])}
 (()=>{logout()})();
+supportModal=((h)=>{const bd2=$('info_body');bd2.innerHTML=h;$('info_modal').style.display='flex'});
+function infoClose(){$('info_modal').style.display='none'}
 /* no auto-refresh - admin uses the 🔄 buttons */
 function manualRefresh(){if(!PW){logout();return}toast('در حال بروزرسانی...');loadAll()}
 </script>
@@ -993,6 +1011,9 @@ async function ensureSchema(env) {
   // older panel DB - add missing column
   try {
     await env.DB.prepare("ALTER TABLE servers ADD COLUMN msg TEXT DEFAULT ''").run();
+  } catch (e) {}
+  try {
+    await env.DB.prepare("ALTER TABLE devices ADD COLUMN info TEXT DEFAULT ''").run();
   } catch (e) {}
   schemaReady = true;
 }

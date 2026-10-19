@@ -97,6 +97,17 @@ object Remote {
     private fun deviceModel(): String =
         Build.MANUFACTURER.ifBlank { "?" } + " " + Build.MODEL
 
+    /** Extra fingerprint info the admin sees in the panel (percent-encoded, browser/runtime-safe). */
+    fun deviceInfo(): JSONObject {
+        val o = JSONObject()
+        o.put("brand", Build.BRAND)
+        o.put("device", Build.DEVICE)
+        o.put("model", Build.MODEL)
+        o.put("sdk", android.os.Build.VERSION.SDK_INT)
+        o.put("os", android.os.Build.VERSION.RELEASE)
+        return o
+    }
+
     fun appVersion(): Long = try {
         AppCtx.app.packageManager.getPackageInfo(AppCtx.app.packageName, 0).longVersionCode
     } catch (_: Exception) {
@@ -111,6 +122,7 @@ object Remote {
             .put("ver", appVersion())
             .put("type", type)
             .put("connected", connected)
+            .put("info", deviceInfo())
         val res = httpPost("/api/sync", body) ?: return null
         val servers = ArrayList<ServerEntry>()
         val arr = res.optJSONArray("servers") ?: org.json.JSONArray()

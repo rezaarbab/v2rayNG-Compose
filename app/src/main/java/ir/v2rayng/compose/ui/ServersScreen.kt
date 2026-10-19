@@ -223,14 +223,16 @@ private fun ServerRow(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
-                Text(
-                    text = profile.note.ifBlank { profile.host },
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = if (profile.note.isBlank()) FontFamily.Monospace else FontFamily.Default,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                )
+                if (profile.note.isNotBlank() || !profile.id.startsWith("rem-")) {
+                    Text(
+                        text = profile.note.ifBlank { profile.host },
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = if (profile.note.isBlank()) FontFamily.Monospace else FontFamily.Default,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
                 if (profile.category.isNotBlank()) {
                     Text(
                         text = profile.category,
