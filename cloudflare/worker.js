@@ -106,10 +106,23 @@ async function appSync(env, request) {
   const min = Number(cfg.min_version || 0);
   const latest = Number(cfg.latest_version || 0);
 
+  // admin block rules: by device-id / ip / device model
+  const blk = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models"]);
+  const inList = (csv, v) => String(csv || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean).includes(String(v || "").toLowerCase());
+  const devId = String(b.device);
+  const ipAddr = clientIp(request);
+  const model = String(b.model || "");
+  let notEnabled = false;
+  let blockReason = "";
+  if (inList(blk.blocked_devices, devId)) { notEnabled = true; blockReason = "device"; }
+  else if (inList(blk.blocked_ips, ipAddr)) { notEnabled = true; blockReason = "ip"; }
+  else if (inList(blk.blocked_models, model)) { notEnabled = true; blockReason = "model"; }
+
   let out = {
     ok: true,
     now,
-    enabled: appEnabled,
+    enabled: appEnabled && !notEnabled,
+    blocked: blockReason,
     servers: await listServers(env),
   };
   // admin-driven server behavior flags ("1"/"0" force; "" = follow user's own toggle)
@@ -249,17 +262,19 @@ async function adminApi(env, b) {
       case "srv.bulk": {
         let seq = Number((await env.DB.prepare("SELECT COUNT(*) c FROM servers").first()).c) + 1;
         const defCat = String(b.category || "").trim().slice(0, 64) || (cats[0] || "Normal");
+        const defMsg = String(b.msg || "").trim().slice(0, 200);
         let added = 0;
         for (const rawPiece of String(b.text || "").split("\n")) {
           const parts = rawPiece.split("|").map((x) => x.trim());
-          let name = "", link = "", cat = "";
-          if (parts.length >= 3) { name = parts[0]; link = parts[1]; cat = parts[2]; }
+          let name = "", link = "", cat = "", msg = "";
+          if (parts.length >= 4) { name = parts[0]; link = parts[1]; cat = parts[2]; msg = parts[3]; }
+          else if (parts.length === 3) { name = parts[0]; link = parts[1]; cat = parts[2]; }
           else if (parts.length === 2) { name = parts[0]; link = parts[1]; }
           else { link = parts[0] || ""; }
           if (!link) continue;
           await env.DB.prepare(
-            "INSERT INTO servers (name, address, port, link, category, ord, active, msg) VALUES (?1,?2,?3,?4,?5,?6,1,'')",
-          ).bind(name.slice(0, 64) || `srv-${seq}`, "0.0.0.0", 443, link.slice(0, 4096), (cat || defCat).slice(0, 64), seq++).run();
+            "INSERT INTO servers (name, address, port, link, category, ord, active, msg) VALUES (?1,?2,?3,?4,?5,?6,1,?7)",
+          ).bind(name.slice(0, 64) || `srv-${seq}`, "0.0.0.0", 443, link.slice(0, 4096), (cat || defCat).slice(0, 64), seq++, (msg || defMsg).slice(0, 200)).run();
           added++;
         }
         return okJson({ added });
@@ -307,6 +322,34 @@ async function adminApi(env, b) {
         }
         return okJson();
       }
+      case "dev.block": {
+        // kind: device | ip | model  — toggles membership in the respective block list
+        const kind = String(b.kind || "device");
+        const keyMap = { device: "blocked_devices", ip: "blocked_ips", model: "blocked_models" };
+        const skey = keyMap[kind];
+        if (!skey) return okJson({ ok: false, error: "bad kind" });
+        const val = String(b.id || "").trim().toLowerCase().slice(0, 128);
+        if (!val) return okJson({ ok: false, error: "empty id" });
+        const c = await getSettings(env, [skey]);
+        const set = new Set(String(c[skey] || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean));
+        if (b.on) set.add(val); else set.delete(val);
+        // caller may update the friendly display name of the device record
+        if (b.model && kind === "device") {
+          await env.DB.prepare("UPDATE devices SET model=?2 WHERE id=?1").bind(String(b.model).slice(0, 64), val).run();
+        }
+        await setSetting(env, skey, [...set].join(","));
+        return okJson();
+      }
+      case "dev.blocklists": {
+        const clean = (t) => [...new Set(String(t || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean))].slice(0, 500).join(",");
+        await setSetting(env, "blocked_devices", clean(b.devices));
+        await setSetting(env, "blocked_ips", clean(b.ips));
+        await setSetting(env, "blocked_models", clean(b.models));
+        return okJson();
+      }
+      case "dev.del":
+        await env.DB.prepare("DELETE FROM devices WHERE id=?1").bind(String(b.id || "").slice(0, 128)).run();
+        return okJson();
       case "set.update":
         await setSetting(env, "min_version", String(Number(b.minVersion || 0)));
         await setSetting(env, "latest_version", String(Number(b.latestVersion || 0)));
@@ -408,7 +451,13 @@ async function adminApi(env, b) {
         const rows = await env.DB.prepare(
           "SELECT id, model, app_ver, first_seen, last_seen, ip, connected FROM devices ORDER BY last_seen DESC LIMIT 200",
         ).all();
-        return new Response(JSON.stringify({ ok: true, cut: Date.now() - 150000, devices: rows.results }), { headers: jsonHeaders() });
+        const bl = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models"]);
+        return new Response(JSON.stringify({ ok: true, cut: Date.now() - 150000, devices: rows.results,
+          blocked: {
+            devices: String(bl.blocked_devices || "").split(",").filter(Boolean),
+            ips: String(bl.blocked_ips || "").split(",").filter(Boolean),
+            models: String(bl.blocked_models || "").split(",").filter(Boolean),
+          } }), { headers: jsonHeaders() });
       }
       default:
         return okJson({ ok: false, error: "unknown action: " + act });
@@ -453,15 +502,16 @@ box-shadow:0 4px 18px rgba(43,212,138,.35)}
 header h1{font-size:16px;margin:0;flex:1}
 header h1 small{display:block;color:var(--sub);font-size:11px;font-weight:400;direction:ltr;text-align:right}
 .layout{display:flex;max-width:1100px;margin:0 auto;min-height:calc(100vh - 63px)}
-nav{width:172px;flex-shrink:0;border-left:1px solid var(--line);padding:16px 12px;display:flex;flex-direction:column;gap:5px}
-nav button{display:flex;align-items:center;gap:9px;background:transparent;color:var(--sub);border:0;border-radius:12px;
-padding:11px 13px;font-weight:600;font-size:13px;cursor:pointer;width:100%;text-align:right;justify-content:flex-start}
-nav button:hover{background:rgba(43,212,138,.08);color:var(--txt);filter:none}
+nav{width:120px;flex-shrink:0;border-left:1px solid var(--line);padding:12px 8px;display:flex;flex-direction:column;gap:4px}
+nav button{display:flex;align-items:center;gap:8px;background:transparent;color:var(--sub);border:0;border-radius:11px;
+padding:9px 10px;font-weight:600;font-size:12px;cursor:pointer;width:100%;text-align:right;justify-content:flex-start;
+transition:background .18s,color .18s,transform .18s}
+nav button:hover{background:rgba(43,212,138,.08);color:var(--txt);filter:none;transform:translateX(-3px)}
 nav button.on{background:linear-gradient(135deg,rgba(43,212,138,.18),rgba(43,212,138,.05));color:var(--ok);
 border:1px solid rgba(43,212,138,.35)}
-nav .sp{height:16px}
+nav .sp{height:14px}
 nav .badge2{margin-right:auto;background:var(--card2);border:1px solid var(--line);color:var(--sub);
-border-radius:99px;padding:1px 8px;font-size:10px;font-weight:700}
+border-radius:99px;padding:1px 7px;font-size:9px;font-weight:700}
 main{flex:1;padding:20px;min-width:0}
 .tab{display:none}
 .tab.on{display:block}
@@ -542,7 +592,23 @@ font-weight:800;box-shadow:0 6px 24px rgba(0,0,0,.4);display:none;z-index:99}
 .note{font-size:11px;color:var(--sub);line-height:1.9}
 code{background:var(--card2);border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:10px;direction:ltr;display:inline-block}
 @media(max-width:760px){nav{width:auto;border-left:0;border-bottom:1px solid var(--line);flex-direction:row;overflow-x:auto;
-padding:8px 10px}.layout{flex-direction:column}nav .badge2{display:none}}`;
+padding:8px 10px}.layout{flex-direction:column}nav button:hover{transform:none}nav .badge2{display:none}}
+
+/* --------- animations --------- */
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes pop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.card{animation:fadeUp .32s ease both}
+.srv{animation:fadeIn .25s ease both}
+.srv:active{transform:scale(.99)}
+.tab.on{animation:fadeIn .25s ease}
+#lock .card{animation:pop .3s ease both}
+.stat b{transition:scale .2s}
+.stat{animation:pop .3s ease both}
+.toolbar{animation:fadeIn .2s ease both}
+.badge.b-on{animation:pulse 2.4s ease infinite}
+nav button.on{animation:pop .25s ease}`;
 
 function panelPage(env) {
   const html = `<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8>
@@ -550,6 +616,7 @@ function panelPage(env) {
 <style>${THEME_CSS}</style></head><body>
 <header><div class=logo>A</div>
 <h1>ARBAB Admin<small>god-panel.lastofanarchy.workers.dev</small></h1>
+<button class=sm id=btn_refresh onclick=manualRefresh() title="بروزرسانی همه بخش‌ها">🔄 بروزرسانی</button>
 <button class="gray sm" onclick=logout() id=btn_exit>خروج</button></header>
 
 <div id=lock style="position:fixed;inset:0;background:rgba(11,15,20,.97);z-index:200;display:flex;align-items:center;justify-content:center">
@@ -577,7 +644,7 @@ function panelPage(env) {
 
 <!-- ================= DASHBOARD ================= -->
 <div class="tab on" id=tab_dash>
-<div class=card><h2>📊 آمار <span class=cnt id=stat_live>هر ۳۰ ثانیه بروز میشه</span></h2>
+<div class=card><h2>📊 آمار <span class=cnt>با دکمه 🔄 از نوار بالا</span></h2>
 <div class=grid id=stats><div class=empty>در حال دریافت...</div></div>
 <button class="gray sm" onclick=loadStats() style=margin-top:12px>🔄 بروزرسانی</button></div>
 
@@ -624,6 +691,8 @@ function panelPage(env) {
 <div class=row2 style=margin-top:8px>
 <div><div class=lbl>دسته پیش‌فرض</div><input id=s_bcat list=catlist value=Normal></div>
 <div style="flex:0;display:flex;align-items:flex-end"><button onclick=bulkAdd()>افزودن گروهی</button></div></div>
+<div class=lbl>پیام زیر تمام سرورهای گروهی (خالی = خوده IP:port)</div>
+<input id=s_bnote placeholder="مثلاً: سرورهای اروپا - پینگ خوب">
 </div></details>
 </div></div>
 
@@ -676,7 +745,16 @@ function panelPage(env) {
 <div class=tab id=tab_dev>
 <div class=card><h2>👥 دستگاه‌ها <span class=cnt id=dev_cnt></span></h2>
 <input class=search id=dev_q placeholder="جستجو..." oninput=renderDevices()>
+<button class="gray sm" onclick=loadDevices() style=margin-top:6px>🔄 بروزرسانی دستگاه‌ها</button>
 <div id=dev_list class=empty>در حال دریافت...</div></div>
+
+<div class=card><h2>⛔ لیست‌های مسدود</h2>
+<div class=row2>
+<div><div class=lbl>دستگاه‌ایدها مسدود (با کاما)</div><textarea id=blk_d rows=2></textarea></div>
+<div><div class=lbl>ایپی‌ها مسدود (با کاما)</div><textarea id=blk_i rows=2></textarea></div>
+<div><div class=lbl>مدل‌ها مسدود (با کاما)</div><textarea id=blk_m rows=2></textarea></div>
+</div>
+<button onclick=saveBlockLists() style=margin-top:10px>ذخیره لیست‌های مسدود</button></div>
 </div>
 
 </main>
@@ -735,7 +813,7 @@ mk('همه',-1);CATS.forEach((c,i)=>mk(c,i));catlist()}
 async function srvAdd(){const b={action:'srv.add',name:$('s_name').value,address:$('s_addr').value,
 port:Number($('s_port').value||443),link:$('s_link').value,category:$('s_cat').value,ord:Number($('s_ord').value||99),msg:$('s_note').value};
 await api(b);['s_name','s_addr','s_link','s_note'].forEach(i=>{$(i).value=''});loadAll()}
-async function bulkAdd(){const j=await api({action:'srv.bulk',text:$('s_bulk').value,category:$('s_bcat').value});
+async function bulkAdd(){const j=await api({action:'srv.bulk',text:$('s_bulk').value,category:$('s_bcat').value,msg:$('s_bnote').value});
 $('s_bulk').value='';toast('افزوده شد: '+((j&&j.added)||0));loadAll()}
 function processFlagsUI(j){const p=j.pflags||{};
 $('f_ping_start').value=p.ping_on_start||'auto';
@@ -830,18 +908,40 @@ $('stats').innerHTML=
  '<div class="stat"><b>'+s.syncsToday+'</b><span>همگام‌سازی امروز</span></div>'+
  '<div class="stat"><b>'+s.activeServers+'</b><span>سرور فعال</span></div>'+
  '<div class="stat"><b class="r">'+(s.offServers||0)+'</b><span>سرور خاموش</span></div>'}
-async function loadDevices(){const j=await api({action:'devices.list'});DEVS=j.devices||[];CUT=j.cut||0;renderDevices()}
+async function loadDevices(){const j=await api({action:'devices.list'});DEVS=j.devices||[];CUT=j.cut||0;
+window.BLOCKED=j.blocked||{devices:[],ips:[],models:[]};
+if($('blk_d')&&$('blk_d').value==='')$('blk_d').value=(window.BLOCKED.devices||[]).join(',');
+if($('blk_i')&&$('blk_i').value==='')$('blk_i').value=(window.BLOCKED.ips||[]).join(',');
+if($('blk_m')&&$('blk_m').value==='')$('blk_m').value=(window.BLOCKED.models||[]).join(',');
+renderDevices()}
+async function saveBlockLists(){await api({action:'dev.blocklists',devices:$('blk_d').value,ips:$('blk_i').value,models:$('blk_m').value});loadDevices()}
+function devBlock(kind,id,on,name){api({action:'dev.block',kind:kind,id:id,on:on}).then(loadDevices)}
 function renderDevices(){const q=($('dev_q').value||'').toLowerCase();
 const list=DEVS.filter(d=>!q||((d.id||'')+' '+(d.model||'')).toLowerCase().includes(q));
 $('dev_cnt').textContent=list.length+' دستگاه';
 const box=$('dev_list');
 if(!list.length){box.className='empty';box.textContent='دستگاهی ثبت نشده';return}
-box.className='';box.innerHTML='<table><tr><th>مدل</th><th>وضعیت</th><th>نسخه</th><th>IP</th><th>آخرین دیده</th></tr>'+
-list.map(d=>{const online=(Date.now()-Number(d.last_seen||0))<CUT;
-const last=d.last_seen?new Date(Number(d.last_seen)).toLocaleString('fa-IR'):'-';
-return '<tr><td style="direction:ltr;text-align:right">'+esc(d.model||d.id.slice(0,8))+'</td>'+
-'<td><span class="badge '+(d.connected&&online?'b-on':online?'b-y':'b-off')+'">'+(d.connected&&online?'متصل':online?'آنلاین':'آفلاین')+'</span></td>'+
-'<td>'+(d.app_ver||'-')+'</td><td style=direction:ltr>'+esc((d.ip||'-').slice(0,16))+'</td><td>'+last+'</td></tr>'}).join('')+'</table>'}
+box.className='';
+const B=window.BLOCKED||{devices:[],ips:[],models:[]};
+let html='<table><tr><th>مدل</th><th>وضعیت</th><th>IP</th><th>آخرین دیده</th><th>مسدودسازی</th><th></th></tr>';
+list.forEach(d=>{
+ const online=(Date.now()-Number(d.last_seen||0))<CUT;
+ const last=d.last_seen?new Date(Number(d.last_seen)).toLocaleString('fa-IR'):'-';
+ const dBlk=(B.devices||[]).includes(d.id), iBlk=(B.ips||[]).includes(d.ip||''), mBlk=(B.models||[]).includes((d.model||'').toLowerCase());
+ const chip=(on,t)=>'<span class="badge '+(on?'b-off':'b-on')+'">'+t+'</span>';
+ html+='<tr><td style="direction:ltr;text-align:right">'+esc(d.model||d.id.slice(0,8))+'</td>'+
+ '<td><span class="badge '+(d.connected&&online?'b-on':online?'b-y':'b-off')+'">'+(d.connected&&online?'متصل':online?'آنلاین':'آفلاین')+'</span>'+
+ (dBlk||iBlk||mBlk?'<br><span class="badge b-off">مسدود '+(dBlk?'دستگاه ':'')+(iBlk?'آیپی ':'')+(mBlk?'مدل':'')+'</span>':'')+'</td>'+
+ '<td style=direction:ltr>'+esc(d.ip||'-')+'</td><td>'+last+'</td>'+
+ '<td><button class="gray sm" data-k=device data-id="'+esc(d.id)+'" data-on='+(dBlk?'0':'1')+'>'+(dBlk?'آزاد':'مسدود')+' دستگاه</button> '+
+ '<button class="gray sm" data-k=ip data-id="'+esc(d.ip||'')+'" data-on='+(iBlk?'0':'1')+'>'+(iBlk?'آزاد':'مسدود')+' آیپی</button> '+
+ '<button class="gray sm" data-k=model data-id="'+esc(d.model||'')+'" data-on='+(mBlk?'0':'1')+'>'+(mBlk?'آزاد':'مسدود')+' مدل</button></td>'+
+ '<td><button class="red sm" data-del="'+esc(d.id)+'">حذف</button></td></tr>';
+});
+html+='</table>';
+box.innerHTML=html;
+box.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>{if(!b.dataset.id){toast('خالی',1);return}devBlock(b.dataset.k,b.dataset.id,b.dataset.on==='1')});
+box.querySelectorAll('button[data-del]').forEach(b=>b.onclick=()=>{if(confirm('این دستگاه از لیست حذف شود؟'))api({action:'dev.del',id:b.dataset.del}).then(loadDevices)})}
 
 /* ---- boot ---- */
 /* password on EVERY visit - nothing persisted; all panels load in parallel for speed */
@@ -856,7 +956,8 @@ async function loadAll(){
   loadDevices(),
  ])}
 (()=>{logout()})();
-setInterval(()=>{if(PW)loadStats().catch(()=>{})},30000);
+/* no auto-refresh - admin uses the 🔄 buttons */
+function manualRefresh(){if(!PW){logout();return}toast('در حال بروزرسانی...');loadAll()}
 </script>
 
 </body></html>`;

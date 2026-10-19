@@ -50,6 +50,37 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private val _settings = MutableStateFlow(store.load())
     val settings: StateFlow<Settings> = _settings.asStateFlow()
 
+    /* admin-driven behavior flags - MUST be before init (Kotlin field order) */
+    @Volatile
+    private var adminFlags: Map<String, String> = HashMap()
+    @Volatile
+    private var mergeStamp: Long = 0L
+    @Volatile
+    private var lastNetToast: Long = 0L
+    @Volatile
+    private var popupDismissed: Long = 0L
+    @Volatile
+    private var updateDismiss: Long = 0L
+    @Volatile
+    private var notifSeen: Long = 0L
+    private var appUp: Long = 0L
+    private var appDown: Long = 0L
+
+    /** "1"/"0" => forced by admin, "auto"/missing => follow the user's local toggle. */
+    private fun effFlag(adminKey: String, userValue: Boolean): Boolean {
+        val f = adminFlags
+        return when (f[adminKey]) {
+            "1" -> true
+            "0" -> false
+            else -> userValue
+        }
+    }
+
+    private fun effAutoPingNew(): Boolean = effFlag("auto_ping_new", _settings.value.autoPingNew)
+    private fun effAutoFlagNew(): Boolean = effFlag("auto_flag_new", _settings.value.autoFlagNew)
+    private fun effPingStart(): Boolean = effFlag("ping_start", _settings.value.pingOnStart)
+    private fun effFlagStart(): Boolean = effFlag("flag_start", _settings.value.flagOnStart)
+
     private var connectJob: Job? = null
     private var trafficJob: Job? = null
 
@@ -250,7 +281,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val res = Remote.sync(dev, "sync", _state.value.vpnState == VpnState.CONNECTED)
-                if (res != null) applyRemote(res) else netToast()
+                if (res != null) {
+                    applyRemote(res)
+                } else if (!isOnline()) {
+                    netToast()
+                    log("WARN", "No internet connection")
+                } else {
+                    log("WARN", "Remote sync failed")
+                }
             } catch (e: Exception) {
                 if (!isOnline()) {
                     netToast()
@@ -354,34 +392,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
     }
 
-    @Volatile
-    private var mergeStamp: Long = 0L
     fun lastMergeStamp(): Long = mergeStamp
 
-    /* ------- admin-driven behavior flags (panel overrides user toggles) ------- */
-    @Volatile
-    private var adminFlags: Map<String, String> = emptyMap()
-
-    /** "1"/"0" => forced by admin, "auto"/missing => follow the user's local toggle. */
-    private fun effFlag(adminKey: String, userValue: Boolean): Boolean {
-        return when (adminFlags[adminKey]) {
-            "1" -> true
-            "0" -> false
-            else -> userValue
-        }
-    }
-
-    private fun effAutoPingNew(): Boolean = effFlag("auto_ping_new", _settings.value.autoPingNew)
-    private fun effAutoFlagNew(): Boolean = effFlag("auto_flag_new", _settings.value.autoFlagNew)
-    private fun effPingStart(): Boolean = effFlag("ping_start", _settings.value.pingOnStart)
-    private fun effFlagStart(): Boolean = effFlag("flag_start", _settings.value.flagOnStart)
-
-    @Volatile
-    private var popupDismissed = 0L
-    @Volatile
-    private var updateDismiss = 0L
-    @Volatile
-    private var notifSeen = 0L
+    /* small runtime state is declared at the top of this class (field order safety) */
 
     private fun applyRemote(r: Remote.Result) {
         adminFlags = r.flags
@@ -901,9 +914,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         ir.v2rayng.compose.core.XrayBridge.requestCounterReset()
         log("INFO", "Traffic counters reset")
     }
-
-    private var appUp = 0L
-    private var appDown = 0L
 
     fun togglePin(id: String) {
         put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(pinned = !it.pinned) else it }) }
