@@ -48,7 +48,7 @@ export default {
         return new Response(JSON.stringify({ ok: true }), {
           headers: jsonHeaders([
             "Set-Cookie",
-            `arbab=${await adminToken(env)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=604800`,
+            `arbab=${await adminToken(env)}; HttpOnly; Secure; SameSite=Lax; Path=/`,
           ]),
         });
       }
