@@ -262,18 +262,20 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
     }
 
-    /** English user-facing network alert. */
+    /** English user-facing network alert (must run on main thread to not crash). */
     private var lastNetToast = 0L
     fun netToast() {
         val now = System.currentTimeMillis()
         if (now - lastNetToast < 4000L) return
         lastNetToast = now
         try {
-            android.widget.Toast.makeText(
-                ir.v2rayng.compose.AppCtx.app,
-                "No internet connection",
-                android.widget.Toast.LENGTH_SHORT,
-            ).show()
+            val ctx = try { ir.v2rayng.compose.AppCtx.app } catch (e: Exception) { return }
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                try {
+                    android.widget.Toast.makeText(ctx, "No internet connection", android.widget.Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {
+                }
+            }
         } catch (_: Exception) {
         }
     }

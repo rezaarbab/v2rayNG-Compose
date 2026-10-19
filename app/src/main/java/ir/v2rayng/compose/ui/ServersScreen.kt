@@ -18,7 +18,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -82,13 +84,13 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 Icon(Icons.Filled.Add, contentDescription = S.IMPORT_TITLE)
             }
             IconButton(onClick = { vm.resetAllServerTraffic() }) {
-                Text("🧹", style = MaterialTheme.typography.titleMedium)
+                Icon(Icons.Filled.Delete, contentDescription = "Reset traffic", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = { vm.syncNow() }) {
-                Text("🔄", style = MaterialTheme.typography.titleMedium)
+                Icon(Icons.Filled.Refresh, contentDescription = S.REMOTE_SYNC)
             }
             IconButton(onClick = { vm.pingAll() }) {
-                Icon(Icons.Filled.Refresh, contentDescription = S.PING_TEST)
+                Icon(Icons.Filled.Send, contentDescription = S.PING_TEST)
             }
         }
         Spacer(Modifier.height(10.dp))

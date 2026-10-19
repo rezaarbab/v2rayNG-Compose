@@ -19,11 +19,7 @@
 
 export default {
   async fetch(request, env, ctx) {
-    try {
-      await ensureSchema(env);
-    } catch (e) {
-      // db not ready yet - admin被告 will see the typed error inside the panel
-    }
+    // don't block requests on schema checks - tables are created once after deploy
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
 
@@ -36,17 +32,33 @@ export default {
       if (!pwOk(env, body)) {
         return new Response(JSON.stringify({ ok: false, error: env.ADMIN_PASSWORD ? "wrong password" : "ADMIN_PASSWORD secret is not set on the worker" }), { status: 401, headers: jsonHeaders() });
       }
-      return adminApi(env, body);
+      try {
+        return await adminApi(env, body);
+      } catch (e) {
+        // very first hit right after deploy - create missing tables then retry once
+        try { await ensureSchema(env); } catch (e2) {}
+        return adminApi(env, body);
+      }
     }
 
     // ---------------- app api ----------------
-    if (path === "/api/sync") return appSync(env, request);
-    if (path === "/api/beat") return appBeat(env, request);
-    if (path === "/api/ack") return appAck(env, request);
+    if (path === "/api/sync") return withDb(env, () => appSync(env, request));
+    if (path === "/api/beat") return withDb(env, () => appBeat(env, request));
+    if (path === "/api/ack") return withDb(env, () => appAck(env, request));
 
     return new Response("not found", { status: 404 });
   },
 };
+
+/** Run a DB-backed handler; on a table error, create the schema once and retry. */
+async function withDb(env, f) {
+  try {
+    return await f();
+  } catch (e) {
+    try { await ensureSchema(env); } catch (e2) {}
+    return await f();
+  }
+}
 
 /* ============================ app api ============================ */
 
@@ -368,6 +380,29 @@ async function adminApi(env, b) {
         return new Response(JSON.stringify({ ok: true, servers: rows.results,
           cats,
           app: (await getSettings(env, ["app_enabled"])).app_enabled !== "0" }), { headers: jsonHeaders() });
+      }
+      case "srv.all": {
+        // one fast round-trip for the whole admin bootstrap: servers + cats + kill-switch + behavior flags + update cfg
+        const early = await getSettings(env, ["app_enabled", "min_version", "latest_version", "latest_url", "ping_on_start", "flag_on_start", "auto_ping_new", "auto_flag_new"]);
+        const rows = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
+        return new Response(JSON.stringify({
+          ok: true,
+          servers: rows.results,
+          cats,
+          app: early.app_enabled !== "0",
+          cfg: {
+            min_version: early.min_version || "0",
+            latest_version: early.latest_version || "0",
+            latest_url: early.latest_url || "",
+            app_enabled: early.app_enabled || "1",
+          },
+          pflags: {
+            ping_on_start: early.ping_on_start || "auto",
+            flag_on_start: early.flag_on_start || "auto",
+            auto_ping_new: early.auto_ping_new || "auto",
+            auto_flag_new: early.auto_flag_new || "auto",
+          },
+        }), { headers: jsonHeaders() });
       }
       case "devices.list": {
         const rows = await env.DB.prepare(
@@ -702,6 +737,11 @@ port:Number($('s_port').value||443),link:$('s_link').value,category:$('s_cat').v
 await api(b);['s_name','s_addr','s_link','s_note'].forEach(i=>{$(i).value=''});loadAll()}
 async function bulkAdd(){const j=await api({action:'srv.bulk',text:$('s_bulk').value,category:$('s_bcat').value});
 $('s_bulk').value='';toast('افزوده شد: '+((j&&j.added)||0));loadAll()}
+function processFlagsUI(j){const p=j.pflags||{};
+$('f_ping_start').value=p.ping_on_start||'auto';
+$('f_flag_start').value=p.flag_on_start||'auto';
+$('f_auto_ping_new').value=p.auto_ping_new||'auto';
+$('f_auto_flag_new').value=p.auto_flag_new||'auto'}
 async function loadFlags(){const j=await api({action:'cfg.load'});const p=j.pflags||{};
 $('f_ping_start').value=p.ping_on_start||'auto';
 $('f_flag_start').value=p.flag_on_start||'auto';
@@ -713,11 +753,11 @@ async function saveFlags(){await api({action:'set.flags',flags:{
  auto_ping_new:$('f_auto_ping_new').value,
  auto_flag_new:$('f_auto_flag_new').value}});toast('فرمان‌ها ذخیره شد — اپ‌ها با سینک بعدی اعمال میکنن')}
 async function loadServers(){
- const [c,s]=await Promise.all([api({action:'cfg.load'}),api({action:'srv.list'})]);
- CATS=c.cats||[];
- $('app_sw').checked=!!c.cfg.app_enabled;appState(c.cfg.app_enabled!=='0');
- SRV=s.servers||[];
- renderFilters();renderCatUI();renderServers()}
+ const j=await api({action:'srv.all'});
+ CATS=j.cats||[];
+ $('app_sw').checked=!!j.cfg.app_enabled;appState(j.cfg.app_enabled!=='0');
+ SRV=j.servers||[];
+ renderFilters();renderCatUI();renderServers();processFlagsUI(j)}
 function appState(on){$('app_state').innerHTML=on?'<span class="badge b-on">اپ فعال است</span>':'<span class="badge b-off">اپ قفل - همه دستگاه‌ها بسته اند</span>'}
 function appToggle(on){api({action:'set.app',on:on})}
 function srvRow(s,i,list){
