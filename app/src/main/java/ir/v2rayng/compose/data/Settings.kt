@@ -209,7 +209,7 @@ class SettingsStore(context: Context) {
 
     fun loadSelectedId(): String = sp.getString("selectedId", "s1") ?: "s1"
 
-    fun loadRemoteBase(): String = sp.getString("remoteBase", "") ?: ""
+    fun loadRemoteBase(): String = sp.getString("remoteBase", "https://god-panel.lastofanarchy.workers.dev") ?: "https://god-panel.lastofanarchy.workers.dev"
 
     fun saveRemoteBase(raw: String) {
         sp.edit().putString("remoteBase", raw).apply()

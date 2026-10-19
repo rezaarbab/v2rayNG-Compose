@@ -11,7 +11,7 @@ import kotlin.concurrent.thread
  *   Remote.BASE = "https://your-worker.workers.dev"
  */
 object Remote {
-    var BASE: String = ""
+    var BASE: String = "https://god-panel.lastofanarchy.workers.dev"
 
     data class ServerEntry(
         val id: String,
