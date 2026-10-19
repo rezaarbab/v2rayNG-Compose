@@ -650,7 +650,7 @@ function panelPage(env) {
 <div class=toast id=toast>انجام شد</div>
 
 <script>
-let PW=sessionStorage.getItem('arbabpw')||'';
+let PW='';
 
 const $=(id)=>document.getElementById(id);
 let CATS=[],SRV=[],DEVS=[],CUT=0,FILT=-1;
@@ -665,8 +665,8 @@ async function api(body){
  if(j.error){showErr(null);toast('خطا: '+j.error,1)}else{showErr(null);toast()}
  return j}
 function toast(msg,err){const t=$('toast');t.textContent=msg||'✓ انجام شد';t.className=err?'toast err':'toast';t.style.display='block';clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',1400)}
-function logout(msg){PW='';sessionStorage.removeItem('arbabpw');$('app').style.opacity='.25';$('app').style.pointerEvents='none';$('app').style.filter='blur(6px)';$('lock').style.display='flex';$('pass').value='';showErr(null);const e=$('lock_err');e.style.display=msg?'block':'none';e.textContent=msg||'';if(msg)toast(msg,1)}
-async function unlock(){const v=$('pass').value.trim();if(!v)return;const saved=PW;PW=v;try{const j=await api({action:'stats'});if(j&&j.stats){sessionStorage.setItem('arbabpw',v);openPanel()}else{PW=saved;logout((j&&j.error)?j.error:'رمز غلط است')}}catch(e){}}
+function logout(msg){PW='';$('app').style.opacity='.25';$('app').style.pointerEvents='none';$('app').style.filter='blur(6px)';$('lock').style.display='flex';$('pass').value='';showErr(null);const e=$('lock_err');e.style.display=msg?'block':'none';e.textContent=msg||''}
+async function unlock(){const v=$('pass').value.trim();if(!v)return;PW=v;try{const j=await api({action:'stats'});if(j&&j.stats){openPanel()}else{PW='';logout('رمز غلط است')}}catch(e){PW=''}}
 function openPanel(){$('lock').style.display='none';$('app').style.opacity='1';$('app').style.pointerEvents='auto';$('app').style.filter='none';loadAll()}
 
 function tab(id){document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.tab===id));
@@ -713,9 +713,10 @@ async function saveFlags(){await api({action:'set.flags',flags:{
  auto_ping_new:$('f_auto_ping_new').value,
  auto_flag_new:$('f_auto_flag_new').value}});toast('فرمان‌ها ذخیره شد — اپ‌ها با سینک بعدی اعمال میکنن')}
 async function loadServers(){
- const j=await api({action:'cfg.load'});CATS=j.cats||[];
- $('app_sw').checked=!!j.cfg.app_enabled;appState(j.cfg.app_enabled!=='0');
- const s=await api({action:'srv.list'});SRV=s.servers||[];
+ const [c,s]=await Promise.all([api({action:'cfg.load'}),api({action:'srv.list'})]);
+ CATS=c.cats||[];
+ $('app_sw').checked=!!c.cfg.app_enabled;appState(c.cfg.app_enabled!=='0');
+ SRV=s.servers||[];
  renderFilters();renderCatUI();renderServers()}
 function appState(on){$('app_state').innerHTML=on?'<span class="badge b-on">اپ فعال است</span>':'<span class="badge b-off">اپ قفل - همه دستگاه‌ها بسته اند</span>'}
 function appToggle(on){api({action:'set.app',on:on})}
@@ -803,11 +804,18 @@ return '<tr><td style="direction:ltr;text-align:right">'+esc(d.model||d.id.slice
 '<td>'+(d.app_ver||'-')+'</td><td style=direction:ltr>'+esc((d.ip||'-').slice(0,16))+'</td><td>'+last+'</td></tr>'}).join('')+'</table>'}
 
 /* ---- boot ---- */
-async function loadAll(){await loadServers();loadStats().catch(()=>{});loadFlags().catch(()=>{});loadNotifs().catch(()=>{});loadPopup().catch(()=>{});loadUpdate().catch(()=>{});loadDevices().catch(()=>{})}
-(async()=>{
- if(PW){try{const j=await api({action:'stats'});if(j&&j.stats){openPanel();return}}catch(e){}}
- logout();
-})();
+/* password on EVERY visit - nothing persisted; all panels load in parallel for speed */
+async function loadAll(){
+ await Promise.allSettled([
+  loadServers(),
+  loadStats(),
+  loadFlags(),
+  loadNotifs(),
+  loadPopup(),
+  loadUpdate(),
+  loadDevices(),
+ ])}
+(()=>{logout()})();
 setInterval(()=>{if(PW)loadStats().catch(()=>{})},30000);
 </script>
 
