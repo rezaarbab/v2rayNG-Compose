@@ -7,21 +7,31 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -171,14 +181,41 @@ fun Modifier.holdFor(
     }
 }
 
-/** Hold-any-icon-button tooltip: long-press shows what the button does. */
+/** Hold-any-icon-button tooltip: long-press shows a small label bubble under the button. */
 @Composable
-fun Modifier.tooltipHold(label: String): Modifier {
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    return this.holdFor(600L, onHold = {
-        try {
-            android.widget.Toast.makeText(ctx, label, android.widget.Toast.LENGTH_SHORT).show()
-        } catch (_: Exception) {
+fun TipIconButton(
+    icon: ImageVector,
+    label: String,
+    tint: Color? = null,
+    onClick: () -> Unit,
+) {
+    var tip by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = onClick, modifier = Modifier.holdFor(600L, onHold = { tip = true })) {
+            Icon(icon, contentDescription = label, tint = tint ?: LocalContentColor.current)
         }
-    })
+        if (tip) {
+            LaunchedEffect(tip) {
+                delay(1700L)
+                tip = false
+            }
+            Surface(
+                color = Color(0xFF141A23).copy(alpha = 0.94f),
+                shape = RoundedCornerShape(10.dp),
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .offset(y = 30.dp)
+                    .background(Color.Transparent),
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF9BF3CB),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
+        }
+    }
 }

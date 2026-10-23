@@ -13,6 +13,66 @@ object CountryFlags {
     }
 }
 
+private val flagNameToCode: Map<String, String> = buildMap {
+    CountryFlags.list.forEach { put(it.name.lowercase(), it.id.uppercase()) }
+    // common aliases admins use in server names
+    put("united kingdom", "GB")
+    put("uk", "GB")
+    put("britain", "GB")
+    put("england", "GB")
+    put("usa", "US")
+    put("united states", "US")
+    put("america", "US")
+    put("emirates", "AE")
+    put("holland", "NL")
+    put("south korea", "KR")
+    put("russia", "RU")
+    put("turkey", "TR")
+    put("turkiye", "TR")
+}
+
+/** ISO code from a flag emoji pair inside a server name, e.g. "CDN1 🇩🇪" -> "DE". */
+fun flagCodeFromEmoji(name: String): String {
+    var first = 0
+    var run = 0
+    for (c in name) {
+        val v = c.code
+        if (v in 0x1F1E6..0x1F1FF) {
+            if (run == 0) first = v
+            run++
+            if (run == 2) {
+                return "" + (first - 0x1F1E6 + 65).toChar() + (v - 0x1F1E6 + 65).toChar()
+            }
+        } else {
+            run = 0
+        }
+    }
+    return ""
+}
+
+/** Whole-word country match inside a server name, e.g. "united kingdom" -> "GB" ("oman" never matches "Romania"). */
+fun flagCodeFromWords(name: String): String {
+    val n = name.lowercase()
+    for ((country, code) in flagNameToCode) {
+        var at = n.indexOf(country)
+        while (at >= 0) {
+            val end = at + country.length
+            val okStart = at == 0 || !n[at - 1].isLetter()
+            val okEnd = end == n.length || !n[end].isLetter()
+            if (okStart && okEnd) return code
+            at = n.indexOf(country, at + 1)
+        }
+    }
+    return ""
+}
+
+/** Best-effort country code from a server name (flag emoji first, then country words). */
+fun flagCodeFromName(name: String): String {
+    val byEmoji = flagCodeFromEmoji(name)
+    if (byEmoji.isNotBlank()) return byEmoji
+    return flagCodeFromWords(name)
+}
+
 private val RED = Color(0xFFE03C31)
 private val BLUE = Color(0xFF2C5BD6)
 private val NAVY = Color(0xFF12203A)

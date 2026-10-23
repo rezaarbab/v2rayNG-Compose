@@ -451,7 +451,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     name = e.name, // admin-provided - never the config (#NAME) tag
                     host = "$addr:$prt",
                     stickerIndex = ex?.stickerIndex ?: ((e.id.hashCode() and 0x3FF) % 997),
-                    country = ex?.country ?: "",
+                    country = ex?.country?.takeIf { it.isNotBlank() }
+                        ?: ir.v2rayng.compose.stickers.flagCodeFromName(e.name),
                     ping = ex?.ping,
                     pingErr = ex?.pingErr,
                     link = e.link,

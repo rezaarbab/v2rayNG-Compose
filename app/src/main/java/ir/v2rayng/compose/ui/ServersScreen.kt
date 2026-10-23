@@ -80,18 +80,10 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            IconButton(onClick = { showImport = true }, modifier = Modifier.tooltipHold(S.IMPORT_TITLE)) {
-                Icon(Icons.Filled.Add, contentDescription = S.IMPORT_TITLE)
-            }
-            IconButton(onClick = { vm.resetAllServerTraffic() }, modifier = Modifier.tooltipHold(S.RESET_TRAFFIC)) {
-                Icon(Icons.Filled.Delete, contentDescription = S.RESET_TRAFFIC, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            IconButton(onClick = { vm.syncNow() }, modifier = Modifier.tooltipHold(S.REMOTE_SYNC)) {
-                Icon(Icons.Filled.Refresh, contentDescription = S.REMOTE_SYNC)
-            }
-            IconButton(onClick = { vm.pingAll() }, modifier = Modifier.tooltipHold(S.PING_TEST)) {
-                Icon(Icons.Filled.Send, contentDescription = S.PING_TEST)
-            }
+            TipIconButton(Icons.Filled.Add, S.IMPORT_TITLE) { showImport = true }
+            TipIconButton(Icons.Filled.Delete, S.RESET_TRAFFIC, tint = MaterialTheme.colorScheme.onSurfaceVariant) { vm.resetAllServerTraffic() }
+            TipIconButton(Icons.Filled.Refresh, S.REMOTE_SYNC) { vm.syncNow() }
+            TipIconButton(Icons.Filled.Send, S.PING_TEST) { vm.pingAll() }
         }
         Spacer(Modifier.height(10.dp))
 

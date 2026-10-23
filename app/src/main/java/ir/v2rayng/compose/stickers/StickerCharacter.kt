@@ -192,7 +192,9 @@ fun StickerCharacter(
             clock / 1000f * us * (if (bg) 0.6f else 1f) * (moodSpeed(mood) * speedScale * customSpeed) + phaseOf(sticker.art)
         }
 
-        fun p(x: Float, y: Float): Offset = Offset(x * s, y * s)
+        // flags are drawn as real 3:2 banners centered inside the square canvas
+        val flagYScale = if (sticker.art is FlagArt) 0.66f else 1f
+        fun p(x: Float, y: Float): Offset = Offset(x * s, (y - 0.5f) * s * flagYScale + 0.5f * s)
 
         drawOval(
             color = Color.Black.copy(alpha = 0.20f),
