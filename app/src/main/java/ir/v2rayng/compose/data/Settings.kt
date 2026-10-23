@@ -1,6 +1,7 @@
 package ir.v2rayng.compose.data
 
 import android.content.Context
+import ir.v2rayng.compose.core.sec.SecurePrefs
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -107,71 +108,71 @@ fun parseFxPack(s: String, def: StickerFx = StickerFx()): StickerFx {
 }
 
 class SettingsStore(context: Context) {
-    private val sp = context.getSharedPreferences("v2settings", Context.MODE_PRIVATE)
+    private val ctx: Context = context.applicationContext
 
     fun load(): Settings = Settings(
-        dark = sp.getBoolean("dark", true),
-        accent = sp.getInt("accent", 0),
-        customAccent = java.lang.Long.valueOf(sp.getString("customAccent", "-1")!!),
-        stickerStyle = sp.getInt("style", 0),
-        mainPack = sp.getInt("mainPack", -1),
-        mainFx = sp.getString("mainFx", "")!!,
-        wallpaperStyle = sp.getInt("wallStyle", 0),
-        wallpaperIndex = sp.getInt("wallpaper", -1),
-        wallpaperColor = java.lang.Long.valueOf(sp.getString("wallColor", "-1")!!),
-        wallpaperSize = sp.getInt("wallSize", 0),
-        wallFx = sp.getString("wallFx", "")!!,
-        mainColor = java.lang.Long.valueOf(sp.getString("mainColor", "-1")!!),
-        mainSize = sp.getInt("mainSize", 0),
-        mainIndex = sp.getInt("mainIndex", -1),
-        followFinger = sp.getBoolean("followFinger", true),
-        animate = sp.getBoolean("animate", true),
-        stateMotion = sp.getBoolean("stateMotion", true),
-        showNotification = sp.getBoolean("showNotification", true),
-        notifSticker = sp.getBoolean("notifSticker", true),
-        notifColor = java.lang.Long.valueOf(sp.getString("notifColor", "-1")!!),
-        flagAvatars = sp.getBoolean("flagAvatars", true),
-        connectFlagDancer = sp.getBoolean("connectFlagDancer", true),
-        speed = sp.getFloat("speed", 1f),
-        bgSpeed = sp.getFloat("bgSpeed", 1f),
-        navStickers = sp.getBoolean("navStickers", true),
-        autoFlag = sp.getBoolean("autoFlag", true),
-        navOrder = sp.getString("navOrder", "0,1,2,3,4")!!,
-        navIcons = sp.getString("navIcons", "0,1,2,3,4")!!,
-        upIcon = sp.getInt("upIcon", 5),
-        downIcon = sp.getInt("downIcon", 6),
-        upPack = sp.getInt("upPack", -1),
-        downPack = sp.getInt("downPack", -1),
-        navPacks = sp.getString("navPacks", "-1,-1,-1,-1,-1")!!,
-        routePacks = sp.getString("routePacks", "-1,-1,-1")!!,
-        upColor = java.lang.Long.valueOf(sp.getString("upColor", "-1")!!),
-        downColor = java.lang.Long.valueOf(sp.getString("downColor", "-1")!!),
-        upSpeed = sp.getFloat("upSpeed", 1f),
-        downSpeed = sp.getFloat("downSpeed", 1f),
-        navColors = sp.getString("navColors", "-1,-1,-1,-1,-1")!!,
-        routeColors = sp.getString("routeColors", "-1,-1,-1")!!,
-        navSpeeds = sp.getString("navSpeeds", "1,1,1,1,1")!!,
-        routeSpeeds = sp.getString("routeSpeeds", "1,1,1")!!,
-        routeIcons = sp.getString("routeIcons", "0,1,2")!!,
-        upFx = sp.getString("upFx", "")!!,
-        downFx = sp.getString("downFx", "")!!,
-        navFx = sp.getString("navFx", "")!!,
-        routeFx = sp.getString("routeFx", "")!!,
-        antiFilter = sp.getBoolean("antiFilter", false),
-        antiFilterApps = sp.getString("antiFilterApps", "")!!,
-        homeOrder = sp.getString("homeOrder", "0,1,2,3,4")!!,
-        pingOnStart = sp.getBoolean("pingOnStart", true),
-        autoPingNew = sp.getBoolean("autoPingNew", true),
-        flagOnStart = sp.getBoolean("flagOnStart", true),
-        autoFlagNew = sp.getBoolean("autoFlagNew", true),
-        flagStretch = sp.getFloat("flagStretch", 0.66f),
-        flagRound = sp.getFloat("flagRound", 0.45f),
+        dark = SecurePrefs.getBoolean("dark", true, ctx),
+        accent = SecurePrefs.getInt("accent", 0, ctx),
+        customAccent = SecurePrefs.getLong("customAccent", -1L, ctx),
+        stickerStyle = SecurePrefs.getInt("style", 0, ctx),
+        mainPack = SecurePrefs.getInt("mainPack", -1, ctx),
+        mainFx = SecurePrefs.getString("mainFx", "", ctx),
+        wallpaperStyle = SecurePrefs.getInt("wallStyle", 0, ctx),
+        wallpaperIndex = SecurePrefs.getInt("wallpaper", -1, ctx),
+        wallpaperColor = SecurePrefs.getLong("wallColor", -1L, ctx),
+        wallpaperSize = SecurePrefs.getInt("wallSize", 0, ctx),
+        wallFx = SecurePrefs.getString("wallFx", "", ctx),
+        mainColor = SecurePrefs.getLong("mainColor", -1L, ctx),
+        mainSize = SecurePrefs.getInt("mainSize", 0, ctx),
+        mainIndex = SecurePrefs.getInt("mainIndex", -1, ctx),
+        followFinger = SecurePrefs.getBoolean("followFinger", true, ctx),
+        animate = SecurePrefs.getBoolean("animate", true, ctx),
+        stateMotion = SecurePrefs.getBoolean("stateMotion", true, ctx),
+        showNotification = SecurePrefs.getBoolean("showNotification", true, ctx),
+        notifSticker = SecurePrefs.getBoolean("notifSticker", true, ctx),
+        notifColor = SecurePrefs.getLong("notifColor", -1L, ctx),
+        flagAvatars = SecurePrefs.getBoolean("flagAvatars", true, ctx),
+        connectFlagDancer = SecurePrefs.getBoolean("connectFlagDancer", true, ctx),
+        speed = SecurePrefs.getFloat("speed", 1f, ctx),
+        bgSpeed = SecurePrefs.getFloat("bgSpeed", 1f, ctx),
+        navStickers = SecurePrefs.getBoolean("navStickers", true, ctx),
+        autoFlag = SecurePrefs.getBoolean("autoFlag", true, ctx),
+        navOrder = SecurePrefs.getString("navOrder", "0,1,2,3,4", ctx),
+        navIcons = SecurePrefs.getString("navIcons", "0,1,2,3,4", ctx),
+        upIcon = SecurePrefs.getInt("upIcon", 5, ctx),
+        downIcon = SecurePrefs.getInt("downIcon", 6, ctx),
+        upPack = SecurePrefs.getInt("upPack", -1, ctx),
+        downPack = SecurePrefs.getInt("downPack", -1, ctx),
+        navPacks = SecurePrefs.getString("navPacks", "-1,-1,-1,-1,-1", ctx),
+        routePacks = SecurePrefs.getString("routePacks", "-1,-1,-1", ctx),
+        upColor = SecurePrefs.getLong("upColor", -1L, ctx),
+        downColor = SecurePrefs.getLong("downColor", -1L, ctx),
+        upSpeed = SecurePrefs.getFloat("upSpeed", 1f, ctx),
+        downSpeed = SecurePrefs.getFloat("downSpeed", 1f, ctx),
+        navColors = SecurePrefs.getString("navColors", "-1,-1,-1,-1,-1", ctx),
+        routeColors = SecurePrefs.getString("routeColors", "-1,-1,-1", ctx),
+        navSpeeds = SecurePrefs.getString("navSpeeds", "1,1,1,1,1", ctx),
+        routeSpeeds = SecurePrefs.getString("routeSpeeds", "1,1,1", ctx),
+        routeIcons = SecurePrefs.getString("routeIcons", "0,1,2", ctx),
+        upFx = SecurePrefs.getString("upFx", "", ctx),
+        downFx = SecurePrefs.getString("downFx", "", ctx),
+        navFx = SecurePrefs.getString("navFx", "", ctx),
+        routeFx = SecurePrefs.getString("routeFx", "", ctx),
+        antiFilter = SecurePrefs.getBoolean("antiFilter", false, ctx),
+        antiFilterApps = SecurePrefs.getString("antiFilterApps", "", ctx),
+        homeOrder = SecurePrefs.getString("homeOrder", "0,1,2,3,4", ctx),
+        pingOnStart = SecurePrefs.getBoolean("pingOnStart", true, ctx),
+        autoPingNew = SecurePrefs.getBoolean("autoPingNew", true, ctx),
+        flagOnStart = SecurePrefs.getBoolean("flagOnStart", true, ctx),
+        autoFlagNew = SecurePrefs.getBoolean("autoFlagNew", true, ctx),
+        flagStretch = SecurePrefs.getFloat("flagStretch", 0.66f, ctx),
+        flagRound = SecurePrefs.getFloat("flagRound", 0.45f, ctx),
     )
 
     fun loadServers(): List<ServerProfile>? {
         return try {
-            if (!sp.contains("servers")) return null
-            val raw = sp.getString("servers", "") ?: return null
+            if (!SecurePrefs.contains("servers", ctx)) return null
+            val raw = SecurePrefs.getStringOrNull("servers", ctx) ?: return null
             if (raw.isBlank()) return null
             val out = ArrayList<ServerProfile>()
             val arr = JSONArray(raw)
@@ -216,92 +217,92 @@ class SettingsStore(context: Context) {
                 if (s.note.isNotBlank()) o.put("note", s.note)
                 arr.put(o)
             }
-            sp.edit().putString("servers", arr.toString()).putString("selectedId", selectedId).apply()
+            SecurePrefs.set("servers", arr.toString(), ctx)
+            SecurePrefs.set("selectedId", selectedId, ctx)
         } catch (_: Exception) {
         }
     }
 
-    fun loadSelectedId(): String = sp.getString("selectedId", "s1") ?: "s1"
+    fun loadSelectedId(): String = SecurePrefs.getString("selectedId", "s1", ctx)
 
-    fun loadRemoteBase(): String = sp.getString("remoteBase", "https://god-panel.lastofanarchy.workers.dev") ?: "https://god-panel.lastofanarchy.workers.dev"
+    fun loadRemoteBase(): String = SecurePrefs.getString("remoteBase", "https://god-panel.lastofanarchy.workers.dev", ctx)
 
     fun saveRemoteBase(raw: String) {
-        sp.edit().putString("remoteBase", raw).apply()
+        SecurePrefs.set("remoteBase", raw, ctx)
     }
 
-    fun loadRemote(): String = sp.getString("remoteState", "") ?: ""
+    fun loadRemote(): String = SecurePrefs.getString("remoteState", "", ctx)
 
     fun saveRemote(raw: String) {
-        sp.edit().putString("remoteState", raw).apply()
+        SecurePrefs.set("remoteState", raw, ctx)
     }
 
-    fun loadCustom(): String? = sp.getString("customStickers", null)
+    fun loadCustom(): String? = SecurePrefs.getStringOrNull("customStickers", ctx)
 
     fun saveCustom(raw: String) {
-        sp.edit().putString("customStickers", raw).apply()
+        SecurePrefs.set("customStickers", raw, ctx)
     }
 
     fun saveSelectedId(id: String) {
-        sp.edit().putString("selectedId", id).apply()
+        SecurePrefs.set("selectedId", id, ctx)
     }
 
-    fun save(s: Settings) {        sp.edit()
-            .putBoolean("dark", s.dark)
-            .putInt("accent", s.accent)
-            .putString("customAccent", s.customAccent.toString())
-            .putInt("style", s.stickerStyle)
-            .putInt("mainPack", s.mainPack)
-            .putString("mainFx", s.mainFx)
-            .putInt("wallStyle", s.wallpaperStyle)
-            .putInt("wallpaper", s.wallpaperIndex)
-            .putString("wallColor", s.wallpaperColor.toString())
-            .putInt("wallSize", s.wallpaperSize)
-            .putString("wallFx", s.wallFx)
-            .putString("mainColor", s.mainColor.toString())
-            .putInt("mainSize", s.mainSize)
-            .putInt("mainIndex", s.mainIndex)
-            .putBoolean("followFinger", s.followFinger)
-            .putBoolean("animate", s.animate)
-            .putBoolean("stateMotion", s.stateMotion)
-            .putBoolean("showNotification", s.showNotification)
-            .putBoolean("notifSticker", s.notifSticker)
-            .putString("notifColor", s.notifColor.toString())
-            .putBoolean("flagAvatars", s.flagAvatars)
-            .putBoolean("connectFlagDancer", s.connectFlagDancer)
-            .putFloat("speed", s.speed)
-            .putFloat("bgSpeed", s.bgSpeed)
-            .putBoolean("navStickers", s.navStickers)
-            .putBoolean("autoFlag", s.autoFlag)
-            .putString("navOrder", s.navOrder)
-            .putString("navIcons", s.navIcons)
-            .putInt("upIcon", s.upIcon)
-            .putInt("downIcon", s.downIcon)
-            .putInt("upPack", s.upPack)
-            .putInt("downPack", s.downPack)
-            .putString("navPacks", s.navPacks)
-            .putString("routePacks", s.routePacks)
-            .putString("upColor", s.upColor.toString())
-            .putString("downColor", s.downColor.toString())
-            .putFloat("upSpeed", s.upSpeed)
-            .putFloat("downSpeed", s.downSpeed)
-            .putString("navColors", s.navColors)
-            .putString("routeColors", s.routeColors)
-            .putString("navSpeeds", s.navSpeeds)
-            .putString("routeSpeeds", s.routeSpeeds)
-            .putString("routeIcons", s.routeIcons)
-            .putString("upFx", s.upFx)
-            .putString("downFx", s.downFx)
-            .putString("navFx", s.navFx)
-            .putString("routeFx", s.routeFx)
-            .putBoolean("antiFilter", s.antiFilter)
-            .putString("antiFilterApps", s.antiFilterApps)
-            .putString("homeOrder", s.homeOrder)
-            .putBoolean("pingOnStart", s.pingOnStart)
-            .putBoolean("autoPingNew", s.autoPingNew)
-            .putBoolean("flagOnStart", s.flagOnStart)
-            .putBoolean("autoFlagNew", s.autoFlagNew)
-            .putFloat("flagStretch", s.flagStretch)
-            .putFloat("flagRound", s.flagRound)
-            .apply()
+    fun save(s: Settings) {
+        SecurePrefs.set("dark", s.dark.toString(), ctx)
+        SecurePrefs.set("accent", s.accent.toString(), ctx)
+        SecurePrefs.set("customAccent", s.customAccent.toString(), ctx)
+        SecurePrefs.set("style", s.stickerStyle.toString(), ctx)
+        SecurePrefs.set("mainPack", s.mainPack.toString(), ctx)
+        SecurePrefs.set("mainFx", s.mainFx, ctx)
+        SecurePrefs.set("wallStyle", s.wallpaperStyle.toString(), ctx)
+        SecurePrefs.set("wallpaper", s.wallpaperIndex.toString(), ctx)
+        SecurePrefs.set("wallColor", s.wallpaperColor.toString(), ctx)
+        SecurePrefs.set("wallSize", s.wallpaperSize.toString(), ctx)
+        SecurePrefs.set("wallFx", s.wallFx, ctx)
+        SecurePrefs.set("mainColor", s.mainColor.toString(), ctx)
+        SecurePrefs.set("mainSize", s.mainSize.toString(), ctx)
+        SecurePrefs.set("mainIndex", s.mainIndex.toString(), ctx)
+        SecurePrefs.set("followFinger", s.followFinger.toString(), ctx)
+        SecurePrefs.set("animate", s.animate.toString(), ctx)
+        SecurePrefs.set("stateMotion", s.stateMotion.toString(), ctx)
+        SecurePrefs.set("showNotification", s.showNotification.toString(), ctx)
+        SecurePrefs.set("notifSticker", s.notifSticker.toString(), ctx)
+        SecurePrefs.set("notifColor", s.notifColor.toString(), ctx)
+        SecurePrefs.set("flagAvatars", s.flagAvatars.toString(), ctx)
+        SecurePrefs.set("connectFlagDancer", s.connectFlagDancer.toString(), ctx)
+        SecurePrefs.set("speed", s.speed.toString(), ctx)
+        SecurePrefs.set("bgSpeed", s.bgSpeed.toString(), ctx)
+        SecurePrefs.set("navStickers", s.navStickers.toString(), ctx)
+        SecurePrefs.set("autoFlag", s.autoFlag.toString(), ctx)
+        SecurePrefs.set("navOrder", s.navOrder, ctx)
+        SecurePrefs.set("navIcons", s.navIcons, ctx)
+        SecurePrefs.set("upIcon", s.upIcon.toString(), ctx)
+        SecurePrefs.set("downIcon", s.downIcon.toString(), ctx)
+        SecurePrefs.set("upPack", s.upPack.toString(), ctx)
+        SecurePrefs.set("downPack", s.downPack.toString(), ctx)
+        SecurePrefs.set("navPacks", s.navPacks, ctx)
+        SecurePrefs.set("routePacks", s.routePacks, ctx)
+        SecurePrefs.set("upColor", s.upColor.toString(), ctx)
+        SecurePrefs.set("downColor", s.downColor.toString(), ctx)
+        SecurePrefs.set("upSpeed", s.upSpeed.toString(), ctx)
+        SecurePrefs.set("downSpeed", s.downSpeed.toString(), ctx)
+        SecurePrefs.set("navColors", s.navColors, ctx)
+        SecurePrefs.set("routeColors", s.routeColors, ctx)
+        SecurePrefs.set("navSpeeds", s.navSpeeds, ctx)
+        SecurePrefs.set("routeSpeeds", s.routeSpeeds, ctx)
+        SecurePrefs.set("routeIcons", s.routeIcons, ctx)
+        SecurePrefs.set("upFx", s.upFx, ctx)
+        SecurePrefs.set("downFx", s.downFx, ctx)
+        SecurePrefs.set("navFx", s.navFx, ctx)
+        SecurePrefs.set("routeFx", s.routeFx, ctx)
+        SecurePrefs.set("antiFilter", s.antiFilter.toString(), ctx)
+        SecurePrefs.set("antiFilterApps", s.antiFilterApps, ctx)
+        SecurePrefs.set("homeOrder", s.homeOrder, ctx)
+        SecurePrefs.set("pingOnStart", s.pingOnStart.toString(), ctx)
+        SecurePrefs.set("autoPingNew", s.autoPingNew.toString(), ctx)
+        SecurePrefs.set("flagOnStart", s.flagOnStart.toString(), ctx)
+        SecurePrefs.set("autoFlagNew", s.autoFlagNew.toString(), ctx)
+        SecurePrefs.set("flagStretch", s.flagStretch.toString(), ctx)
+        SecurePrefs.set("flagRound", s.flagRound.toString(), ctx)
     }
 }

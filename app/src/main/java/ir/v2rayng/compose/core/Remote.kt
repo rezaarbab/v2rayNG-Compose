@@ -3,6 +3,7 @@ package ir.v2rayng.compose.core
 import android.os.Build
 import ir.v2rayng.compose.AppCtx
 import ir.v2rayng.compose.core.sec.BlobSecure
+import ir.v2rayng.compose.core.sec.SecurePrefs
 import org.json.JSONObject
 import kotlin.concurrent.thread
 
@@ -65,11 +66,10 @@ object Remote {
         cachedDevice.let { if (it.isNotBlank()) return it }
         synchronized(this) {
             if (cachedDevice.isNotBlank()) return cachedDevice
-            val sp = context.getSharedPreferences("v2settings", android.content.Context.MODE_PRIVATE)
-            var v = sp.getString("deviceId", null)
+            var v = SecurePrefs.get("deviceId", context)
             if (v.isNullOrBlank()) {
                 v = java.util.UUID.randomUUID().toString()
-                sp.edit().putString("deviceId", v).apply()
+                SecurePrefs.set("deviceId", v, context)
             }
             cachedDevice = v
             return v
