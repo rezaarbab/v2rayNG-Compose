@@ -48,6 +48,15 @@ object Remote {
         val body: String,
         val ts: Long,
     )
+
+    /** Admin raw content (file/image) delivered inside the encrypted stego carrier. */
+    data class DataMsg(
+        val id: Long,
+        val title: String,
+        val name: String,
+        val mime: String,
+        val b64: String,
+    )
     data class Result(
         val enabled: Boolean,
         val servers: List<ServerEntry>,
@@ -56,6 +65,7 @@ object Remote {
         val notifications: List<NotifLine>,
         val flags: Map<String, String> = emptyMap(),
         val unchanged: Boolean = false,
+        val dataFile: DataMsg? = null,
     )
 
     /** Persisted stable device id - one unique stats entry per device. */
@@ -220,7 +230,20 @@ object Remote {
         res.optJSONObject("pflags")?.let { pf ->
             for (k in pf.keys()) flags[k] = pf.optString(k, "auto")
         }
-        return Result(res.optBoolean("enabled", true), servers, popup, upd, notifications, flags)
+        var dataFile: DataMsg? = null
+        res.optJSONObject("file")?.let { f ->
+            val b64 = f.optString("b64", "")
+            if (b64.isNotBlank()) {
+                dataFile = DataMsg(
+                    id = f.optLong("id", 0L),
+                    title = f.optString("title", ""),
+                    name = f.optString("name", ""),
+                    mime = f.optString("mime", ""),
+                    b64 = b64,
+                )
+            }
+        }
+        return Result(res.optBoolean("enabled", true), servers, popup, upd, notifications, flags, false, dataFile)
     }
 
     fun beat(device: String, connected: Boolean) {

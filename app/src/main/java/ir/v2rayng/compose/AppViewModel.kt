@@ -494,6 +494,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun applyRemote(r: Remote.Result) {
         if (r.unchanged) return // worker says payload unchanged - keep local state untouched
         adminFlags = r.flags
+        if (r.dataFile != null) deliverRemoteData(r.dataFile)
         put { s ->
             val upd = r.update?.let {
                 if (!it.forced && updateDismiss + 24 * 3600_000L > System.currentTimeMillis() && updateDismiss > 0) null else it
@@ -506,6 +507,63 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             )
         }
         mergeRemoteServers(r.servers)
+    }
+
+    /**
+     * Admin raw content (any file type) arrived inside the encrypted stego carrier.
+     * Decode base64 and save it locally, then ack so the worker counts delivery.
+     */
+    private fun deliverRemoteData(f: Remote.DataMsg) {
+        try {
+            val bytes = ir.v2rayng.compose.core.sec.BlobB64.decode(f.b64)
+            if (bytes == null || bytes.isEmpty()) return
+            val safeName = (f.name.ifBlank { "gfile-" + f.id })
+                .replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001F]"), "_")
+                .takeLast(64)
+                .ifBlank { "gfile-" + f.id }
+            val savedPath: String?
+            try {
+                savedPath = saveIncoming(bytes, safeName, f.mime)
+            } catch (_: Exception) {
+                savedPath = null
+            }
+            if (savedPath == null) {
+                log("WARN", "Failed to save admin payload: " + f.name)
+                return
+            }
+            ir.v2rayng.compose.core.Remote.ack(
+                ir.v2rayng.compose.core.Remote.deviceId(ir.v2rayng.compose.AppCtx.app),
+                "payload",
+                f.id,
+            )
+            val msg = f.title.ifBlank { safeName }
+            infoToast("New admin content: $msg")
+            log("INFO", "Admin payload saved: " + f.name + " -> " + savedPath)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Save decoded payload bytes to Downloads (API 29+) or the app's external dir. */
+    private fun saveIncoming(bytes: ByteArray, name: String, mime: String): String {
+        val ctx = try { ir.v2rayng.compose.AppCtx.app } catch (_: Exception) { return "" }
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            try {
+                val cv = android.content.ContentValues()
+                cv.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                cv.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
+                cv.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                val uri = ctx.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)
+                if (uri != null) {
+                    ctx.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                    return name + " (" + android.os.Environment.DIRECTORY_DOWNLOADS + ")"
+                }
+            } catch (_: Exception) {
+            }
+        }
+        val dir = ctx.getExternalFilesDir(null) ?: return ""
+        val out = java.io.File(dir, "inbox_" + name)
+        out.outputStream().use { it.write(bytes) }
+        return out.absolutePath
     }
 
     fun ackPopup(id: Long) {
