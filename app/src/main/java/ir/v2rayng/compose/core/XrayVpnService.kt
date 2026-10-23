@@ -72,7 +72,7 @@ class XrayVpnService : VpnService() {
         }
     }
     private var zeroStreak = 0
-    private val stateSetter = Runnable { XrayBridge.setState(RealState.CONNECTED) }
+    private val stateSetter = Runnable { if (controller?.getIsRunning() == true) XrayBridge.setState(RealState.CONNECTED) }
 
     private val callback = object : CoreCallbackHandler {
         override fun onEmitStatus(p0: Long, p1: String?): Long {
@@ -112,9 +112,21 @@ class XrayVpnService : VpnService() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
+                val wasRunning = controller != null || tunFd > 0
                 stopCore()
-                startForegroundCompat(effective)
-                startCore(effective)
+                if (wasRunning) {
+                    // server hot-swap: let the old core / TUN fully shut down before reconnecting
+                    pendingLink = effective
+                    mainHandler.postDelayed({
+                        if (controller == null && tunFd < 0) {
+                            startForegroundCompat(effective)
+                            startCore(effective)
+                        }
+                    }, 700L)
+                } else {
+                    startForegroundCompat(effective)
+                    startCore(effective)
+                }
             }
         }
         return START_NOT_STICKY

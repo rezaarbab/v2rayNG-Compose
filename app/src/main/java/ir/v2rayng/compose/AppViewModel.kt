@@ -396,10 +396,15 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             val rem = list.map { e ->
                 val ex = s.servers.firstOrNull { it.id == e.id }
                 if (ex == null) newIds.add(e.id)
+                // address may be a placeholder (0.0.0.0) - fall back to the real host inside the link
+                val fromLink = e.link?.let { try { ir.v2rayng.compose.core.parseProxyLink(it) } catch (_: Exception) { null } }
+                val addr = if (!e.address.isNullOrBlank() && e.address != "0.0.0.0") e.address
+                    else fromLink?.address?.takeIf { it.isNotBlank() } ?: e.address
+                val prt = fromLink?.port?.takeIf { it > 0 } ?: e.port
                 val base = ServerProfile(
                     id = e.id,
                     name = e.name, // admin-provided - never the config (#NAME) tag
-                    host = "${e.address}:${e.port}",
+                    host = "$addr:$prt",
                     stickerIndex = ex?.stickerIndex ?: ((e.id.hashCode() and 0x3FF) % 997),
                     country = ex?.country ?: "",
                     ping = ex?.ping,
