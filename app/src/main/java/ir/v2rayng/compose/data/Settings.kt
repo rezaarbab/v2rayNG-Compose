@@ -41,6 +41,8 @@ data class Settings(
     val notifColor: Long = -1L,
     val flagAvatars: Boolean = true,
     val connectFlagDancer: Boolean = true,
+    val flagStretch: Float = 0.66f,
+    val flagRound: Float = 0.45f,
     val speed: Float = 1f,
     val bgSpeed: Float = 1f,
     val navStickers: Boolean = true,
@@ -162,6 +164,8 @@ class SettingsStore(context: Context) {
         autoPingNew = sp.getBoolean("autoPingNew", true),
         flagOnStart = sp.getBoolean("flagOnStart", true),
         autoFlagNew = sp.getBoolean("autoFlagNew", true),
+        flagStretch = sp.getFloat("flagStretch", 0.66f),
+        flagRound = sp.getFloat("flagRound", 0.45f),
     )
 
     fun loadServers(): List<ServerProfile>? {
@@ -296,6 +300,8 @@ class SettingsStore(context: Context) {
             .putBoolean("autoPingNew", s.autoPingNew)
             .putBoolean("flagOnStart", s.flagOnStart)
             .putBoolean("autoFlagNew", s.autoFlagNew)
+            .putFloat("flagStretch", s.flagStretch)
+            .putFloat("flagRound", s.flagRound)
             .apply()
     }
 }

@@ -145,6 +145,9 @@ object S {
     const val SFX = "Sticker effects"
     const val SFX_RESET = "Reset effects"
 
+    const val FLAG_STRETCH = "Flag shape: %d%% (50 = long, 100 = square)"
+    const val FLAG_ROUND = "Flag corners: %d%% (0 = four corners, 100 = semicircle)"
+
     const val SEARCH_SERVERS = "Search servers..."
     const val CAT_ALL = "All"
     const val RESET_TRAFFIC = "Reset all traffic counters"

@@ -7,10 +7,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -181,7 +181,7 @@ fun Modifier.holdFor(
     }
 }
 
-/** Hold-any-icon-button tooltip: long-press shows a small label bubble under the button. */
+/** Hold-any-icon-button tooltip: long-press shows a small label bubble right under the button. */
 @Composable
 fun TipIconButton(
     icon: ImageVector,
@@ -190,6 +190,9 @@ fun TipIconButton(
     onClick: () -> Unit,
 ) {
     var tip by remember { mutableStateOf(false) }
+    var popW by remember { mutableStateOf(0) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val btnPx = with(density) { 48.dp.roundToPx() }
     Box {
         IconButton(onClick = onClick, modifier = Modifier.holdFor(600L, onHold = { tip = true })) {
             Icon(icon, contentDescription = label, tint = tint ?: LocalContentColor.current)
@@ -199,22 +202,28 @@ fun TipIconButton(
                 delay(1700L)
                 tip = false
             }
-            Surface(
-                color = Color(0xFF141A23).copy(alpha = 0.94f),
-                shape = RoundedCornerShape(10.dp),
-                shadowElevation = 6.dp,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .offset(y = 30.dp)
-                    .background(Color.Transparent),
+            androidx.compose.ui.window.Popup(
+                alignment = Alignment.TopStart,
+                offset = androidx.compose.ui.unit.IntOffset(
+                    (btnPx - popW) / 2,
+                    btnPx + with(density) { 8.dp.roundToPx() },
+                ),
             ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF9BF3CB),
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                )
+                Surface(
+                    color = Color(0xFF141A23).copy(alpha = 0.96f),
+                    shape = RoundedCornerShape(10.dp),
+                    shadowElevation = 4.dp,
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF9BF3CB),
+                        modifier = Modifier
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .onSizeChanged { popW = it.width },
+                    )
+                }
             }
         }
     }

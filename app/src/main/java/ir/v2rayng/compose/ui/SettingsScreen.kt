@@ -163,6 +163,12 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 ToggleRow(S.FLAG_AVATARS, S.FLAG_AVATARS_SUB, settings.flagAvatars) { vm.setFlagAvatars(it) }
                 ToggleRow(S.CONNECT_FLAG_DANCER, S.CONNECT_FLAG_DANCER_SUB, settings.connectFlagDancer) { vm.setConnectFlagDancer(it) }
                 ToggleRow(S.FOLLOW_FINGER, S.FOLLOW_SUB, settings.followFinger) { vm.setFollowFinger(it) }
+
+                Text(S.FLAG_STRETCH.format((settings.flagStretch * 100f).toInt()), style = MaterialTheme.typography.bodyMedium)
+                Slider(value = settings.flagStretch, onValueChange = { vm.setFlagStretch(it) }, valueRange = 0.5f..1f)
+
+                Text(S.FLAG_ROUND.format((settings.flagRound * 100f).toInt()), style = MaterialTheme.typography.bodyMedium)
+                Slider(value = settings.flagRound, onValueChange = { vm.setFlagRound(it) }, valueRange = 0f..1f)
             }
         }
 

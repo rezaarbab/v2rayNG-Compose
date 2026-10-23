@@ -110,10 +110,12 @@ fun AppRoot() {
             }
         }
     }
-    LaunchedEffect(settings.animate, settings.speed, settings.bgSpeed) {
+    LaunchedEffect(settings.animate, settings.speed, settings.bgSpeed, settings.flagStretch, settings.flagRound) {
         env.enabled.value = settings.animate
         env.speed.floatValue = settings.speed
         env.bgSpeed.floatValue = settings.bgSpeed
+        env.flagStretch.floatValue = settings.flagStretch
+        env.flagRound.floatValue = settings.flagRound
     }
     CompositionLocalProvider(LocalStickerEnv provides env) {
         V2rayNGTheme(dark = settings.dark, accent = settings.accent, custom = settings.customAccent) {

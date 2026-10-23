@@ -14,6 +14,9 @@ class StickerEnv {
     val enabled = mutableStateOf(true)
     val speed = mutableFloatStateOf(1f)
     val bgSpeed = mutableFloatStateOf(1f)
+    // flag look, user-controlled: aspect (square..long) and corner rounding (sharp..semicircle)
+    val flagStretch = mutableFloatStateOf(0.66f)
+    val flagRound = mutableFloatStateOf(0.45f)
 }
 
 val LocalStickerEnv = staticCompositionLocalOf { StickerEnv() }

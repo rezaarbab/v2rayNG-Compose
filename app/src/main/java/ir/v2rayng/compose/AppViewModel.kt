@@ -260,6 +260,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setNotifColor(v: Long) = setSettings { it.copy(notifColor = v) }
     fun setFlagAvatars(v: Boolean) = setSettings { it.copy(flagAvatars = v) }
     fun setConnectFlagDancer(v: Boolean) = setSettings { it.copy(connectFlagDancer = v) }
+    fun setFlagStretch(v: Float) = setSettings { it.copy(flagStretch = v.coerceIn(0.5f, 1f)) }
+    fun setFlagRound(v: Float) = setSettings { it.copy(flagRound = v.coerceIn(0f, 1f)) }
 
     fun checkMyIp() {
         viewModelScope.launch {

@@ -192,8 +192,10 @@ fun StickerCharacter(
             clock / 1000f * us * (if (bg) 0.6f else 1f) * (moodSpeed(mood) * speedScale * customSpeed) + phaseOf(sticker.art)
         }
 
-        // flags are drawn as real 3:2 banners centered inside the square canvas
-        val flagYScale = if (sticker.art is FlagArt) 0.66f else 1f
+        // flags: user-controlled aspect (square..long) and corner rounding (sharp..semicircle)
+        val isFlag = sticker.art is FlagArt
+        val flagYScale = if (isFlag) env.flagStretch.floatValue.coerceIn(0.5f, 1f) else 1f
+        val flagRadius = if (isFlag) env.flagRound.floatValue.coerceIn(0f, 1f) * flagYScale * s * 0.5f else 0f
         fun p(x: Float, y: Float): Offset = Offset(x * s, (y - 0.5f) * s * flagYScale + 0.5f * s)
 
         drawOval(
@@ -323,8 +325,28 @@ fun StickerCharacter(
             }
 
             is FlagArt -> {
-                for (band in art.bands) {
-                    drawOps(band.ops, band.color)
+                if (flagRadius > 0.02f) {
+                    // user-rounded flag: base shape + every band clipped inside it
+                    shapePath.rewind()
+                    shapePath.addRoundRect(
+                        androidx.compose.ui.geometry.RoundRect(
+                            left = 0.02f * s,
+                            top = (0.04f - 0.5f) * s * flagYScale + 0.5f * s,
+                            right = 0.98f * s,
+                            bottom = (0.96f - 0.5f) * s * flagYScale + 0.5f * s,
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(flagRadius, flagRadius),
+                        ),
+                    )
+                    drawPath(shapePath, art.base)
+                    clipPath(shapePath) {
+                        for (band in art.bands) {
+                            drawOps(band.ops, band.color)
+                        }
+                    }
+                } else {
+                    for (band in art.bands) {
+                        drawOps(band.ops, band.color)
+                    }
                 }
 
                 drawCircle(Color.White.copy(alpha = 0.14f), radius = 0.10f * s, center = p(0.42f, 0.37f))
