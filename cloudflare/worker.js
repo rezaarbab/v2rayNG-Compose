@@ -173,6 +173,23 @@ async function syncPayloadObj(env, request, b) {
   if (out.popup && dismissedPopup.has(String(pid))) out.popup = null;
   const dismissedNotifs = new Set((ackSeen.results || []).filter((r) => r.kind === "notif").map((r) => String(r.popup)));
   out.notifications = out.notifications.filter((n) => !dismissedNotifs.has(String(n.id)));
+
+  // admin file/image payload - delivered once per device inside the same encrypted
+  // stego carrier as everything else (raw bytes are only ever addressed by the app
+  // *after* AES-GCM verified them; nothing crosses the wire in plaintext).
+  try {
+    const pRows = await env.DB.prepare("SELECT id, name, mime, title FROM payload_files WHERE active=1 ORDER BY id DESC LIMIT 1").all();
+    const p = (pRows.results || [])[0];
+    if (p) {
+      const seen = await env.DB.prepare("SELECT 1 FROM payload_seen WHERE device=?1 AND pid=?2").bind(String(b.device), p.id).first();
+      if (!seen) {
+        const full = await env.DB.prepare("SELECT b64 FROM payload_files WHERE id=?1").bind(p.id).first();
+        if (full && full.b64) {
+          out.file = { id: p.id, kind: "f", title: p.title || "", name: p.name || "", mime: p.mime || "", b64: full.b64 };
+        }
+      }
+    }
+  } catch (e) {}
   return out;
 }
 
@@ -218,6 +235,10 @@ async function appAck(env, request) {
   } else if (b.kind === "notif" && b.id) {
     await env.DB.prepare("INSERT OR IGNORE INTO acks (device, popup, kind, ts) VALUES (?1,?2,'notif',?3)")
       .bind(String(b.device), String(b.id), Date.now()).run();
+  } else if (b.kind === "payload" && b.id) {
+    // device confirmed the file was received and decrypted OK
+    await env.DB.prepare("INSERT OR IGNORE INTO payload_seen (device, pid, ts) VALUES (?1,?2,?3)")
+      .bind(String(b.device), Number(b.id), Date.now()).run();
   }
   return new Response(JSON.stringify({ ok: true }), { headers: jsonHeaders() });
 }
@@ -268,6 +289,7 @@ async function adminApi(env, b) {
           "INSERT INTO servers (name, address, port, link, category, ord, active, msg) VALUES (?1,?2,?3,?4,?5,?6,1,?7)",
         ).bind(name, String(b.address || "").slice(0, 256), Number(b.port || 443), String(b.link || "").slice(0, 4096),
           (String(b.category || "").trim() || "").slice(0, 64), Number(b.ord || 99), String(b.msg || "").slice(0, 200)).run();
+        srvAllInvalidate();
         return okJson();
       }
       case "srv.bulk": {
@@ -285,21 +307,25 @@ async function adminApi(env, b) {
           if (!link) continue;
           await env.DB.prepare(
             "INSERT INTO servers (name, address, port, link, category, ord, active, msg) VALUES (?1,?2,?3,?4,?5,?6,1,?7)",
-          ).bind(name.slice(0, 64) || `srv-${seq}`, "0.0.0.0", 443, link.slice(0, 4096), (cat || defCat).slice(0, 64), seq++, (msg || defMsg).slice(0, 200)).run();
+          )          .bind(name.slice(0, 64) || `srv-${seq}`, "0.0.0.0", 443, link.slice(0, 4096), (cat || defCat).slice(0, 64), seq++, (msg || defMsg).slice(0, 200)).run();
           added++;
         }
+        srvAllInvalidate();
         return okJson({ added });
       }
       case "srv.del":
         await env.DB.prepare("DELETE FROM servers WHERE id=?1").bind(Number(b.id)).run();
+        srvAllInvalidate();
         return okJson();
       case "srv.active":
         await env.DB.prepare("UPDATE servers SET active=?2 WHERE id=?1").bind(Number(b.id), b.on ? 1 : 0).run();
+        srvAllInvalidate();
         return okJson();
       case "srv.rename":
         await env.DB.prepare("UPDATE servers SET name=?2, category=?3, msg=?4 WHERE id=?1").bind(
           Number(b.id), String(b.name).slice(0, 64), String(b.category || "").slice(0, 64),
           String(b.msg == null ? "" : b.msg).slice(0, 200)).run();
+        srvAllInvalidate();
         return okJson();
       case "srv.ord": {
         const rows = await env.DB.prepare("SELECT id, ord FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
@@ -310,19 +336,23 @@ async function adminApi(env, b) {
         if (swap < 0 || swap >= list.length) return okJson();
         await env.DB.prepare("UPDATE servers SET ord=?2 WHERE id=?1").bind(list[idx].id, swap + 1).run();
         await env.DB.prepare("UPDATE servers SET ord=?2 WHERE id=?1").bind(list[swap].id, idx + 1).run();
+        srvAllInvalidate();
         return okJson();
       }
       case "srv.catmove":
         await env.DB.prepare("UPDATE servers SET category=?2 WHERE category=?1").bind(
           String(b.from || "").slice(0, 64), String(b.to || "").slice(0, 64)).run();
+        srvAllInvalidate();
         return okJson();
       case "cats.set": {
         const list = (Array.isArray(b.cats) ? b.cats : []).map(String).map((c) => c.trim().slice(0, 64)).filter(Boolean).slice(0, 64);
         await setSetting(env, "categories", JSON.stringify(list));
+        srvAllInvalidate();
         return okJson();
       }
       case "set.app":
         await setSetting(env, "app_enabled", b.on ? "1" : "0");
+        srvAllInvalidate();
         return okJson();
       case "set.flags": {
         const legal = { ping_on_start: 1, flag_on_start: 1, auto_ping_new: 1, auto_flag_new: 1 };
@@ -331,6 +361,7 @@ async function adminApi(env, b) {
             await setSetting(env, k, String(v));
           }
         }
+        srvAllInvalidate();
         return okJson();
       }
       case "dev.block": {
@@ -365,6 +396,7 @@ async function adminApi(env, b) {
         await setSetting(env, "min_version", String(Number(b.minVersion || 0)));
         await setSetting(env, "latest_version", String(Number(b.latestVersion || 0)));
         await setSetting(env, "latest_url", String(b.latestUrl || "").slice(0, 512));
+        srvAllInvalidate();
         return okJson();
       case "set.popup": {
         const id = Date.now();
@@ -429,6 +461,52 @@ async function adminApi(env, b) {
           offServers: deact.c,
         } }), { headers: jsonHeaders() });
       }
+      case "payload.add": {
+        // raw admin input (any file: image/pdf/mp3/...) -> worker packs it itself:
+        // JSON -> zlib -> AES-256-GCM(Kc per device+bucket) -> homoglyph stego carrier.
+        const b64 = String(b.b64 || "").replace(/\s/g, "");
+        const size = Number(b.size || Math.floor(b64.length * 3 / 4));
+        if (b64.length < 8 || size <= 0) return okJson({ ok: false, error: "empty file" });
+        if (b64.length > 61440) return okJson({ ok: false, error: "file too large - max 45KB (D1 row limit)" });
+        const content = bl_b64uDecode(b64);
+        if (!content || content.length === 0) return okJson({ ok: false, error: "invalid base64" });
+        await env.DB.prepare(
+          "INSERT INTO payload_files (name, mime, size, title, b64, active, ts) VALUES (?1,?2,?3,?4,?5,1,?6)",
+        ).bind(
+          String(b.name || "file.bin").slice(0, 128),
+          String(b.mime || "application/octet-stream").slice(0, 96),
+          content.length,
+          String(b.title || "").slice(0, 120),
+          b64,
+          Date.now(),
+        ).run();
+        return okJson({ size: content.length });
+      }
+      case "payload.list": {
+        const rows = await env.DB.prepare(
+          "SELECT id, name, mime, size, title, active, ts FROM payload_files ORDER BY id DESC LIMIT 20",
+        ).all();
+        const delivered = await env.DB.prepare("SELECT pid, COUNT(*) c FROM payload_seen GROUP BY pid").all();
+        const dMap = {};
+        for (const r of delivered.results || []) dMap[String(r.pid)] = r.c;
+        return new Response(JSON.stringify({ ok: true, payloads: rows.results || [], delivered: dMap }), { headers: jsonHeaders() });
+      }
+      case "payload.off":
+        await env.DB.prepare("UPDATE payload_files SET active=0 WHERE id=?1").bind(Number(b.id)).run();
+        return okJson();
+      case "payload.on":
+        await env.DB.prepare("UPDATE payload_files SET active=0").run();
+        await env.DB.prepare("UPDATE payload_files SET active=1 WHERE id=?1").bind(Number(b.id)).run();
+        return okJson();
+      case "payload.resend": {
+        // clear dedupe state so every device downloads the payload again on its next sync
+        await env.DB.prepare("UPDATE blob_sessions SET last_payload=''").run();
+        await env.DB.prepare("DELETE FROM payload_seen WHERE pid=?1").bind(Number(b.id)).run();
+        return okJson();
+      }
+      case "clear.last_payload":
+        await env.DB.prepare("UPDATE blob_sessions SET last_payload=''").run();
+        return okJson();
       case "srv.list": {
         const rows = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
         return new Response(JSON.stringify({ ok: true, servers: rows.results,
@@ -437,26 +515,31 @@ async function adminApi(env, b) {
       }
       case "srv.all": {
         // one fast round-trip for the whole admin bootstrap: servers + cats + kill-switch + behavior flags + update cfg
-        const early = await getSettings(env, ["app_enabled", "min_version", "latest_version", "latest_url", "ping_on_start", "flag_on_start", "auto_ping_new", "auto_flag_new"]);
-        const rows = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
-        return new Response(JSON.stringify({
-          ok: true,
-          servers: rows.results,
-          cats,
-          app: early.app_enabled !== "0",
-          cfg: {
-            min_version: early.min_version || "0",
-            latest_version: early.latest_version || "0",
-            latest_url: early.latest_url || "",
-            app_enabled: early.app_enabled || "1",
-          },
-          pflags: {
-            ping_on_start: early.ping_on_start || "auto",
-            flag_on_start: early.flag_on_start || "auto",
-            auto_ping_new: early.auto_ping_new || "auto",
-            auto_flag_new: early.auto_flag_new || "auto",
-          },
-        }), { headers: jsonHeaders() });
+        const now3 = Date.now();
+        if ((SRV_ALL_CACHE.v != null) && now3 - SRV_ALL_CACHE.t < SRV_ALL_TTL) {
+          return new Response(JSON.stringify(SRV_ALL_CACHE.v), { headers: jsonHeaders() });
+        }
+        const keysAll = ["app_enabled", "min_version", "latest_version", "latest_url", "ping_on_start", "flag_on_start", "auto_ping_new", "auto_flag_new", "categories"];
+        const phAll = keysAll.map((k, i) => `?${i + 1}`).join(",");
+        let batchOut = null;
+        try {
+          batchOut = await env.DB.batch([
+            env.DB.prepare(`SELECT key, value FROM settings WHERE key IN (${phAll})`).bind(...keysAll),
+            env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500"),
+          ]);
+        } catch (e) {
+          batchOut = null;
+        }
+        if (!batchOut || batchOut.length < 2) {
+          // schema not ready / older shape - fall through to the lazy per-query path
+          const early = await getSettings(env, ["app_enabled", "min_version", "latest_version", "latest_url", "ping_on_start", "flag_on_start", "auto_ping_new", "auto_flag_new"]);
+          const rowsS = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
+          batchOut = null;
+          return finishSrvAll(env, now3, { settings: early, servers: rowsS });
+        }
+        const merged = {};
+        for (const r of (batchOut[0].results || [])) merged[r.key] = r.value;
+        return finishSrvAll(env, now3, { settings: merged, servers: batchOut[1].results || [] });
       }
       case "devices.list": {
         let rows;
@@ -488,6 +571,41 @@ async function adminApi(env, b) {
 
 function okJson(extra = {}) {
   return new Response(JSON.stringify({ ok: true, ...extra }), { headers: jsonHeaders() });
+}
+
+/* ---- srv.all cache: one 2.5s-lived snapshot so repeated panel calls are instant ---- */
+const SRV_ALL_TTL = 2500;
+let SRV_ALL_CACHE = { t: 0, v: null };
+function srvAllInvalidate() { SRV_ALL_CACHE = { t: 0, v: null }; }
+
+/** Assemble the srv.all bootstrap response from one settings lookup + one servers query. */
+async function finishSrvAll(env, cacheNow, d) {
+  const early = d.settings;
+  const servers = d.servers;
+  let catsList;
+  try { catsList = JSON.parse(early.categories || "[]"); } catch (e) { catsList = []; }
+  catsList = (Array.isArray(catsList) ? catsList : []).filter((c) => typeof c === "string").map((c) => c.trim()).filter(Boolean).slice(0, 64);
+  if (catsList.length === 0) catsList = ["VIP", "Normal"];
+  const sAll = {
+    ok: true,
+    servers: servers,
+    cats: catsList,
+    app: early.app_enabled !== "0",
+    cfg: {
+      min_version: early.min_version || "0",
+      latest_version: early.latest_version || "0",
+      latest_url: early.latest_url || "",
+      app_enabled: early.app_enabled || "1",
+    },
+    pflags: {
+      ping_on_start: early.ping_on_start || "auto",
+      flag_on_start: early.flag_on_start || "auto",
+      auto_ping_new: early.auto_ping_new || "auto",
+      auto_flag_new: early.auto_flag_new || "auto",
+    },
+  };
+  SRV_ALL_CACHE = { t: cacheNow, v: sAll };
+  return new Response(JSON.stringify(sAll), { headers: jsonHeaders() });
 }
 
 /* ============================ auth ============================ */
@@ -762,6 +880,15 @@ function panelPage(env) {
 <div><div class=lbl>متن</div><input id=n_body></div>
 <div style="flex:0;display:flex;align-items:flex-end"><button onclick=notifAdd()>ارسال</button></div></div>
 <div id=notif_tbl></div></div>
+
+<div class=card><h2>📎 ارسال فایل / عکس / هر داده (استگانو)</h2>
+<div class=row2><div><div class=lbl>عنوان (اختیاری - نوتیف داخل دستگاه)</div><input id=f_title></div></div>
+<div class=lbl>انتخاب فایل (هر نوع؛ حداکثر 45KB)</div>
+<input type=file id=f_file>
+<div id=f_info class=note></div>
+<button onclick=sendFile() style=margin-top:10px>🔒 ارسال به همه دستگاه‌ها</button>
+<p class=note>ورکر خودش بسته‌بندی می‌کند: JSON → zlib → AES-256-GCM(کلید 60 دقیقه‌ای هر دستگاه) → متن حامل استگانو. بایت‌های خام هرگز روی شبکه دیده نمی‌شوند.</p>
+<div class=lbl>فایل‌های اخیر</div><div id=payload_tbl class=empty>در حال دریافت...</div></div>
 </div>
 
 <!-- ================= DEVICES ================= -->
@@ -920,6 +1047,34 @@ $('popup_state').innerHTML=on?'<span class="badge b-on">در حال ارسال �
 async function savePopup(){await api({action:'set.popup',active:$('p_active').checked,title:$('p_title').value,body:$('p_body').value,btnText:$('p_btn').value,btnUrl:$('p_url').value,btnEnabled:$('p_onbtn').checked,cancelEnabled:$('p_oncancel').checked,maxShows:Number($('p_max').value||100)});loadPopup()}
 async function resetShows(){await savePopup();toast('شمارنده رست شد و پاپ‌اپ دوباره به همه ارسال میشود');loadPopup()}
 async function notifAdd(){await api({action:'notif.add',title:$('n_title').value,body:$('n_body').value});$('n_title').value='';$('n_body').value='';loadNotifs()}
+
+/* ---- admin file/image payload (stego-delivered to every app) ---- */
+let FPAYLOAD=null,FNAME='',FMIME='';
+const FMAX=45*1024;
+document.getElementById('f_file').addEventListener('change',e=>{
+ const f=e.target.files[0];FPAYLOAD=null;FNAME='';FMIME='';
+ if(!f){$('f_info').textContent='';return}
+ if(f.size>FMAX){toast('فایل بزرگتر از 45KB است',1);e.target.value='';return}
+ FPAYLOAD=f;FNAME=f.name;FMIME=f.type||'application/octet-stream';
+ $('f_info').textContent='آماده ارسال: '+f.name+' ('+(f.size/1024).toFixed(1)+'KB)'});
+async function sendFile(){
+ if(!FPAYLOAD){toast('فایلی انتخاب نشده',1);return}
+ const b64=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(String(fr.result).split(',')[1]);fr.readAsDataURL(FPAYLOAD)});
+ const j=await api({action:'payload.add',name:FNAME,mime:FMIME,title:$('f_title').value,b64:b64,size:FPAYLOAD.size});
+ if(j&&j.size!=null)toast('ارسال شد: '+((j.size/1024).toFixed(1))+'KB');
+ $('f_file').value='';$('f_info').textContent='';FPAYLOAD=null;loadPayloads()}
+async function loadPayloads(){const j=await api({action:'payload.list'});const box=$('payload_tbl');
+ const list=j.payloads||[];const dMap=j.delivered||{};
+ if(!list.length){box.className='empty';box.textContent='فرستاده نشده';return}
+ box.className='';box.innerHTML='<table><tr><th>فایل</th><th>حجم</th><th>تحویل</th><th></th></tr>'+
+ list.map(p=>'<tr><td>'+esc(p.name||p.id)+(p.title?'<br><small style=color:var(--sub)>'+esc(p.title)+'</small>':'')+'</td>'+
+ '<td>'+(Number(p.size||0)/1024).toFixed(1)+'KB</td><td><span class="badge '+(Number(dMap[String(p.id)]||0)>0?'b-on':'b-y')+'">'+(dMap[String(p.id)]||0)+' دستگاه</span>'+
+ (p.active?'':'<br><span class="badge b-off">غیرفعال</span>')+'</td>'+
+ '<td>'+(p.active?'<button class="gray sm" data-off="'+p.id+'">توقف</button> ':'<button class="gray sm" data-on="'+p.id+'">فعال</button> ')+
+ '<button class="gray sm" data-resend="'+p.id+'">ارسال مجدد</button></td></tr>').join('')+'</table>';
+ box.querySelectorAll('button[data-off]').forEach(b=>b.onclick=()=>api({action:'payload.off',id:Number(b.dataset.off)}).then(loadPayloads));
+ box.querySelectorAll('button[data-on]').forEach(b=>b.onclick=()=>api({action:'payload.on',id:Number(b.dataset.on)}).then(loadPayloads));
+ box.querySelectorAll('button[data-resend]').forEach(b=>b.onclick=()=>api({action:'payload.resend',id:Number(b.dataset.resend)}).then(()=>{toast('برای همه ارسال مجدد میشود');loadPayloads()}))}
 async function loadNotifs(){const j=await api({action:'notif.list'});const box=$('notif_tbl');
 if(!(j.notifs||[]).length){box.className='empty';box.textContent='هیچ نوتیفیکیشنی نیست';return}
 box.className='';box.innerHTML='<table><tr><th>id</th><th>تیتر</th><th>متن</th><th></th></tr>'+
@@ -982,14 +1137,15 @@ box.querySelectorAll('button[data-info]').forEach(b=>b.onclick=()=>{
 /* password on EVERY visit - nothing persisted; all panels load in parallel for speed */
 async function loadAll(){
  await Promise.allSettled([
-  loadServers(),
-  loadStats(),
-  loadFlags(),
-  loadNotifs(),
-  loadPopup(),
-  loadUpdate(),
-  loadDevices(),
- ])}
+   loadServers(),
+   loadStats(),
+   loadFlags(),
+   loadNotifs(),
+   loadPayloads(),
+   loadPopup(),
+   loadUpdate(),
+   loadDevices(),
+  ])}
 (()=>{logout()})();
 supportModal=((h)=>{const bd2=$('info_body');bd2.innerHTML=h;$('info_modal').style.display='flex'});
 function infoClose(){$('info_modal').style.display='none'}
@@ -1529,6 +1685,10 @@ async function ensureSchema(env) {
       "CREATE TABLE IF NOT EXISTS blob_sessions (device TEXT PRIMARY KEY, key TEXT, exp INTEGER, rot INTEGER DEFAULT 0, last_payload TEXT DEFAULT '')",
     ),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS blob_tok (device TEXT PRIMARY KEY, ts INTEGER DEFAULT 0)"),
+    env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS payload_files (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, mime TEXT DEFAULT '', size INTEGER DEFAULT 0, title TEXT DEFAULT '', b64 TEXT, active INTEGER DEFAULT 1, ts INTEGER)",
+    ),
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS payload_seen (device TEXT, pid INTEGER, ts INTEGER, PRIMARY KEY (device, pid))"),
   ]);
   // older panel DB - add missing column
   try {
