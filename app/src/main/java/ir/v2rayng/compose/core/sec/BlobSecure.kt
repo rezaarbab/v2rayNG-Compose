@@ -58,7 +58,7 @@ object BlobSecure {
         try {
             val sp = AppCtx.app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
             if (s == null) sp.edit().remove(KEY).apply()
-            else sp.edit().putString(KEY, BlobVault.seal(s.wrap().toString())).apply()
+            else sp.edit().putString(KEY, BlobVault.seal(s.wrap().toString().toByteArray(Charsets.UTF_8)) ?: return).apply()
         } catch (_: Exception) {
         }
     }
@@ -140,6 +140,9 @@ object BlobSecure {
             val text = httpPost(base, "/api/handshake", req) ?: return null
             val resp = JSONObject(text)
             if (resp.optInt("v", 0) < 2) return null
+            // persist the session (worker returns exp in seconds; default 30 days)
+            val expMs = resp.optLong("exp", 0L) * 1000L
+            save(Session(kc, kt, if (expMs > System.currentTimeMillis()) expMs else System.currentTimeMillis() + 30L * 86400_000L))
             when (resp.optString("enc")) {
                 "s" -> revealPayload(resp.getString("st"), kc)
                 "c" -> openCy(resp.getString("cy"), kc)
@@ -152,47 +155,47 @@ object BlobSecure {
     }
 
     fun syncSecure(base: String, body: JSONObject): JSONObject? {
-        var s = load() ?: handshake(base, body) ?: return null
+        var session: Session? = load()
         for (attempt in 0 until 2) {
+            val sNow = session
+            if (sNow == null) {
+                // no usable session - handshake also stores the keys and returns the payload
+                return handshake(base, body)
+            }
             val text = httpPost(
                 base,
                 "/api/sync",
                 JSONObject(body.toString()),
                 "v1",
-                token(body.getString("device"), s.kt),
+                token(body.getString("device"), sNow.kt),
             )
             if (text == null) {
-                // transport failed - refresh the session once, then give up to caller
-                if (attempt == 0) {
-                    s = handshake(base, body) ?: return null
-                    continue
-                }
-                return null
+                // transport failed - keep the session and let the loop retry/end
+                session = null
+                continue
             }
             val resp = JSONObject(text)
-            if (resp.optInt("v", 0) != 2) {
-                if (attempt == 0) {
-                    s = handshake(base, body) ?: return null
-                    continue
-                }
-                return null
-            }
             when (resp.optString("enc")) {
-                "s" -> return BlobSecure.revealPayload(resp.getString("st"), s.kc)
-                "c" -> return BlobSecure.openCy(resp.getString("cy"), s.kc)
+                "s" -> return revealPayload(resp.getString("st"), sNow.kc)
+                "c" -> return openCy(resp.getString("cy"), sNow.kc)
                 "n" -> return JSONObject().put("__nc", true)
                 "h" -> {
-                    s = handshake(base, body) ?: return null
+                    // session expired/rotated server-side - clear keys; next attempt handshakes
+                    clear()
+                    session = null
                     continue
                 }
                 "x" -> {
                     clear()
                     return null
                 }
-                else -> return null
+                else -> {
+                    clear()
+                    return null
+                }
             }
         }
-        return null
+        return handshake(base, body)
     }
 
     fun revealPayload(carrier: String, kc: ByteArray): JSONObject? {

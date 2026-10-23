@@ -119,7 +119,7 @@ object BlobStego {
         }
     }
 
-    private class Slot {
+    internal class Slot {
         var swap = false
         var at = 0
         var prev = 0
@@ -128,7 +128,7 @@ object BlobStego {
     }
 
     /** Robust build -  exact port of StegaText slots (morph + space + swap). */
-    fun buildSlots(s: String, robustOnly: Boolean): List<Slot> {
+    internal fun buildSlots(s: String, robustOnly: Boolean): List<Slot> {
         var count = 0
         for (c in s) if (isLetterSlot(c)) count++
         val n = count
@@ -225,7 +225,7 @@ object BlobStego {
 
     private fun primaryOfChar(c: Char): Char = if (PRIMARY.contains(c)) c else TWINS[c] ?: c
 
-    fun evalSlot(s: String, slot: Slot): Boolean = when {
+    internal fun evalSlot(s: String, slot: Slot): Boolean = when {
         slot.swap -> slot.at in s.indices && !PRIMARY.contains(s[slot.at])
         slot.ch == ' ' && slot.twin == ' ' -> betweenCount(s, slot.prev, slot.at, ' ') >= 2
         else -> betweenHas(s, slot.prev, slot.at, slot.ch)
