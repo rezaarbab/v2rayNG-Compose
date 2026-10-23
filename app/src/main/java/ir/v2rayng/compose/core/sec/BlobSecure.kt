@@ -219,7 +219,10 @@ object BlobSecure {
             if (blobHeader != null) conn.setRequestProperty("x-blob", blobHeader)
             if (btok != null) conn.setRequestProperty("x-btok", btok)
             conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            if (conn.responseCode !in 200..299) return null
+            if (conn.responseCode !in 200..299) {
+                blog("http " + path + " -> status " + conn.responseCode + " (deploy the new worker? route missing?)")
+                return null
+            }
             conn.inputStream.bufferedReader().use { it.readText() }
         } catch (_: Exception) {
             null
