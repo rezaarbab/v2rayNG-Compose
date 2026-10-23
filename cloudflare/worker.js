@@ -42,6 +42,7 @@ export default {
     }
 
     // ---------------- app api ----------------
+    if (path === "/api/handshake") return withDb(env, () => blobHandshake(env, request));
     if (path === "/api/sync") return withDb(env, () => appSync(env, request));
     if (path === "/api/beat") return withDb(env, () => appBeat(env, request));
     if (path === "/api/ack") return withDb(env, () => appAck(env, request));
@@ -72,7 +73,16 @@ async function appSync(env, request) {
   const b = await request.json().catch(() => null);
   if (!b || !b.device) return new Response(JSON.stringify({ ok: false, error: "need device" }), { status: 400, headers: jsonHeaders() });
   if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
+  // capable apps speak the encrypted protocol - servers never cross the wire in plaintext
+  if (request.headers.get("x-blob") === "v1" && env.BLOB_PRIVATE_KEY && env.BLOB_ROOT) {
+    return blobSyncProtected(env, request, b);
+  }
+  const out = await syncPayloadObj(env, request, b);
+  return new Response(JSON.stringify(out), { headers: jsonHeaders() });
+}
 
+/** Core device registration + admin payload. Used by the plain v1 sync AND the encrypted v2 path. */
+async function syncPayloadObj(env, request, b) {
   const now = Date.now();
   if (b.connected) {
     await env.DB.prepare(
@@ -162,7 +172,7 @@ async function appSync(env, request) {
   if (out.popup && dismissedPopup.has(String(pid))) out.popup = null;
   const dismissedNotifs = new Set((ackSeen.results || []).filter((r) => r.kind === "notif").map((r) => String(r.popup)));
   out.notifications = out.notifications.filter((n) => !dismissedNotifs.has(String(n.id)));
-  return new Response(JSON.stringify(out), { headers: jsonHeaders() });
+  return out;
 }
 
 async function listServers(env) {
@@ -992,7 +1002,471 @@ function manualRefresh(){if(!PW){logout();return}toast('در حال بروزرس
   });
 }
 
-/* ============================ schema ============================ */
+/* ============================ blob secure layer (v2) ============================
+ * Design (option C - strongest):
+ *   1) ECDH P-256 handshake: app sends an ephemeral public key; worker holds the
+ *      static private key as a wrangler secret -> both derive the same shared
+ *      secret -> HKDF-SHA256 derives Kc (payload key) + Kt (token key).
+ *   2) Every request carries a one-shot token: ts|nonce|HMAC(key, msg) matched
+ *      against a strictly-monotonic per-device timestamp (D1) => replay-proof.
+ *   3) Every admin->app response: JSON -> zlib -> AES-256-GCM(Kc, AAD BLBv1)
+ *      -> homoglyph stego carrier (same bit engine as StegaText). Nothing about
+ *      servers ever appears in plaintext on the wire.
+ * Worker secrets (console):
+ *   wrangler secret put BLOB_PRIVATE_KEY   (PKCS8 base64url of static P-256 key)
+ *   wrangler secret put BLOB_ROOT          (64 hex chars, equals the app root)
+ */
+const M64 = (1n << 64n) - 1n;
+
+function bl_b64uDecode(s) {
+  let t = String(s).replace(/-/g, "+").replace(/_/g, "/").trim();
+  while (t.length % 4 !== 0) t += "=";
+  const bin = atob(t);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function bl_b64uEncode(b) {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function bl_hex(b) {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += b[i].toString(16).padStart(2, "0");
+  return s;
+}
+
+function bl_hexToB(h) {
+  const o = new Uint8Array(h.length >> 1);
+  for (let i = 0; i < o.length; i++) o[i] = parseInt(h.substr(i * 2, 2), 16);
+  return o;
+}
+
+function bl_eq(a, b) {
+  if (a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i];
+  return d === 0;
+}
+
+async function bl_hmac(keyB, msgB) {
+  const k = await crypto.subtle.importKey("raw", keyB, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", k, msgB));
+}
+
+async function bl_sha(b) {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", b));
+}
+
+/** xorshift64* with rejection sampling - bit-exact port of KeyedRandom (all ops 64-bit masked BigInt). */
+const BL_GOLDEN = (1n << 64n) - 0x61C8864680B583EBn;
+
+class BlKeyedRandom {
+  constructor(seedBig) {
+    let st = (seedBig & M64) ^ BL_GOLDEN;
+    st &= M64;
+    if (st === 0n) st = 0xB504F32Dn;
+    this.s = st;
+  }
+
+  next() {
+    let x = this.s;
+    x ^= (x << 13n) & M64;
+    // NOTE: BigInt has no `>>>`; x is always non-negative here, so `>>` == unsigned shift
+    x ^= x >> 7n;
+    x ^= (x << 17n) & M64;
+    this.s = x & M64;
+    return (x * 0x2545F4914F6CDD1Dn) & M64;
+  }
+
+  below(bound) {
+    if (bound <= 1) return 0;
+    const b = BigInt(bound);
+    const lim = ((1n << 62n) / b) * b;
+    let v;
+    do {
+      v = this.next() & ((1n << 62n) - 1n);
+    } while (v >= lim);
+    return Number(v % b);
+  }
+}
+
+/** Homoglyph twin pairs - MUST stay byte-identical with the app port. */
+const BL_PAIRS = [
+  ["ی", "ي"], ["ک", "ك"],
+  ["a", "а"], ["A", "А"], ["c", "с"], ["C", "С"], ["e", "е"], ["E", "Е"],
+  ["o", "о"], ["O", "О"], ["p", "р"], ["P", "Р"], ["x", "х"], ["X", "Х"],
+  ["y", "у"], ["Y", "У"], ["k", "к"], ["K", "К"], ["m", "м"], ["M", "М"],
+  ["j", "ј"], ["J", "Ј"], ["B", "В"],
+];
+const BL_TWINS = new Map();
+for (const p of BL_PAIRS) { BL_TWINS.set(p[0], p[1]); BL_TWINS.set(p[1], p[0]); }
+const BL_PRIMARY = new Set(BL_PAIRS.map((p) => p[0]));
+const BL_ZWNJ = "\u200C";
+const BL_ZWJ = "\u200D";
+const BL_STRIP = new Set(["\u200B", BL_ZWNJ, BL_ZWJ, "\u2060", "\uFEFF"]);
+const BL_GLUE = new Set(["\u200B", BL_ZWNJ, BL_ZWJ, "\u2060", "\uFEFF", "\u00AD"]);
+
+function bl_isLetter(c) {
+  const v = c.codePointAt(0);
+  return (v >= 0x0600 && v <= 0x06FF) || (v >= 0x0041 && v <= 0x005A) || (v >= 0x0061 && v <= 0x007A);
+}
+
+function bl_primaryOf(c) {
+  if (BL_PRIMARY.has(c)) return c;
+  const t = BL_TWINS.get(c);
+  return t != null ? t : c;
+}
+
+function bl_isGlue(c) {
+  return !bl_isLetter(c) && BL_GLUE.has(c);
+}
+
+function bl_family(c) {
+  const v = c.codePointAt(0);
+  if ((v >= 0x0600 && v <= 0x06FF) || (v >= 0x0750 && v <= 0x077F) || (v >= 0x08A0 && v <= 0x08FF) ||
+      (v >= 0xFB50 && v <= 0xFDFF) || (v >= 0xFE70 && v <= 0xFEFF)) return 1;
+  if ((v >= 0x0400 && v <= 0x052F) || (v >= 0x0041 && v <= 0x005A) || (v >= 0x0061 && v <= 0x007A)) return 2;
+  if ((v >= 0x0370 && v <= 0x03FF) || (v >= 0x1F00 && v <= 0x1FFF)) return 3;
+  if ((v >= 0x3040 && v <= 0x30FF) || (v >= 0x4E00 && v <= 0x9FFF) || (v >= 0xAC00 && v <= 0xD7AF)) return 4;
+  return 0;
+}
+
+/** Normalize (same as Kotlin normalizeCarriers): strip invisibles, collapse spaces, prime glyphs. */
+function bl_normalize(carrier) {
+  let out = "";
+  let prevSpace = false;
+  for (let i = 0; i < carrier.length; i++) {
+    const c = carrier.charAt(i);
+    if (BL_STRIP.has(c)) continue;
+    if (c === " ") {
+      if (prevSpace) continue;
+      prevSpace = true;
+    } else prevSpace = false;
+    out += bl_primaryOf(c);
+  }
+  return out;
+}
+
+/** Robust slots (morph ZWNJ + space insertions + homoglyph swaps) - exact port. */
+function bl_slots(canon) {
+  let n = 0;
+  for (let i = 0; i < canon.length; i++) if (bl_isLetter(canon.charAt(i))) n++;
+  const lch = new Array(n);
+  const lidx = new Array(n);
+  let t = 0;
+  for (let i = 0; i < canon.length; i++) {
+    const c = canon.charAt(i);
+    if (bl_isLetter(c)) { lch[t] = c; lidx[t] = i; t++; }
+  }
+  const sameToken = new Array(Math.max(0, n - 1)).fill(false);
+  for (let j = 0; j < n - 1; j++) {
+    let cont = true;
+    for (let u = lidx[j] + 1; u < lidx[j + 1]; u++) {
+      if (!bl_isGlue(canon.charAt(u))) { cont = false; break; }
+    }
+    sameToken[j] = cont;
+  }
+  const morphK = new Set();
+  const morphSlots = [];
+  let k = 0;
+  while (k < n) {
+    let end = k;
+    while (end + 1 < n && sameToken[end]) end++;
+    let w = "";
+    for (let u = k; u <= end; u++) w += bl_primaryOf(lch[u]);
+    let slotK = -1;
+    if (w.endsWith("هایی") && w.length >= 8) slotK = end - 3;
+    else if (w.endsWith("ترین") && w.length >= 8) slotK = end - 3;
+    else if (w.endsWith("های") && w.length >= 7) slotK = end - 2;
+    else if (w.endsWith("ها") && w.length >= 5) slotK = end - 1;
+    else if (w.endsWith("تر") && w.length >= 6) slotK = end - 1;
+    else if (w.startsWith("نمی") && w.length >= 6) slotK = k + 3;
+    else if (w.startsWith("می") && w.length >= 5) slotK = k + 2;
+    if (slotK > 0 && slotK > k && slotK <= end) {
+      morphK.add(slotK);
+      morphSlots.push({ ins: true, at: lidx[slotK], prev: lidx[slotK - 1], ch: BL_ZWNJ });
+    }
+    k = end + 1;
+  }
+  const spaceSlots = [];
+  for (let j = 0; j < n - 1; j++) {
+    const target = j + 1;
+    if (morphK.has(target)) continue;
+    let spaceLike = true;
+    for (let u = lidx[j] + 1; u < lidx[target]; u++) {
+      const c = canon.charAt(u);
+      if (c !== " " && !bl_isGlue(c)) { spaceLike = false; break; }
+    }
+    if (spaceLike && lidx[target] > lidx[j] + 1) {
+      spaceSlots.push({ ins: true, at: lidx[target], prev: lidx[j], ch: " " });
+    }
+  }
+  const swapSlots = [];
+  for (let j = 0; j < n; j++) {
+    const twin = BL_TWINS.get(lch[j]);
+    if (twin != null) swapSlots.push({ swap: true, at: lidx[j], twin });
+  }
+  return morphSlots.concat(spaceSlots, swapSlots);
+}
+
+function bl_eval(s, slot) {
+  if (slot.swap) {
+    return slot.at >= 0 && slot.at < s.length && !BL_PRIMARY.has(s.charAt(slot.at));
+  }
+  if (slot.prev < 0 || slot.at >= s.length || slot.at <= slot.prev) return false;
+  if (slot.ch === " ") {
+    let cnt = 0;
+    for (let i = slot.prev + 1; i < slot.at; i++) if (s.charAt(i) === " ") cnt++;
+    return cnt >= 2;
+  }
+  for (let i = slot.prev + 1; i < slot.at; i++) if (s.charAt(i) === slot.ch) return true;
+  return false;
+}
+
+/** Envelope: utf8 JSON -> [flag 1B + zlib/deflate or raw]. Mode 2 = zlib (CompressionStream). */
+async function bl_zipEnv(plain) {
+  try {
+    const cs = new CompressionStream("deflate");
+    const stream = new Blob([plain]).stream().pipeThrough(cs);
+    const buf = await new Response(stream).arrayBuffer();
+    const c = new Uint8Array(buf);
+    if (c.length < plain.length) {
+      const out = new Uint8Array(c.length + 1);
+      out[0] = 2;
+      out.set(c, 1);
+      return out;
+    }
+  } catch (e) {}
+  const out = new Uint8Array(plain.length + 1);
+  out[0] = 0;
+  out.set(plain, 1);
+  return out;
+}
+
+async function bl_seal(kc, plainBytes) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await crypto.subtle.importKey("raw", kc, "AES-GCM", false, ["encrypt"]);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: new TextEncoder().encode("BLBv1"), tagLength: 128 }, key, plainBytes));
+  const out = new Uint8Array(12 + ct.length);
+  out.set(iv, 0);
+  out.set(ct, 12);
+  return out;
+}
+
+async function bl_makeStego(cipherB, keyBytes) {
+  const seedMsg = new TextEncoder().encode("BLB1");
+  const mac = await bl_hmac(keyBytes, seedMsg);
+  let seed = 0n;
+  for (let i = 0; i < 8; i++) seed = (seed << 8n) | BigInt(mac[i] & 0xFF);
+  const rnd = new BlKeyedRandom(seed);
+  const carriers = bl_makeCarrier(Math.ceil((56 + cipherB.length * 8) * 1.5));
+  const canon = bl_normalize(carriers);
+  const slots = bl_slots(canon);
+  const bitCount = 56 + cipherB.length * 8;
+  if (bitCount > slots.length) return null;
+  const arr = new Array(slots.length);
+  for (let i = 0; i < slots.length; i++) arr[i] = i;
+  for (let i = slots.length - 1; i >= 1; i--) {
+    const j = rnd.below(i + 1);
+    const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+  }
+  const bits = new Uint8Array(bitCount);
+  for (let i = 0; i < 16; i++) bits[i] = (BL_MAGIC >> (15 - i)) & 1;
+  const L = cipherB.length;
+  for (let i = 0; i < 32; i++) bits[16 + i] = (L >> (31 - i)) & 1;
+  for (let i = 0; i < cipherB.length; i++) {
+    for (let j = 0; j < 8; j++) bits[56 + i * 8 + j] = (cipherB[i] >> (7 - j)) & 1;
+  }
+  const chars = Array.from(canon);
+  const ins = [];
+  for (let b = 0; b < bitCount; b++) {
+    const slot = slots[arr[b]];
+    if (!bits[b]) continue;
+    if (slot.swap) chars[slot.at] = slot.twin;
+    else ins.push(slot);
+  }
+  ins.sort((p, q) => p.at - q.at);
+  let out = "";
+  let src = 0;
+  for (const s of ins) {
+    out += chars.slice(src, s.at).join("") + s.ch;
+    src = s.at;
+  }
+  out += chars.slice(src).join("");
+  return out;
+}
+
+/* --- natural-looking Persian/English carrier generator (only plain letters/space - stego safe) --- */
+const BL_W = [
+  "من امروز خیلی خسته," , "تو چطور شد؟", "او بارها گفت نامت را", "ما برمی‌گردیم", "شما مقصر تفاوت", "او نمی‌آید", "این امر نکند",
+  "اما دقیقا چه شد", "بی نهایت مراقب باش", "حالا ساعت پاپ اعلام", "صبر کن کنار خیابان", "گاهی مانده‌ایم و گاهی رفت", "بمان سر جای سبز باشد",
+  "Talking is cheap", "he wrote it twice", "we met after years", "the old road changed", "nobody returns here", "wait under the bridge",
+  "never said goodbye", "the brown fox ran", "I said maybe later", "rest a small while",
+];
+const BL_W2 = ["او", "تو", "من", "او", "همین حالا", "پس فردا", "پشت ان", "یکی از آنان", "گاهی اوقات"];
+const BL_W3 = ["می‌آید", "می‌رود", "می‌ماند", "برخاست", "نوشته بود", "خندید", "فاعل نشد", "برنگشت", "غم کرد"];
+
+function bl_makeCarrier(charsWanted) {
+  let out = "";
+  while (out.length < charsWanted) {
+    const s1 = BL_W[Math.floor(Math.random() * BL_W.length)];
+    const s2 = BL_W2[Math.floor(Math.random() * BL_W2.length)];
+    const s3 = BL_W3[Math.floor(Math.random() * BL_W3.length)];
+    out += (out ? " " : "") + s1 + "، " + s2 + " " + s3 + ".";
+  }
+  return out;
+}
+
+/* --- one-shot token:  ts(4BE) | nonce(8) | hmac(32)   msg = "blb"|device|0x00|ts4BE|nonce --- */
+async function bl_tokenCheck(env, device, tok, hmacKey) {
+  try {
+    const raw = bl_b64uDecode(tok);
+    if (raw.length !== 44) return { ok: false };
+    const ts = ((raw[0] & 0xff) << 24) | ((raw[1] & 0xff) << 16) | ((raw[2] & 0xff) << 8) | (raw[3] & 0xff);
+    const nonce = raw.slice(4, 12);
+    const sig = raw.slice(12, 44);
+    const now = Math.floor(Date.now() / 1000);
+    if (ts > now + BL_SKEW || ts < now - BL_SKEW) return { ok: false };
+    const sig2 = await bl_hmac(hmacKey, bl_tokMsg(device, ts, nonce));
+    if (!bl_eq(sig, sig2)) return { ok: false };
+    // strictly monotonic per device => single-use & anti-replay
+    const upd = await env.DB.prepare("UPDATE blob_tok SET ts=?2 WHERE device=?1 AND ts < ?2").bind(device, ts).run();
+    if ((upd.meta && upd.meta.changes || 0) === 1) return { ok: true, ts };
+    let cur = null;
+    try {
+      cur = await env.DB.prepare("SELECT ts FROM blob_tok WHERE device=?1").bind(device).first();
+    } catch (e) { cur = null; }
+    if (cur == null) {
+      try {
+        await env.DB.prepare("INSERT INTO blob_tok (device, ts) VALUES (?1,?2)").bind(device, ts).run();
+        return { ok: true, ts };
+      } catch (e2) {
+        return { ok: false };
+      }
+    }
+    return { ok: false };
+  } catch (e) {
+    return { ok: false };
+  }
+}
+
+function bl_tokMsg(device, ts, nonce) {
+  const devB = new TextEncoder().encode(device);
+  const tsB = new Uint8Array(4);
+  tsB[0] = (ts >> 24) & 0xff; tsB[1] = (ts >> 16) & 0xff; tsB[2] = (ts >> 8) & 0xff; tsB[3] = ts & 0xff;
+  const msg = new Uint8Array(3 + devB.length + 1 + tsB.length + nonce.length);
+  msg.set(new TextEncoder().encode("blb"), 0);
+  msg.set(devB, 3);
+  msg.set(new Uint8Array([0x00]), 3 + devB.length);
+  msg.set(tsB, 4 + devB.length);
+  msg.set(nonce, 4 + devB.length + tsB.length);
+  return msg;
+}
+
+const BL_SKEW = 120;
+const BL_SESS_DAYS = 30;
+
+async function bl_hkdf(sharedBytes, infoBytes) {
+  const key = await crypto.subtle.importKey("raw", sharedBytes, "HKDF", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: infoBytes },
+    key,
+    512,
+  );
+  return new Uint8Array(bits);
+}
+
+async function blobStaticPriv(env) {
+  const raw = bl_b64uDecode(String(env.BLOB_PRIVATE_KEY));
+  return crypto.subtle.importKey("pkcs8", raw, { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+}
+
+/** seal+stego the payload; returns {enc:"s",st} | {enc:"c",cy} | {nc:true} when unchanged. */
+async function blobSealResponse(env, device, obj, kc) {
+  // dedupe on the PLAINTEXT: the cipher embeds a fresh IV every time, so hashing it
+  // would never repeat and the app would re-download the same payload forever.
+  const json = JSON.stringify(obj);
+  const hash = bl_hex(await bl_sha(new TextEncoder().encode(json)));
+  const cipher = await bl_seal(kc, new TextEncoder().encode(json));
+  let row = null;
+  try {
+    row = await env.DB.prepare("SELECT last_payload FROM blob_sessions WHERE device=?1").bind(device).first();
+  } catch (e) {}
+  if (row && String(row.last_payload || "") === hash) return { nc: true, hash };
+  try {
+    await env.DB.prepare("UPDATE blob_sessions SET last_payload=?2 WHERE device=?1").bind(device, hash).run();
+  } catch (e) {}
+  const st = await bl_makeStego(cipher, kc);
+  if (st == null) return { enc: "c", cy: bl_b64uEncode(cipher), hash };
+  return { enc: "s", st, hash };
+}
+
+/** /api/sync with encrypted session. enc:"h" = handshake needed, enc:"x" = auth rejected. */
+async function blobSyncProtected(env, request, b) {
+  let row = null;
+  try {
+    row = await env.DB.prepare("SELECT key, exp FROM blob_sessions WHERE device=?1 AND rot=0").bind(String(b.device)).first();
+  } catch (e) {
+    row = null;
+  }
+  const keyHex = row && row.key ? String(row.key) : "";
+  if (keyHex.length !== 128 || (row.exp || 0) < Date.now()) {
+    return new Response(JSON.stringify({ ok: true, v: 2, enc: "h" }), { headers: jsonHeaders() });
+  }
+  const tok = await bl_tokenCheck(env, String(b.device), String(request.headers.get("x-btok") || ""), bl_hexToB(keyHex.slice(64, 128)));
+  if (!tok.ok) return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { status: 403, headers: jsonHeaders() });
+  const payload = await syncPayloadObj(env, request, b);
+  const kc = bl_hexToB(keyHex.slice(0, 64));
+  const sealed = await blobSealResponse(env, String(b.device), payload, kc);
+  const base = { ok: true, v: 2, tv: payload.now };
+  if (sealed.nc) return new Response(JSON.stringify({ ...base, enc: "n" }), { headers: jsonHeaders() });
+  return new Response(JSON.stringify({ ...base, ...sealed }), { headers: jsonHeaders() });
+}
+
+/** /api/handshake - ECDH P-256 session bootstrap; the full sync payload arrives encrypted inside. */
+async function blobHandshake(env, request) {
+  const b = await request.json().catch(() => null);
+  if (!b || !b.device || !b.eph || !b.tok) {
+    return new Response(JSON.stringify({ ok: false, error: "handshake" }), { status: 400, headers: jsonHeaders() });
+  }
+  if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
+  if (!env.BLOB_PRIVATE_KEY || !env.BLOB_ROOT) {
+    return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { headers: jsonHeaders() });
+  }
+  const tok = await bl_tokenCheck(env, String(b.device), String(b.tok), bl_hexToB(String(env.BLOB_ROOT)));
+  if (!tok.ok) return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { status: 403, headers: jsonHeaders() });
+  try {
+    const priv = await blobStaticPriv(env);
+    const pub = await crypto.subtle.importKey("spki", bl_b64uDecode(String(b.eph)), { name: "ECDH", namedCurve: "P-256" }, false, []);
+    const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: pub }, priv, 256));
+    const dec = await bl_hkdf(shared, new TextEncoder().encode("blobv1" + String(b.device)));
+    const kc = dec.slice(0, 32);
+    const kt = dec.slice(32, 64);
+    const exp = Date.now() + BL_SESS_DAYS * 86400 * 1000;
+    await env.DB.prepare(
+      "INSERT INTO blob_sessions (device, key, exp, rot) VALUES (?1,?2,?3,0) ON CONFLICT(device) DO UPDATE SET key=?2, exp=?3, rot=0, last_payload=''",
+    ).bind(String(b.device), bl_hex(kc) + bl_hex(kt), exp).run();
+    const payload = await syncPayloadObj(env, request, {
+      device: String(b.device),
+      model: String(b.model || ""),
+      ver: Number(b.ver || 0),
+      type: "handshake",
+      connected: !!b.connected,
+      info: b.info || {},
+    });
+    const sealed = await blobSealResponse(env, String(b.device), payload, kc);
+    const base = { ok: true, v: 2, exp: Math.floor(exp / 1000), tv: payload.now };
+    if (sealed.nc) return new Response(JSON.stringify({ ...base, enc: "n" }), { headers: jsonHeaders() });
+    return new Response(JSON.stringify({ ...base, ...sealed }), { headers: jsonHeaders() });
+  } catch (e) {
+    return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { headers: jsonHeaders() });
+  }
+}
+
 
 let schemaReady = false;
 async function ensureSchema(env) {
@@ -1015,6 +1489,10 @@ async function ensureSchema(env) {
     env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS acks (device TEXT, popup TEXT, kind TEXT, ts INTEGER, PRIMARY KEY (device, popup, kind))",
     ),
+    env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS blob_sessions (device TEXT PRIMARY KEY, key TEXT, exp INTEGER, rot INTEGER DEFAULT 0, last_payload TEXT DEFAULT '')",
+    ),
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS blob_tok (device TEXT PRIMARY KEY, ts INTEGER DEFAULT 0)"),
   ]);
   // older panel DB - add missing column
   try {

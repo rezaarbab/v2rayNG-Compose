@@ -492,6 +492,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     /* small runtime state is declared at the top of this class (field order safety) */
 
     private fun applyRemote(r: Remote.Result) {
+        if (r.unchanged) return // worker says payload unchanged - keep local state untouched
         adminFlags = r.flags
         put { s ->
             val upd = r.update?.let {

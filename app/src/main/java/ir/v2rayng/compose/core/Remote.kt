@@ -2,6 +2,7 @@ package ir.v2rayng.compose.core
 
 import android.os.Build
 import ir.v2rayng.compose.AppCtx
+import ir.v2rayng.compose.core.sec.BlobSecure
 import org.json.JSONObject
 import kotlin.concurrent.thread
 
@@ -53,6 +54,7 @@ object Remote {
         val update: UpdateCfg?,
         val notifications: List<NotifLine>,
         val flags: Map<String, String> = emptyMap(),
+        val unchanged: Boolean = false,
     )
 
     /** Persisted stable device id - one unique stats entry per device. */
@@ -114,16 +116,61 @@ object Remote {
         0L
     }
 
-    /** POST /api/sync - registers the device (dedup by id) and pulls everything the admin set. */
+    /** Build the standard sync body (identical for the plain and encrypted protocols). */
+    private fun buildSyncBody(device: String, type: String, connected: Boolean): JSONObject = JSONObject()
+        .put("device", device)
+        .put("model", deviceModel())
+        .put("ver", appVersion())
+        .put("type", type)
+        .put("connected", connected)
+        .put("info", deviceInfo())
+
+    /**
+     * POST /api/sync - strongest mode first: the encrypted blob protocol (ECDH session,
+     * AES-256-GCM payload hidden inside a homoglyph stego carrier). Graceful fallback to
+     * the old plaintext protocol when the worker has no BLOB secrets or transport fails.
+     */
     fun sync(device: String, type: String, connected: Boolean): Result? {
-        val body = JSONObject()
-            .put("device", device)
-            .put("model", deviceModel())
-            .put("ver", appVersion())
-            .put("type", type)
-            .put("connected", connected)
-            .put("info", deviceInfo())
-        val res = httpPost("/api/sync", body) ?: return null
+        val body = buildSyncBody(device, type, connected)
+        val secure = try { BlobSecure.syncSecure(BASE, body) } catch (_: Exception) { null }
+        if (secure != null) {
+            if (secure.optBoolean("__nc", false)) {
+                // worker says the payload is unchanged since the last sync; apply nothing
+                return Result(
+                    enabled = true,
+                    servers = emptyList(),
+                    popup = null,
+                    update = null,
+                    notifications = emptyList(),
+                    unchanged = true,
+                )
+            }
+            return mapSyncPayload(secure)
+        }
+        val plain = plainSync(body) ?: return null
+        return mapSyncPayload(plain)
+    }
+
+    private fun plainSync(body: JSONObject): JSONObject? {
+        if (BASE.isBlank()) return null
+        return try {
+            val url = java.net.URL(BASE.trimEnd('/') + "/api/sync")
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 8000
+            conn.readTimeout = 15000
+            conn.doOutput = true
+            conn.setRequestProperty("content-type", "application/json")
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode !in 200..299) return null
+            JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Map a syncPayloadObj response (plain or decrypted) into the app model. */
+    private fun mapSyncPayload(res: JSONObject): Result {
         val servers = ArrayList<ServerEntry>()
         val arr = res.optJSONArray("servers") ?: org.json.JSONArray()
         for (i in 0 until arr.length()) {
@@ -143,7 +190,7 @@ object Remote {
         val popup = res.optJSONObject("popup")?.let {
             PopupCfg(
                 id = it.optLong("id", 0L),
-                title = it.optString("title", "پیام"),
+                title = it.optString("title", "\u067E\u06CC\u0627\u0645"),
                 body = it.optString("body", ""),
                 btnText = it.optString("btnText", ""),
                 btnUrl = it.optString("btnUrl", ""),
