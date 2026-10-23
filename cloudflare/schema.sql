@@ -1,5 +1,9 @@
--- ARBAB Panel — D1 schema (god-db)
--- Run:  wrangler d1 execute god-db --file=schema.sql --remote
+-- ARBAB Panel — D1 schema
+-- Run:  wrangler d1 execute arbab-db --file=schema.sql --remote
+--
+-- NOTE: "ALTER TABLE" at the bottom is expected to error once (duplicate column)
+--       on fresh databases where the column already exists - that is fine; D1
+--       keeps applying the rest. The worker also self-heals via ensureSchema().
 
 CREATE TABLE IF NOT EXISTS settings (
   key        TEXT PRIMARY KEY,
@@ -14,7 +18,8 @@ CREATE TABLE IF NOT EXISTS devices (
   first_seen INTEGER,
   last_seen  INTEGER,
   ip         TEXT DEFAULT '',
-  connected  INTEGER DEFAULT 0
+  connected  INTEGER DEFAULT 0,
+  info       TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -32,7 +37,8 @@ CREATE TABLE IF NOT EXISTS servers (
   link     TEXT DEFAULT '',
   category TEXT DEFAULT '',
   ord      INTEGER DEFAULT 99,
-  active   INTEGER DEFAULT 1
+  active   INTEGER DEFAULT 1,
+  msg      TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS popup_seen (
@@ -57,4 +63,21 @@ CREATE TABLE IF NOT EXISTS acks (
   PRIMARY KEY (device, popup, kind)
 );
 
+CREATE TABLE IF NOT EXISTS blob_sessions (
+  device       TEXT PRIMARY KEY,
+  key          TEXT,
+  exp          INTEGER,
+  rot          INTEGER DEFAULT 0,
+  last_payload TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS blob_tok (
+  device TEXT PRIMARY KEY,
+  ts     INTEGER DEFAULT 0
+);
+
 INSERT OR IGNORE INTO popup_seen (device, popup) VALUES ('__init__', 1);
+
+-- upgrades for pre-existing deployments (duplicate-column error here is expected/fine)
+ALTER TABLE servers ADD COLUMN msg TEXT DEFAULT '';
+ALTER TABLE devices ADD COLUMN info TEXT DEFAULT '';
