@@ -120,16 +120,20 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                     delay(2500L)
                                     var ok = false
                                     var attempt = 0
-                                    while (!ok && attempt < 5) {
+                                    while (!ok && attempt < 8) {
                                         attempt++
                                         ok = probeViaTunnel()
-                                        if (!ok) delay(1600L)
+                                        if (!ok) delay(2000L)
                                     }
                                     if (!ok) {
-                                        ir.v2rayng.compose.core.XrayBridge.setState(ir.v2rayng.compose.core.RealState.BROKEN, "Tunnel probe failed")
-                                        log("ERROR", "Failed to connect to server")
-                                    } else {
-                                        log("INFO", "Tunnel check OK (${attempt}/5)")
+                                        // second, independent anchor avoids false alarms on a slow handshake
+                                        val ok2 = probeViaTunnel("https://cp.cloudflare.com/generate_204")
+                                        if (!ok2) {
+                                            ir.v2rayng.compose.core.XrayBridge.setState(ir.v2rayng.compose.core.RealState.BROKEN, "Tunnel probe failed")
+                                            log("ERROR", "Failed to connect to server")
+                                        } else {
+                                            log("WARN", "Tunnel slow but OK")
+                                        }
                                     }
                                 }
                             }
@@ -820,40 +824,39 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 log("WARN", "No internet connection")
                 return@launch
             }
+            // xray runtime must be initialized before measuring delays
+            try {
+                val d = java.io.File(ir.v2rayng.compose.AppCtx.app.filesDir, "core")
+                if (!d.exists()) d.mkdirs()
+                libv2ray.Libv2ray.initCoreEnv(d.absolutePath, "")
+            } catch (_: Exception) {
+            }
             log("INFO", S.LOG_PING_START)
             val targets = if (ids == null) _state.value.servers else _state.value.servers.filter { ids.contains(it.id) }
             for (srv in targets) {
-            val ms: Int? = if (srv.link != null) {
-                withContext(Dispatchers.IO) {
-                    try {
-                        val l = ir.v2rayng.compose.core.parseProxyLink(srv.link!!)
-                        if (l == null) {
+                val ms: Int? = if (srv.link != null) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val l = ir.v2rayng.compose.core.parseProxyLink(srv.link!!)
+                            if (l == null) {
+                                log("WARN", "Ping failed to parse: ${srv.name}")
+                                null
+                            } else {
+                                val config = ir.v2rayng.compose.core.buildXrayConfig(l)
+                                val d = libv2ray.Libv2ray.measureOutboundDelay(config, "https://www.google.com/generate_204")
+                                if (d >= 0) d.toInt() else null
+                            }
+                        } catch (e: Exception) {
+                            log("WARN", "Ping error ${srv.name}: ${e.message}")
                             null
-                        } else {
-                            val config = ir.v2rayng.compose.core.buildXrayConfig(l)
-                            val d = libv2ray.Libv2ray.measureOutboundDelay(config, "https://www.google.com/generate_204")
-                            if (d >= 0) d.toInt() else null
                         }
-                    } catch (_: Exception) {
-                        null
                     }
-                }
-            } else {
+                } else {
                     delay(350)
                     40 + Random.nextInt(400)
                 }
                 put { s ->
                     s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms) else it })
-                }
-                if (wantFlag && ms != null && srv.country.isBlank() && !srv.host.startsWith("0.0.0.") && srv.host.isNotBlank()) {
-                    // Brand-new server: grab its country flag right away
-                    val code = dnsCountry(srv.host.substringBefore(":"))
-                    if (code != null) {
-                        put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(country = code) else it }) }
-                        if (_state.value.selectedId == srv.id && _state.value.vpnState != VpnState.IDLE) {
-                            applyFlag(code)
-                        }
-                    }
                 }
             }
             log("INFO", S.LOG_PING_DONE)
@@ -1045,10 +1048,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     }
 
     /** HTTP 204 test forced through the local socks inbound - proves real end-to-end connectivity. */
-    private suspend fun probeViaTunnel(): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun probeViaTunnel(url: String = "https://www.google.com/generate_204"): Boolean = withContext(Dispatchers.IO) {
         try {
-            val url = java.net.URL("https://www.google.com/generate_204")
-            val conn = url.openConnection(
+            val conn = java.net.URL(url).openConnection(
                 java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", 10890)),
             ) as HttpURLConnection
             conn.connectTimeout = 3500
