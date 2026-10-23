@@ -122,7 +122,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             ir.v2rayng.compose.core.RealState.CONNECTING -> log("INFO", "Core connecting${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
                             ir.v2rayng.compose.core.RealState.CONNECTED -> {
                                 log("INFO", S.LOG_CONNECTED)
-                                Remote.event(Remote.deviceId(ir.v2rayng.compose.AppCtx.app), "connect")
+                                Remote.queueAck("event", name = "connect")
                                 // tunnel watchdog: only trust CONNECTED when real internet passes through it
                                 viewModelScope.launch {
                                     delay(2500L)
@@ -146,12 +146,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                 }
                             }
                             ir.v2rayng.compose.core.RealState.BROKEN -> {
-                                Remote.event(Remote.deviceId(ir.v2rayng.compose.AppCtx.app), "disconnect")
+                                Remote.queueAck("event", name = "disconnect")
                                 log("ERROR", "${S.LOG_FAILED}${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
                             }
                             ir.v2rayng.compose.core.RealState.IDLE -> {
                                 if (lastRealState == ir.v2rayng.compose.core.RealState.CONNECTED) {
-                                    Remote.event(Remote.deviceId(ir.v2rayng.compose.AppCtx.app), "disconnect")
+                                    Remote.queueAck("event", name = "disconnect")
                                 }
                                 log("INFO", S.LOG_DISCONNECTED)
                             }
@@ -428,7 +428,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     val dev = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
                     val res = Remote.sync(dev, if (first) "sync" else "heartbeat", connected)
                     if (res != null) applyRemote(res)
-                    Remote.beat(dev, connected)
+                    // no separate beat request - the sync body itself refreshes last_seen/connected
                 } catch (_: Exception) {
                 }
                 first = false
@@ -530,11 +530,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 log("WARN", "Failed to save admin payload: " + f.name)
                 return
             }
-            ir.v2rayng.compose.core.Remote.ack(
-                ir.v2rayng.compose.core.Remote.deviceId(ir.v2rayng.compose.AppCtx.app),
-                "payload",
-                f.id,
-            )
+            Remote.queueAck("payload", f.id)
             val msg = f.title.ifBlank { safeName }
             infoToast("New admin content: $msg")
             log("INFO", "Admin payload saved: " + f.name + " -> " + savedPath)
@@ -568,14 +564,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun ackPopup(id: Long) {
         popupDismissed = id
         put { s -> s.copy(remotePopup = null) }
-        Remote.ack(Remote.deviceId(ir.v2rayng.compose.AppCtx.app), "popup", id)
+        Remote.queueAck("popup", id)
         saveRemoteState()
     }
 
     fun ackNotif(id: Long) {
         notifSeen = id
         put { s -> s.copy(remoteNotif = null) }
-        Remote.ack(Remote.deviceId(ir.v2rayng.compose.AppCtx.app), "notif", id)
+        Remote.queueAck("notif", id)
         saveRemoteState()
     }
 

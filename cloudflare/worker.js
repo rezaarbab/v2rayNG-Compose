@@ -42,11 +42,11 @@ export default {
     }
 
     // ---------------- app api ----------------
+    // Only two endpoints exist:
+    //   /api/key  - key issuance (device + 60-minute bucket, one-shot token)
+    //   /api/sync - the single data channel, ALWAYS encrypted (no plaintext fallback)
     if (path === "/api/key") return withDb(env, () => blobKeyIssue(env, request));
-    if (path === "/api/handshake") return withDb(env, () => blobHandshake(env, request));
     if (path === "/api/sync") return withDb(env, () => appSync(env, request));
-    if (path === "/api/beat") return withDb(env, () => appBeat(env, request));
-    if (path === "/api/ack") return withDb(env, () => appAck(env, request));
 
     return new Response("not found", { status: 404 });
   },
@@ -74,15 +74,17 @@ async function appSync(env, request) {
   const b = await request.json().catch(() => null);
   if (!b || !b.device) return new Response(JSON.stringify({ ok: false, error: "need device" }), { status: 400, headers: jsonHeaders() });
   if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
-  // capable apps speak the encrypted protocol - servers never cross the wire in plaintext
+  // encrypted protocol ONLY - servers/admin data never cross the wire in plaintext.
+  // A caller without a valid blob session gets enc:"h" (issue keys via /api/key first);
+  // there is deliberately NO plaintext fallback anymore.
   if (request.headers.get("x-blob") === "v1" && env.BLOB_ROOT) {
     return blobSyncProtected(env, request, b);
   }
-  const out = await syncPayloadObj(env, request, b);
-  return new Response(JSON.stringify(out), { headers: jsonHeaders() });
+  return new Response(JSON.stringify({ ok: true, v: 2, enc: "h" }), { headers: jsonHeaders() });
 }
 
-/** Core device registration + admin payload. Used by the plain v1 sync AND the encrypted v2 path. */
+/** Core device registration + admin payload. Used by the encrypted v2 sync only -
+ *  ack receipts arrive inside the encrypted body (b.acks). */
 async function syncPayloadObj(env, request, b) {
   const now = Date.now();
   if (b.connected) {
@@ -105,6 +107,30 @@ async function syncPayloadObj(env, request, b) {
     b.type || "sync",
     now,
   ).run();
+
+  // consume the app's ack receipts delivered INSIDE the encrypted body (no plaintext
+  // /api/ack exists anymore): connect/disconnect events, popup/notif seen, payload received.
+  try {
+    const ackArr = Array.isArray(b.acks) ? b.acks.slice(0, 64) : [];
+    for (const a of ackArr) {
+      const kind = String((a && a.kind) || "");
+      if (kind === "event" && a.name) {
+        await env.DB.prepare("INSERT INTO events (device, type, ts) VALUES (?1,?2,?3)")
+          .bind(String(b.device), String(a.name).slice(0, 32), now).run();
+      } else if ((kind === "popup" || kind === "notif") && a.id) {
+        const ins = await env.DB.prepare("INSERT OR IGNORE INTO acks (device, popup, kind, ts) VALUES (?1,?2,?3,?4)")
+          .bind(String(b.device), String(a.id), kind, now).run();
+        // count popup shows once per device (INSERT OR IGNORE + changes check = idempotent on retry)
+        if (kind === "popup" && ((ins.meta && ins.meta.changes) || 0) === 1) {
+          const cur = Number((await getSettings(env, ["popup_shows"])).popup_shows || 0);
+          await setSetting(env, "popup_shows", String(cur + 1));
+        }
+      } else if (kind === "payload" && a.id) {
+        await env.DB.prepare("INSERT OR IGNORE INTO payload_seen (device, pid, ts) VALUES (?1,?2,?3)")
+          .bind(String(b.device), Number(a.id), now).run();
+      }
+    }
+  } catch (e) {}
 
   const cfg = await getSettings(env, [
     "app_enabled", "min_version", "latest_version", "latest_url",
@@ -206,41 +232,6 @@ async function listServers(env) {
     category: r.category || "",
     msg: r.msg || "",
   }));
-}
-
-async function appBeat(env, request) {
-  const b = await request.json().catch(() => null);
-  if (!b || !b.device) return new Response(JSON.stringify({ ok: false }), { status: 400, headers: jsonHeaders() });
-  if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
-  const now = Date.now();
-  await env.DB.prepare(
-    "INSERT INTO devices (id, model, app_ver, first_seen, last_seen, ip, connected) VALUES (?1,'',0,?2,?2,'',?3) " +
-      "ON CONFLICT(id) DO UPDATE SET last_seen=?2, connected=?3",
-  ).bind(String(b.device), now, b.connected ? 1 : 0).run();
-  return new Response(JSON.stringify({ ok: true, enabled: (await getSettings(env, ["app_enabled"])).app_enabled !== "0" }), { headers: jsonHeaders() });
-}
-
-async function appAck(env, request) {
-  const b = await request.json().catch(() => null);
-  if (!b || !b.device) return new Response(JSON.stringify({ ok: false }), { status: 400, headers: jsonHeaders() });
-  if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
-  if (b.kind === "event" && b.name) {
-    await env.DB.prepare("INSERT INTO events (device, type, ts) VALUES (?1,?2,?3)")
-      .bind(String(b.device), String(b.name).slice(0, 32), Date.now()).run();
-  } else if (b.kind === "popup" && b.id) {
-    await env.DB.prepare("INSERT OR IGNORE INTO acks (device, popup, kind, ts) VALUES (?1,?2,'popup',?3)")
-      .bind(String(b.device), String(b.id), Date.now()).run();
-    const cur = Number((await getSettings(env, ["popup_shows"])).popup_shows || 0);
-    await setSetting(env, "popup_shows", String(cur + 1));
-  } else if (b.kind === "notif" && b.id) {
-    await env.DB.prepare("INSERT OR IGNORE INTO acks (device, popup, kind, ts) VALUES (?1,?2,'notif',?3)")
-      .bind(String(b.device), String(b.id), Date.now()).run();
-  } else if (b.kind === "payload" && b.id) {
-    // device confirmed the file was received and decrypted OK
-    await env.DB.prepare("INSERT OR IGNORE INTO payload_seen (device, pid, ts) VALUES (?1,?2,?3)")
-      .bind(String(b.device), Number(b.id), Date.now()).run();
-  }
-  return new Response(JSON.stringify({ ok: true }), { headers: jsonHeaders() });
 }
 
 function clientIp(request) {
@@ -1163,15 +1154,19 @@ function manualRefresh(){if(!PW){logout();return}toast('در حال بروزرس
  * Design (server-issued rotating session keys - the app never owns a crypto key):
  *   1) POST /api/key: worker derives kc (payload key) + kt (token key) fresh per
  *      60-minute bucket: HMAC(BLOB_ROOT, "blobk1"+device+bucket+"K"/"T") and hands
- *      them to the caller (TLS protects the transfer); rows live in blob_sessions.
+ *      them over the TLS channel; rows live in blob_sessions. When the bucket
+ *      rolls, /api/sync answers enc:"h" and the app re-issues keys on its next
+ *      request - rotation is seamless.
  *   2) One-shot token on every request: ts|nonce|HMAC(kt, msg) matched against a
- *      strictly-monotonic per-device timestamp (D1) => replay-proof.
- *   3) Every admin->app response: JSON -> zlib -> AES-256-GCM(Kc, AAD BLBv1)
- *      -> homoglyph stego carrier (same bit engine as StegaText). Nothing about
- *      servers ever appears in plaintext on the wire.
+ *      strictly-monotonic per-device timestamp (D1) => replay-proof, single-use.
+ *   3) /api/sync is the ONLY data channel and is ALWAYS encrypted: the app sends
+ *      device info + pending ack receipts inside the body; the admin's raw
+ *      settings/files are packed by the worker itself:
+ *      JSON -> zlib -> AES-256-GCM(Kc, AAD BLBv1) -> homoglyph stego carrier
+ *      (same bit engine as StegaText). No /api/beat, /api/ack or /api/handshake
+ *      anymore, and NO plaintext fallback anywhere.
  * Worker secret (console):
  *   wrangler secret put BLOB_ROOT  (64 hex chars, equals the app root)
- *   (legacy ECDH handshake keeps working via BLOB_PRIVATE_KEY but is optional)
  */
 const M64 = (1n << 64n) - 1n;
 
@@ -1525,22 +1520,6 @@ function bl_tokMsg(device, ts, nonce) {
 }
 
 const BL_SKEW = 120;
-const BL_SESS_DAYS = 30;
-
-async function bl_hkdf(sharedBytes, infoBytes) {
-  const key = await crypto.subtle.importKey("raw", sharedBytes, "HKDF", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits(
-    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: infoBytes },
-    key,
-    512,
-  );
-  return new Uint8Array(bits);
-}
-
-async function blobStaticPriv(env) {
-  const raw = bl_b64uDecode(String(env.BLOB_PRIVATE_KEY));
-  return crypto.subtle.importKey("pkcs8", raw, { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
-}
 
 /** seal+stego the payload; returns {enc:"s",st} | {enc:"c",cy} | {nc:true} when unchanged. */
 async function blobSealResponse(env, device, obj, kc) {
@@ -1582,46 +1561,6 @@ async function blobSyncProtected(env, request, b) {
   const base = { ok: true, v: 2, tv: payload.now };
   if (sealed.nc) return new Response(JSON.stringify({ ...base, enc: "n" }), { headers: jsonHeaders() });
   return new Response(JSON.stringify({ ...base, ...sealed }), { headers: jsonHeaders() });
-}
-
-/** /api/handshake - ECDH P-256 session bootstrap; the full sync payload arrives encrypted inside. */
-async function blobHandshake(env, request) {
-  const b = await request.json().catch(() => null);
-  if (!b || !b.device || !b.eph || !b.tok) {
-    return new Response(JSON.stringify({ ok: false, error: "handshake" }), { status: 400, headers: jsonHeaders() });
-  }
-  if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
-  if (!env.BLOB_PRIVATE_KEY || !env.BLOB_ROOT) {
-    return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { headers: jsonHeaders() });
-  }
-  const tok = await bl_tokenCheck(env, String(b.device), String(b.tok), bl_hexToB(String(env.BLOB_ROOT)));
-  if (!tok.ok) return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { status: 403, headers: jsonHeaders() });
-  try {
-    const priv = await blobStaticPriv(env);
-    const pub = await crypto.subtle.importKey("spki", bl_b64uDecode(String(b.eph)), { name: "ECDH", namedCurve: "P-256" }, false, []);
-    const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: pub }, priv, 256));
-    const dec = await bl_hkdf(shared, new TextEncoder().encode("blobv1" + String(b.device)));
-    const kc = dec.slice(0, 32);
-    const kt = dec.slice(32, 64);
-    const exp = Date.now() + BL_SESS_DAYS * 86400 * 1000;
-    await env.DB.prepare(
-      "INSERT INTO blob_sessions (device, key, exp, rot) VALUES (?1,?2,?3,0) ON CONFLICT(device) DO UPDATE SET key=?2, exp=?3, rot=0, last_payload=''",
-    ).bind(String(b.device), bl_hex(kc) + bl_hex(kt), exp).run();
-    const payload = await syncPayloadObj(env, request, {
-      device: String(b.device),
-      model: String(b.model || ""),
-      ver: Number(b.ver || 0),
-      type: "handshake",
-      connected: !!b.connected,
-      info: b.info || {},
-    });
-    const sealed = await blobSealResponse(env, String(b.device), payload, kc);
-    const base = { ok: true, v: 2, exp: Math.floor(exp / 1000), tv: payload.now };
-    if (sealed.nc) return new Response(JSON.stringify({ ...base, enc: "n" }), { headers: jsonHeaders() });
-    return new Response(JSON.stringify({ ...base, ...sealed }), { headers: jsonHeaders() });
-  } catch (e) {
-    return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { headers: jsonHeaders() });
-  }
 }
 
 /** /api/key - the app NEVER owns a crypto key: the worker issues kc/kt freshly for

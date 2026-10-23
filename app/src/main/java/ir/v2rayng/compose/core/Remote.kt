@@ -5,7 +5,6 @@ import ir.v2rayng.compose.AppCtx
 import ir.v2rayng.compose.core.sec.BlobSecure
 import ir.v2rayng.compose.core.sec.SecurePrefs
 import org.json.JSONObject
-import kotlin.concurrent.thread
 
 /**
  * Cloudflare Worker (cloudflare/worker.js) backend client.
@@ -86,26 +85,6 @@ object Remote {
         }
     }
 
-    private fun httpPost(path: String, body: JSONObject): JSONObject? {
-        if (BASE.isBlank()) return null
-        return try {
-            val url = java.net.URL(BASE.trimEnd('/') + path)
-            val conn = url.openConnection() as java.net.HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.connectTimeout = 8000
-            conn.readTimeout = 15000
-            conn.doOutput = true
-            conn.setRequestProperty("content-type", "application/json")
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            if (conn.responseCode !in 200..299) return null
-            conn.inputStream.bufferedReader().use { it.readText() }.let {
-                JSONObject(it)
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     private fun deviceModel(): String =
         Build.MANUFACTURER.ifBlank { "?" } + " " + Build.MODEL
 
@@ -126,7 +105,9 @@ object Remote {
         0L
     }
 
-    /** Build the standard sync body (identical for the plain and encrypted protocols). */
+    /** Build the standard sync body. Pending acks (events, popup/notif/payload receipts)
+     *  ride inside this body so they only ever cross the wire encrypted - there is no
+     *  separate plaintext /api/beat or /api/ack call anymore. */
     private fun buildSyncBody(device: String, type: String, connected: Boolean): JSONObject = JSONObject()
         .put("device", device)
         .put("model", deviceModel())
@@ -134,12 +115,57 @@ object Remote {
         .put("type", type)
         .put("connected", connected)
         .put("info", deviceInfo())
+        .put("acks", peekAckQueue())
+
+    /* ---- encrypted ack queue ----
+     * Everything the app wants to confirm (connect/disconnect events, popup/notif
+     * seen, payload received) is queued locally and delivered inside the encrypted
+     * sync body. The queue is cleared only after a successful encrypted exchange;
+     * the worker consumes acks idempotently, so a redelivery after a lost response
+     * is harmless. */
+    private const val ACK_KEY = "sec-ackq"
+    private val ackMu = Any()
+
+    /** Queue a receipt for the next encrypted sync (replaces the old plaintext calls). */
+    fun queueAck(kind: String, id: Long = 0L, name: String = "") {
+        try {
+            synchronized(ackMu) {
+                val arr = ackQueue()
+                val o = JSONObject()
+                o.put("kind", kind)
+                if (id != 0L) o.put("id", id)
+                if (name.isNotBlank()) o.put("name", name)
+                arr.put(o)
+                while (arr.length() > 64) arr.remove(0) // bounded - drop oldest
+                SecurePrefs.set(ACK_KEY, arr.toString(), AppCtx.app)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun ackQueue(): org.json.JSONArray = try {
+        val s = SecurePrefs.get(ACK_KEY, AppCtx.app)
+        if (s.isNullOrBlank()) org.json.JSONArray() else org.json.JSONArray(s)
+    } catch (_: Exception) {
+        org.json.JSONArray()
+    }
+
+    /** The queue WITHOUT draining - cleared only after a confirmed encrypted sync. */
+    private fun peekAckQueue(): org.json.JSONArray = synchronized(ackMu) { ackQueue() }
+
+    private fun clearAckQueue() {
+        try {
+            synchronized(ackMu) { SecurePrefs.set(ACK_KEY, "[]", AppCtx.app) }
+        } catch (_: Exception) {
+        }
+    }
 
     /**
-     * POST /api/sync - strongest mode first: the encrypted blob protocol (server-issued
-     * rotating keys, AES-256-GCM payload hidden inside a homoglyph stego carrier).
-     * Graceful fallback to the old plaintext protocol when the worker has no
-     * BLOB_ROOT or transport fails.
+     * POST /api/sync - the ONLY data channel: the encrypted blob protocol
+     * (server-issued rotating keys, AES-256-GCM payload hidden inside a homoglyph
+     * stego carrier, one-shot HMAC token per request). There is deliberately NO
+     * plaintext fallback: when the secure path fails the app keeps its local state
+     * and retries on the next sync.
      */
     fun sync(device: String, type: String, connected: Boolean): Result? {
         val body = buildSyncBody(device, type, connected)
@@ -150,42 +176,22 @@ object Remote {
             null
         }
         if (secure == null) {
-            try { android.util.Log.d("BlobSec", "secure path returned null -> plaintext fallback") } catch (_: Exception) {}
+            try { android.util.Log.d("BlobSec", "secure path failed -> keeping local state, retry next sync") } catch (_: Exception) {}
+            return null
         }
-        if (secure != null) {
-            if (secure.optBoolean("__nc", false)) {
-                // worker says the payload is unchanged since the last sync; apply nothing
-                return Result(
-                    enabled = true,
-                    servers = emptyList(),
-                    popup = null,
-                    update = null,
-                    notifications = emptyList(),
-                    unchanged = true,
-                )
-            }
-            return mapSyncPayload(secure)
+        clearAckQueue() // worker consumed the acks (idempotent, safe to re-send on loss)
+        if (secure.optBoolean("__nc", false)) {
+            // worker says the payload is unchanged since the last sync; apply nothing
+            return Result(
+                enabled = true,
+                servers = emptyList(),
+                popup = null,
+                update = null,
+                notifications = emptyList(),
+                unchanged = true,
+            )
         }
-        val plain = plainSync(body) ?: return null
-        return mapSyncPayload(plain)
-    }
-
-    private fun plainSync(body: JSONObject): JSONObject? {
-        if (BASE.isBlank()) return null
-        return try {
-            val url = java.net.URL(BASE.trimEnd('/') + "/api/sync")
-            val conn = url.openConnection() as java.net.HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.connectTimeout = 8000
-            conn.readTimeout = 15000
-            conn.doOutput = true
-            conn.setRequestProperty("content-type", "application/json")
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            if (conn.responseCode !in 200..299) return null
-            JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-        } catch (_: Exception) {
-            null
-        }
+        return mapSyncPayload(secure)
     }
 
     /** Map a syncPayloadObj response (plain or decrypted) into the app model. */
@@ -246,35 +252,7 @@ object Remote {
         return Result(res.optBoolean("enabled", true), servers, popup, upd, notifications, flags, false, dataFile)
     }
 
-    fun beat(device: String, connected: Boolean) {
-        thread(name = "remote-beat") {
-            try {
-                httpPost(
-                    "/api/beat",
-                    JSONObject().put("device", device).put("connected", connected),
-                )
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    /** Send a connect/disconnect stat event. */
-    fun event(device: String, name: String) {
-        thread(name = "remote-event") {
-            try {
-                httpPost("/api/ack", JSONObject().put("device", device).put("kind", "event").put("name", name))
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    /** Declare this device has seen a popup / notification (worker counts shows once). */
-    fun ack(device: String, kind: String, id: Long) {
-        thread(name = "remote-ack") {
-            try {
-                httpPost("/api/ack", JSONObject().put("device", device).put("kind", kind).put("id", id))
-            } catch (_: Exception) {
-            }
-        }
-    }
+    // Note: there are intentionally no other network calls - no /api/beat, /api/ack or
+    // /api/handshake. Receipts and events ride inside the encrypted sync body
+    // (queueAck) and keys come from /api/key inside BlobSecure.
 }
