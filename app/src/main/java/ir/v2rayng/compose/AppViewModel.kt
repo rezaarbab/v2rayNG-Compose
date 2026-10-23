@@ -521,11 +521,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 .replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001F]"), "_")
                 .takeLast(64)
                 .ifBlank { "gfile-" + f.id }
-            val savedPath: String?
-            try {
-                savedPath = saveIncoming(bytes, safeName, f.mime)
+            val savedPath: String? = try {
+                saveIncoming(bytes, safeName, f.mime)
             } catch (_: Exception) {
-                savedPath = null
+                null
             }
             if (savedPath == null) {
                 log("WARN", "Failed to save admin payload: " + f.name)
