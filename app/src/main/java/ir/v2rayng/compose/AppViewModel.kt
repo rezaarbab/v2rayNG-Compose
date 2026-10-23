@@ -336,24 +336,31 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun isOnline(): Boolean {
         return try {
             val cm = AppCtx.app.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-            val net = cm.activeNetwork ?: return false
-            val caps = cm.getNetworkCapabilities(net) ?: return false
-            // VPN-only caps sometimes lack INTERNET/VALIDATED - treat any real transport as online
-            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
-                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) ||
-                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) ||
-                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)
+            for (net in cm.allNetworks) {
+                val caps = cm.getNetworkCapabilities(net) ?: continue
+                val hasRealTransport = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+                    caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                    caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) ||
+                    caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)
+                if (hasRealTransport) return true
+            }
+            false
         } catch (_: Exception) {
             false
         }
     }
 
-    /** True connectivity: any transport present, else a real DNS attempt (caps can be stale). */
+    /** True connectivity: caps across all networks, else a raw TCP/IP socket (no DNS, tunnel-proof). */
     suspend fun netOnline(): Boolean = withContext(Dispatchers.IO) {
         if (isOnline()) return@withContext true
         for (host in listOf("1.1.1.1", "8.8.8.8")) {
             try {
-                java.net.InetAddress.getByName(host)
+                val s = java.net.Socket()
+                try {
+                    s.connect(java.net.InetSocketAddress(host, 53), 1500)
+                } finally {
+                    try { s.close() } catch (_: Exception) {}
+                }
                 return@withContext true
             } catch (_: Exception) {
             }
