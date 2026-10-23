@@ -860,7 +860,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 for (srv in targets) {
                     launch(Dispatchers.IO) {
                         sem.withPermit {
-                            val parsed = srv.link?.let { l -> try { parseProxyLink(l) } catch (_: Exception) { null } }
+                            val parsed = srv.link?.let { l -> try { ir.v2rayng.compose.core.parseProxyLink(l) } catch (_: Exception) { null } }
                             val ms: Int? = when {
                                 parsed != null -> probePing(parsed)
                                 srv.link != null -> {
