@@ -115,6 +115,23 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             ir.v2rayng.compose.core.RealState.CONNECTED -> {
                                 log("INFO", S.LOG_CONNECTED)
                                 Remote.event(Remote.deviceId(ir.v2rayng.compose.AppCtx.app), "connect")
+                                // tunnel watchdog: only trust CONNECTED when real internet passes through it
+                                viewModelScope.launch {
+                                    delay(2500L)
+                                    var ok = false
+                                    var attempt = 0
+                                    while (!ok && attempt < 5) {
+                                        attempt++
+                                        ok = probeViaTunnel()
+                                        if (!ok) delay(1600L)
+                                    }
+                                    if (!ok) {
+                                        ir.v2rayng.compose.core.XrayBridge.setState(ir.v2rayng.compose.core.RealState.BROKEN, "Tunnel probe failed")
+                                        log("ERROR", "Failed to connect to server")
+                                    } else {
+                                        log("INFO", "Tunnel check OK (${attempt}/5)")
+                                    }
+                                }
                             }
                             ir.v2rayng.compose.core.RealState.BROKEN -> {
                                 Remote.event(Remote.deviceId(ir.v2rayng.compose.AppCtx.app), "disconnect")
@@ -389,14 +406,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     /** Merge the admin-managed server list; per-remote-id user data (stats, pin, sticker) is preserved. */
     private fun mergeRemoteServers(list: List<Remote.ServerEntry>) {
-        val newIds = HashSet<String>()
+        val knownBefore = _state.value.servers.filter { it.id.startsWith("rem-") }.map { it.id }.toSet()
         put { s ->
-            val knownBefore = s.servers.filter { it.id.startsWith("rem-") }.map { it.id }.toSet()
             val kept = s.servers.filter { !it.id.startsWith("rem-") }
             val rem = list.map { e ->
                 val ex = s.servers.firstOrNull { it.id == e.id }
-                if (ex == null) newIds.add(e.id)
-                // address may be a placeholder (0.0.0.0) - fall back to the real host inside the link
                 val fromLink = e.link?.let { try { ir.v2rayng.compose.core.parseProxyLink(it) } catch (_: Exception) { null } }
                 val addr = if (!e.address.isNullOrBlank() && e.address != "0.0.0.0") e.address
                     else fromLink?.address?.takeIf { it.isNotBlank() } ?: e.address
@@ -427,8 +441,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         store.saveServers(_state.value.servers, _state.value.selectedId)
         mergeStamp = System.currentTimeMillis()
         // auto-ping freshly delivered servers (admin added new ones)
-        if (effAutoPingNew() && newIds.isNotEmpty()) {
-            pingServers(newIds, effAutoFlagNew())
+        val newIds = list.map { it.id }.filter { !knownBefore.contains(it) }.toSet()
+        if (newIds.isNotEmpty()) {
+            if (effAutoPingNew()) {
+                log("INFO", "Auto ping ${newIds.size} new server(s)")
+                pingServers(newIds, effAutoFlagNew())
+            } else {
+                log("INFO", "${newIds.size} new server(s) arrived")
+            }
         }
     }
 
@@ -998,12 +1018,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         log("INFO", S.LOG_SELECTED.format(name))
         if (tunnelUp) {
             // hot swap: drop the old tunnel and bring the newly selected one up
-            ir.v2rayng.compose.core.XrayVpnService.stop(appCtx())
             val sel = _state.value.servers.firstOrNull { it.id == id }
             if (sel?.link != null) {
                 val parsed = ir.v2rayng.compose.core.parseProxyLink(sel.link)
                 if (parsed != null) {
                     log("INFO", S.LOG_CONNECTING.format(sel.name))
+                    // the running service's connect intent swaps the core internally (700ms settle)
                     ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed, sel.link)
                 } else {
                     put { s -> s.copy(vpnState = VpnState.BROKEN) }
@@ -1011,11 +1031,34 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             } else {
                 connectJob?.cancel()
                 trafficJob?.cancel()
+                XrayVpnServiceStop()
                 put { s -> s.copy(vpnState = VpnState.IDLE) }
                 if (_settings.value.autoFlag) {
                     fetchIpFlag()
                 }
             }
+        }
+    }
+
+    private fun XrayVpnServiceStop() {
+        ir.v2rayng.compose.core.XrayVpnService.stop(appCtx())
+    }
+
+    /** HTTP 204 test forced through the local socks inbound - proves real end-to-end connectivity. */
+    private suspend fun probeViaTunnel(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val url = java.net.URL("https://www.google.com/generate_204")
+            val conn = url.openConnection(
+                java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", 10890)),
+            ) as HttpURLConnection
+            conn.connectTimeout = 3500
+            conn.readTimeout = 3500
+            conn.useCaches = false
+            val ok = conn.responseCode in 200..299
+            try { conn.inputStream.close() } catch (_: Exception) {}
+            ok
+        } catch (_: Exception) {
+            false
         }
     }
 
