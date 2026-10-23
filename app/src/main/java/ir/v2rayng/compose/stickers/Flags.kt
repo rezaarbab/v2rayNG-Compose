@@ -13,22 +13,25 @@ object CountryFlags {
     }
 }
 
-private val flagNameToCode: Map<String, String> = buildMap {
-    CountryFlags.list.forEach { put(it.name.lowercase(), it.id.uppercase()) }
-    // common aliases admins use in server names
-    put("united kingdom", "GB")
-    put("uk", "GB")
-    put("britain", "GB")
-    put("england", "GB")
-    put("usa", "US")
-    put("united states", "US")
-    put("america", "US")
-    put("emirates", "AE")
-    put("holland", "NL")
-    put("south korea", "KR")
-    put("russia", "RU")
-    put("turkey", "TR")
-    put("turkiye", "TR")
+// lazy so FlagsKt's class init never runs during CountryFlags.<clinit> (circular init crash)
+private val flagNameToCode: Map<String, String> by lazy {
+    buildMap {
+        CountryFlags.list.forEach { put(it.name.lowercase(), it.id.uppercase()) }
+        // common aliases admins use in server names
+        put("united kingdom", "GB")
+        put("uk", "GB")
+        put("britain", "GB")
+        put("england", "GB")
+        put("usa", "US")
+        put("united states", "US")
+        put("america", "US")
+        put("emirates", "AE")
+        put("holland", "NL")
+        put("south korea", "KR")
+        put("russia", "RU")
+        put("turkey", "TR")
+        put("turkiye", "TR")
+    }
 }
 
 /** ISO code from a flag emoji pair inside a server name, e.g. "CDN1 🇩🇪" -> "DE". */
