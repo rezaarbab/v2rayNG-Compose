@@ -133,7 +133,15 @@ object Remote {
      */
     fun sync(device: String, type: String, connected: Boolean): Result? {
         val body = buildSyncBody(device, type, connected)
-        val secure = try { BlobSecure.syncSecure(BASE, body) } catch (_: Exception) { null }
+        val secure = try {
+            BlobSecure.syncSecure(BASE, body)
+        } catch (e: Exception) {
+            try { android.util.Log.d("BlobSec", "secure path exception: " + e.javaClass.simpleName) } catch (_: Exception) {}
+            null
+        }
+        if (secure == null) {
+            try { android.util.Log.d("BlobSec", "secure path returned null -> plaintext fallback") } catch (_: Exception) {}
+        }
         if (secure != null) {
             if (secure.optBoolean("__nc", false)) {
                 // worker says the payload is unchanged since the last sync; apply nothing

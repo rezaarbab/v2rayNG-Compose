@@ -1,7 +1,13 @@
 package ir.v2rayng.compose.core.sec
 
+import android.util.Log
 import ir.v2rayng.compose.AppCtx
 import org.json.JSONObject
+
+/** debug tag - visible with: adb logcat -s BlobSec */
+fun blog(msg: String) {
+    try { Log.d("BlobSec", msg) } catch (_: Exception) {}
+}
 
 /**
  * Server-issued rotating keys - the app never owns a crypto key:
@@ -99,18 +105,23 @@ object BlobSecure {
                 .put("connected", body.optBoolean("connected", false))
                 .put("info", body.opt("info") ?: JSONObject())
                 .put("tok", token(body.getString("device"), hexToBytes(ROOT)))
-            val text = httpPost(base, "/api/key", req) ?: return null
+            val text = httpPost(base, "/api/key", req) ?: run { blog("issueKeys: /api/key transport failed"); return null }
             val resp = JSONObject(text)
-            if (resp.optInt("v", 0) < 2 || resp.optString("enc") != "k") return null
-            val kc = BlobB64.decode(resp.getString("kc")) ?: return null
-            val kt = BlobB64.decode(resp.getString("kt")) ?: return null
-            if (kc.size != 32 || kt.size != 32) return null
+            if (resp.optInt("v", 0) < 2 || resp.optString("enc") != "k") {
+                blog("issueKeys: refused enc=" + resp.optString("enc", "?") + " v=" + resp.optInt("v", 0) + " -> set BLOB_ROOT secret on the worker?")
+                return null
+            }
+            val kc = BlobB64.decode(resp.getString("kc")) ?: run { blog("issueKeys: bad b64 kc"); return null }
+            val kt = BlobB64.decode(resp.getString("kt")) ?: run { blog("issueKeys: bad b64 kt"); return null }
+            if (kc.size != 32 || kt.size != 32) { blog("issueKeys: bad key sizes " + kc.size + "/" + kt.size); return null }
             val expSec = resp.optLong("exp", 0L)
             val expMs = if (expSec > 0) expSec * 1000L else System.currentTimeMillis() + 3600_000L
             val s = Session(kc, kt, expMs)
             save(s)
+            blog("issueKeys: OK, keys live until epoch-ms " + expMs)
             s
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            blog("issueKeys: exception " + e.javaClass.simpleName)
             null
         }
     }
@@ -123,6 +134,7 @@ object BlobSecure {
             if (sNow == null) {
                 if (issued) return null
                 issued = true
+                blog("no session -> issuing keys from worker")
                 // worker hands us fresh keys (device + 60-min bucket) and stores them too
                 session = issueKeys(base, body) ?: return null
                 continue
@@ -135,26 +147,38 @@ object BlobSecure {
                 token(body.getString("device"), sNow.kt),
             )
             if (text == null) {
+                blog("sync: transport failed -> plaintext fallback")
                 // transport failed - keep the session, let the caller fall back
                 return null
             }
             val resp = JSONObject(text)
-            when (resp.optString("enc")) {
-                "s" -> return revealPayload(resp.getString("st"), sNow.kc)
-                "c" -> return openCy(resp.getString("cy"), sNow.kc)
+            when (val enc = resp.optString("enc")) {
+                "s" -> {
+                    val r = revealPayload(resp.getString("st"), sNow.kc)
+                    if (r == null) blog("enc=s but stego reveal failed (keys mismatch?")
+                    return r
+                }
+                "c" -> {
+                    val r = openCy(resp.getString("cy"), sNow.kc)
+                    if (r == null) blog("enc=c but GCM open failed")
+                    return r
+                }
                 "n" -> return JSONObject().put("__nc", true)
                 "h" -> {
                     // keys expired/rotated server-side - clear and issue fresh
+                    blog("enc=h (expired/rotated) -> re-issuing")
                     clear()
                     if (issued) return null
                     issued = true
                     session = issueKeys(base, body) ?: return null
                 }
                 "x" -> {
+                    blog("enc=x (auth rejected) -> clearing")
                     clear()
                     return null
                 }
                 else -> {
+                    blog("unexpected enc=" + enc + " -> clearing + fallback (worker has no blob layer?)")
                     clear()
                     return null
                 }
