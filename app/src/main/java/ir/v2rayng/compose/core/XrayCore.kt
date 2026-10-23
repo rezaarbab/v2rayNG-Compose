@@ -99,6 +99,9 @@ object XrayBridge {
                             if (!isErr && !line.contains("[Warning]")) continue
                             val msg = line.substringAfter("] ").trim().ifBlank { line.trim().take(200) }
                             if (msg.isBlank()) continue
+                            // deprecation notices and the per-instance version banner are pure noise
+                            if (msg.contains("deprecated")) continue
+                            if (msg.startsWith("core: Xray ")) continue
                             addLog(if (isErr) "ERROR" else "CORE", msg)
                         }
                     } catch (_: Exception) {
@@ -494,7 +497,8 @@ private fun streamOf(link: ProxyLink): JSONObject {
         "ws" -> {
             val ws = JSONObject().put("path", link.path.ifBlank { "/" })
             if (link.hostHeader.isNotBlank()) {
-                ws.put("headers", JSONObject().put("Host", link.hostHeader))
+                // independent host field - headers.host is deprecated in current xray
+                ws.put("host", link.hostHeader)
             }
             if (link.earlyData > 0) {
                 ws.put("maxEarlyData", link.earlyData)
@@ -514,6 +518,12 @@ private fun streamOf(link: ProxyLink): JSONObject {
             val h = JSONObject().put("path", link.path.ifBlank { "/" })
             if (link.hostHeader.isNotBlank()) h.put("host", link.hostHeader)
             stream.put("httpupgradeSettings", h)
+        }
+        "xhttp" -> {
+            val x = JSONObject()
+            if (link.path.isNotBlank()) x.put("path", link.path)
+            if (link.hostHeader.isNotBlank()) x.put("host", link.hostHeader)
+            stream.put("xhttpSettings", x)
         }
     }
     when (link.security) {

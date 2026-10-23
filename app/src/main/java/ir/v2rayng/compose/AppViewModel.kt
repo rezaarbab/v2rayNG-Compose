@@ -453,6 +453,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     stickerIndex = ex?.stickerIndex ?: ((e.id.hashCode() and 0x3FF) % 997),
                     country = ex?.country ?: "",
                     ping = ex?.ping,
+                    pingErr = ex?.pingErr,
                     link = e.link,
                     pinned = ex?.pinned ?: false,
                     pack = ex?.pack ?: -1,
@@ -891,9 +892,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                 }
                             }
                             put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms, pingErr = msErr) else it }) }
-                            if (doFlags && ms != null && parsed != null) {
+                            // country probe only for tunnels proven alive; broken ones get no flag
+                            if (doFlags && ms != null && msErr == null && parsed != null) {
                                 val code = probeFlag(parsed, 21000 + portSeq.getAndIncrement() % 60)
                                 if (code != null) {
+                                    log("INFO", "Flag ${srv.name}: $code")
                                     put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(country = code) else it }) }
                                 }
                             }
@@ -940,6 +943,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             if (t != null) {
                 ms = t
                 via = "tcp"
+                // marker: plain tcp reachability of the server itself, NOT a working tunnel
+                token = "tcp"
             }
         }
         val who = l.name.ifBlank { "${l.address}:${l.port}" }
@@ -949,7 +954,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             val d = detail.trim().take(90).replace('\n', ' ')
             log("WARN", "Ping $who: ${token.ifBlank { "timeout" }}${if (d.isNotBlank() && d != token) " - $d" else ""}")
         }
-        Pair(ms, if (ms == null) token.ifBlank { "timeout" } else null)
+        Pair(ms, if (ms == null) token.ifBlank { "timeout" } else if (via == "tcp") "tcp" else null)
     }
 
     /** Two quick tcp connects to the server itself, best of both ("tcping"). */

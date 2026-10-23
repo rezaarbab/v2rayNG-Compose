@@ -74,6 +74,8 @@ fun StatusPill(state: VpnState) {
 @Composable
 fun PingChip(ping: Int?, err: String? = null) {
     val (color, text) = when {
+        // tcp fallback = server answers syn (maybe DPI middlebox) - never show it as healthy green
+        ping != null && err == "tcp" -> Color(0xFF9BA8B4) to "tcp $ping ms"
         ping != null && ping <= 150 -> Color(0xFF2BD48A) to "$ping ms"
         ping != null && ping <= 300 -> Color(0xFFFFB24A) to "$ping ms"
         ping != null -> Color(0xFFFF7C7C) to "$ping ms"
