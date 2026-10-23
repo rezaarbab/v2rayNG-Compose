@@ -231,90 +231,7 @@ private fun parseSs(uri: String): ProxyLink? {
 }
 
 fun buildXrayConfig(link: ProxyLink): String {
-    val outbound = when (link.kind) {
-        LinkKind.VLESS -> {
-            val user = JSONObject()
-                .put("id", link.uuidOrPassword)
-                .put("encryption", "none")
-                .put("level", 0)
-            if (link.flow.isNotBlank()) user.put("flow", link.flow)
-            JSONObject()
-                .put("tag", "proxy")
-                .put("protocol", "vless")
-                .put(
-                    "settings",
-                    JSONObject().put(
-                        "vnext",
-                        JSONArray().put(
-                            JSONObject()
-                                .put("address", link.address)
-                                .put("port", link.port)
-                                .put("users", JSONArray().put(user)),
-                        ),
-                    ),
-                )
-                .put("streamSettings", streamOf(link))
-        }
-        LinkKind.VMESS -> JSONObject()
-            .put("tag", "proxy")
-            .put("protocol", "vmess")
-            .put(
-                "settings",
-                JSONObject().put(
-                    "vnext",
-                    JSONArray().put(
-                        JSONObject()
-                            .put("address", link.address)
-                            .put("port", link.port)
-                            .put(
-                                "users",
-                                JSONArray().put(
-                                    JSONObject()
-                                        .put("id", link.uuidOrPassword)
-                                        .put("alterId", link.alterId)
-                                        .put("security", link.method.ifBlank { "auto" })
-                                        .put("level", 0),
-                                ),
-                            ),
-                    ),
-                ),
-            )
-            .put("streamSettings", streamOf(link))
-        LinkKind.TROJAN -> JSONObject()
-            .put("tag", "proxy")
-            .put("protocol", "trojan")
-            .put(
-                "settings",
-                JSONObject().put(
-                    "servers",
-                    JSONArray().put(
-                        JSONObject()
-                            .put("address", link.address)
-                            .put("port", link.port)
-                            .put("password", link.uuidOrPassword)
-                            .put("level", 0),
-                    ),
-                ),
-            )
-            .put("streamSettings", streamOf(link))
-        LinkKind.SS -> JSONObject()
-            .put("tag", "proxy")
-            .put("protocol", "shadowsocks")
-            .put(
-                "settings",
-                JSONObject().put(
-                    "servers",
-                    JSONArray().put(
-                        JSONObject()
-                            .put("address", link.address)
-                            .put("port", link.port)
-                            .put("method", link.method)
-                            .put("password", link.uuidOrPassword)
-                            .put("level", 0),
-                    ),
-                ),
-            )
-    }
+    val outbound = outboundOf(link)
 
     val tunSettings = JSONObject()
         .put("name", "utun42")
@@ -379,6 +296,154 @@ fun buildXrayConfig(link: ProxyLink): String {
     return config.toString()
 }
 
+private fun outboundOf(link: ProxyLink): JSONObject = when (link.kind) {
+    LinkKind.VLESS -> {
+        val user = JSONObject()
+            .put("id", link.uuidOrPassword)
+            .put("encryption", "none")
+            .put("level", 0)
+        if (link.flow.isNotBlank()) user.put("flow", link.flow)
+        JSONObject()
+            .put("tag", "proxy")
+            .put("protocol", "vless")
+            .put(
+                "settings",
+                JSONObject().put(
+                    "vnext",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("address", link.address)
+                            .put("port", link.port)
+                            .put("users", JSONArray().put(user)),
+                    ),
+                ),
+            )
+            .put("streamSettings", streamOf(link))
+    }
+    LinkKind.VMESS -> JSONObject()
+        .put("tag", "proxy")
+        .put("protocol", "vmess")
+        .put(
+            "settings",
+            JSONObject().put(
+                "vnext",
+                JSONArray().put(
+                    JSONObject()
+                        .put("address", link.address)
+                        .put("port", link.port)
+                        .put(
+                            "users",
+                            JSONArray().put(
+                                JSONObject()
+                                    .put("id", link.uuidOrPassword)
+                                    .put("alterId", link.alterId)
+                                    .put("security", link.method.ifBlank { "auto" })
+                                    .put("level", 0),
+                            ),
+                        ),
+                ),
+            ),
+        )
+        .put("streamSettings", streamOf(link))
+    LinkKind.TROJAN -> JSONObject()
+        .put("tag", "proxy")
+        .put("protocol", "trojan")
+        .put(
+            "settings",
+            JSONObject().put(
+                "servers",
+                JSONArray().put(
+                    JSONObject()
+                        .put("address", link.address)
+                        .put("port", link.port)
+                        .put("password", link.uuidOrPassword)
+                        .put("level", 0),
+                ),
+            ),
+        )
+        .put("streamSettings", streamOf(link))
+    LinkKind.SS -> JSONObject()
+        .put("tag", "proxy")
+        .put("protocol", "shadowsocks")
+        .put(
+            "settings",
+            JSONObject().put(
+                "servers",
+                JSONArray().put(
+                    JSONObject()
+                        .put("address", link.address)
+                        .put("port", link.port)
+                        .put("method", link.method)
+                        .put("password", link.uuidOrPassword)
+                        .put("level", 0),
+                ),
+            ),
+        )
+}
+
+/** Lean config used only for delay measurement: no inbounds, no stats, nothing to bind. */
+fun buildPingConfig(link: ProxyLink): String =
+    JSONObject()
+        .put("log", JSONObject().put("loglevel", "warning"))
+        .put(
+            "outbounds",
+            JSONArray()
+                .put(outboundOf(link))
+                .put(JSONObject().put("tag", "direct").put("protocol", "freedom")),
+        )
+        .put(
+            "routing",
+            JSONObject()
+                .put("domainStrategy", "AsIs")
+                .put(
+                    "rules",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("type", "field")
+                            .put("outboundTag", "proxy")
+                            .put("network", "tcp,udp"),
+                    ),
+                ),
+        )
+        .toString()
+
+/** Short-lived core config exposing one server through a local socks port - used to detect the exit country. */
+fun buildFlagProbeConfig(link: ProxyLink, socksPort: Int): String =
+    JSONObject()
+        .put("log", JSONObject().put("loglevel", "warning"))
+        .put(
+            "inbounds",
+            JSONArray().put(
+                JSONObject()
+                    .put("tag", "socks-in")
+                    .put("protocol", "socks")
+                    .put("listen", "127.0.0.1")
+                    .put("port", socksPort)
+                    .put("settings", JSONObject().put("udp", false)),
+            ),
+        )
+        .put(
+            "outbounds",
+            JSONArray()
+                .put(outboundOf(link))
+                .put(JSONObject().put("tag", "direct").put("protocol", "freedom")),
+        )
+        .put(
+            "routing",
+            JSONObject()
+                .put("domainStrategy", "AsIs")
+                .put(
+                    "rules",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("type", "field")
+                            .put("outboundTag", "proxy")
+                            .put("network", "tcp,udp"),
+                    ),
+                ),
+        )
+        .toString()
+
 private fun streamOf(link: ProxyLink): JSONObject {
     val stream = JSONObject()
         .put("network", link.type)
@@ -413,13 +478,15 @@ private fun streamOf(link: ProxyLink): JSONObject {
         "tls" -> {
             val tls = JSONObject()
             if (link.sni.isNotBlank()) tls.put("serverName", link.sni)
+            // browser-like TLS hello (v2rayNG default) - plain Go TLS is rejected by most CDN anti-bot filters
+            tls.put("fingerprint", link.fp.ifBlank { "chrome" })
             tls.put("allowInsecure", false)
             stream.put("tlsSettings", tls)
         }
         "reality" -> {
             val rs = JSONObject().put("show", false)
             if (link.sni.isNotBlank()) rs.put("serverName", link.sni)
-            if (link.fp.isNotBlank()) rs.put("fingerprint", link.fp)
+            rs.put("fingerprint", link.fp.ifBlank { "chrome" })
             if (link.pbk.isNotBlank()) rs.put("publicKey", link.pbk)
             if (link.sid.isNotBlank()) rs.put("shortId", link.sid)
             if (link.spx.isNotBlank()) rs.put("spiderX", link.spx)
