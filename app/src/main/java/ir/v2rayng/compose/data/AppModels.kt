@@ -18,6 +18,7 @@ data class ServerProfile(
     val stickerIndex: Int,
     val country: String = "",
     val ping: Int? = null,
+    val pingErr: String? = null,
     val link: String? = null,
     val up: Long = 0L,
     val down: Long = 0L,

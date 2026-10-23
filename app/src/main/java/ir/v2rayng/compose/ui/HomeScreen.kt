@@ -192,7 +192,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            PingChip(sel.ping)
+                            PingChip(sel.ping, sel.pingErr)
                         }
                     }
                 }

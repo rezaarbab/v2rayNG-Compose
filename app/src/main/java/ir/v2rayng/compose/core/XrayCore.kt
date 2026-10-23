@@ -73,6 +73,48 @@ object XrayBridge {
     fun reset() {
         _status.value = RealStatus()
     }
+
+    init {
+        startCoreLogTail()
+    }
+
+    /**
+     * Xray writes warnings/errors to stdout, which lands in this process's logcat.
+     * A small tailer pulls real core messages into the in-app log so everyone
+     * (user and developer) can see exactly why something failed.
+     */
+    private fun startCoreLogTail() {
+        Thread(
+            {
+                while (true) {
+                    var reader: java.io.BufferedReader? = null
+                    try {
+                        val p = Runtime.getRuntime().exec(
+                            arrayOf("logcat", "--pid=" + android.os.Process.myPid(), "-v", "brief"),
+                        )
+                        reader = java.io.BufferedReader(java.io.InputStreamReader(p.inputStream))
+                        while (true) {
+                            val line = reader.readLine() ?: break
+                            val isErr = line.contains("[Error]")
+                            if (!isErr && !line.contains("[Warning]")) continue
+                            val msg = line.substringAfter("] ").trim().ifBlank { line.trim().take(200) }
+                            if (msg.isBlank()) continue
+                            addLog(if (isErr) "ERROR" else "CORE", msg)
+                        }
+                    } catch (_: Exception) {
+                    } finally {
+                        try { reader?.close() } catch (_: Exception) {}
+                    }
+                    try {
+                        Thread.sleep(5000L)
+                    } catch (e: InterruptedException) {
+                        break
+                    }
+                }
+            },
+            "blob-core-log",
+        ).apply { isDaemon = true }.start()
+    }
 }
 
 private fun b64Any(s: String): String? {

@@ -72,12 +72,13 @@ fun StatusPill(state: VpnState) {
 }
 
 @Composable
-fun PingChip(ping: Int?) {
+fun PingChip(ping: Int?, err: String? = null) {
     val (color, text) = when {
-        ping == null -> Color(0xFF9BA8B4) to "-"
-        ping <= 150 -> Color(0xFF2BD48A) to "$ping ms"
-        ping <= 300 -> Color(0xFFFFB24A) to "$ping ms"
-        else -> Color(0xFFFF7C7C) to "$ping ms"
+        ping != null && ping <= 150 -> Color(0xFF2BD48A) to "$ping ms"
+        ping != null && ping <= 300 -> Color(0xFFFFB24A) to "$ping ms"
+        ping != null -> Color(0xFFFF7C7C) to "$ping ms"
+        !err.isNullOrBlank() -> Color(0xFFFF7C7C) to err
+        else -> Color(0xFF9BA8B4) to "-"
     }
     Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(50)) {
         Text(
@@ -166,4 +167,16 @@ fun Modifier.holdFor(
             }
         }
     }
+}
+
+/** Hold-any-icon-button tooltip: long-press shows what the button does. */
+@Composable
+fun Modifier.tooltipHold(label: String): Modifier {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    return this.holdFor(600L, onHold = {
+        try {
+            android.widget.Toast.makeText(ctx, label, android.widget.Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+        }
+    })
 }

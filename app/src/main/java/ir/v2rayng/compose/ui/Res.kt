@@ -147,6 +147,7 @@ object S {
 
     const val SEARCH_SERVERS = "Search servers..."
     const val CAT_ALL = "All"
+    const val RESET_TRAFFIC = "Reset all traffic counters"
     const val REMOTE_TITLE = "Remote panel"
     const val PING_ON_START = "Ping on start"
     const val PING_ON_START_SUB = "Ping all servers as soon as the app opens"

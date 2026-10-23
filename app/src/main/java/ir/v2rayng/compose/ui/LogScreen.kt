@@ -79,7 +79,7 @@ fun LogScreen(state: AppState, vm: AppViewModel) {
             ) {
                 Text(if (copied) "Copied!" else "Copy")
             }
-            IconButton(onClick = { vm.clearLogs() }) {
+            IconButton(onClick = { vm.clearLogs() }, modifier = Modifier.tooltipHold(S.CLEAR)) {
                 Icon(Icons.Filled.Delete, contentDescription = S.CLEAR)
             }
         }

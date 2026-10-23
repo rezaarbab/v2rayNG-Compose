@@ -80,16 +80,16 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            IconButton(onClick = { showImport = true }) {
+            IconButton(onClick = { showImport = true }, modifier = Modifier.tooltipHold(S.IMPORT_TITLE)) {
                 Icon(Icons.Filled.Add, contentDescription = S.IMPORT_TITLE)
             }
-            IconButton(onClick = { vm.resetAllServerTraffic() }) {
-                Icon(Icons.Filled.Delete, contentDescription = "Reset traffic", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            IconButton(onClick = { vm.resetAllServerTraffic() }, modifier = Modifier.tooltipHold(S.RESET_TRAFFIC)) {
+                Icon(Icons.Filled.Delete, contentDescription = S.RESET_TRAFFIC, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            IconButton(onClick = { vm.syncNow() }) {
+            IconButton(onClick = { vm.syncNow() }, modifier = Modifier.tooltipHold(S.REMOTE_SYNC)) {
                 Icon(Icons.Filled.Refresh, contentDescription = S.REMOTE_SYNC)
             }
-            IconButton(onClick = { vm.pingAll() }) {
+            IconButton(onClick = { vm.pingAll() }, modifier = Modifier.tooltipHold(S.PING_TEST)) {
                 Icon(Icons.Filled.Send, contentDescription = S.PING_TEST)
             }
         }
@@ -253,7 +253,7 @@ private fun ServerRow(
                     )
                 }
             }
-            PingChip(profile.ping)
+            PingChip(profile.ping, profile.pingErr)
             IconButton(onClick = onPin) {
                 Icon(
                     Icons.Filled.Star,

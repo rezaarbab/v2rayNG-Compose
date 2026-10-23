@@ -362,6 +362,25 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
     }
 
+    @Volatile
+    private var lastInfoToast = 0L
+
+    fun infoToast(msg: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastInfoToast < 1500L) return
+        lastInfoToast = now
+        try {
+            val ctx = try { ir.v2rayng.compose.AppCtx.app } catch (e: Exception) { return }
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                try {
+                    android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
     fun isOnline(): Boolean {
         return try {
             val cm = AppCtx.app.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
@@ -822,7 +841,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         return true
     }
 
-    fun pingAll() = pingServers(null, _settings.value.flagOnStart)
+    fun pingAll() = pingServers(null, true)
 
     /**
      * Real ping via core, several servers at once, with a fallback chain:
@@ -847,39 +866,34 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             } catch (_: Exception) {
             }
             log("INFO", S.LOG_PING_START)
+            infoToast(S.PING_TEST + "…")
             val targets = if (ids == null) _state.value.servers else _state.value.servers.filter { ids.contains(it.id) }
             // country probe uses a temporary core - never touch it while the tunnel owns the tun fd
             val doFlags = wantFlag &&
                 _state.value.vpnState != VpnState.CONNECTED &&
                 _state.value.vpnState != VpnState.CONNECTING
-            val flagCode = HashMap<String, String>()
-            val flagPing = HashMap<String, Int>()
-            val sem = Semaphore(6)
+            val sem = Semaphore(10)
             val portSeq = AtomicInteger(0)
             coroutineScope {
                 for (srv in targets) {
                     launch(Dispatchers.IO) {
                         sem.withPermit {
                             val parsed = srv.link?.let { l -> try { ir.v2rayng.compose.core.parseProxyLink(l) } catch (_: Exception) { null } }
-                            val ms: Int? = when {
+                            val (ms, msErr) = when {
                                 parsed != null -> probePing(parsed)
                                 srv.link != null -> {
                                     log("WARN", "Ping failed to parse: ${srv.name}")
-                                    null
+                                    null to "config"
                                 }
                                 else -> {
                                     delay(350)
-                                    40 + Random.nextInt(400)
+                                    (40 + Random.nextInt(400)) to null
                                 }
                             }
-                            put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms) else it }) }
+                            put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms, pingErr = msErr) else it }) }
                             if (doFlags && ms != null && parsed != null) {
                                 val code = probeFlag(parsed, 21000 + portSeq.getAndIncrement() % 60)
                                 if (code != null) {
-                                    synchronized(flagCode) {
-                                        flagCode[srv.id] = code
-                                        flagPing[srv.id] = ms
-                                    }
                                     put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(country = code) else it }) }
                                 }
                             }
@@ -887,41 +901,55 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     }
                 }
             }
-            if (flagPing.isNotEmpty()) {
-                // wallpaper takes the flag of the fastest healthy server from this batch
-                val best = flagPing.entries.minByOrNull { it.value }?.key
-                if (best != null) applyFlag(flagCode[best] ?: "")
-            }
             log("INFO", S.LOG_PING_DONE)
         }
     }
 
-    /** https -> plain http -> tcp for one parsed server; null only when the server is unreachable. */
-    private suspend fun probePing(l: ir.v2rayng.compose.core.ProxyLink): Int? = withContext(Dispatchers.IO) {
+    /**
+     * https -> (plain http only when tls/anti-bot specifically died) -> tcp for one parsed server.
+     * Returns (delay ms, short error) - error is null when the ping succeeded.
+     */
+    private suspend fun probePing(l: ir.v2rayng.compose.core.ProxyLink): Pair<Int?, String?> = withContext(Dispatchers.IO) {
         var ms: Int? = null
+        var token = ""
+        var detail = ""
         var via = "https"
-        var err = ""
-        for (url in arrayOf(PING_URL_HTTPS, PING_URL_HTTP)) {
-            if (ms != null) break
+        try {
+            val d = libv2ray.Libv2ray.measureOutboundDelay(ir.v2rayng.compose.core.buildPingConfig(l), PING_URL_HTTPS)
+            if (d >= 0) ms = d.toInt()
+        } catch (e: Exception) {
+            val raw = e.message ?: ""
+            token = shortNetError(raw)
+            detail = raw
+        }
+        if (ms == null && token != "server down" && token != "refused") {
+            // the server link is fine but https got killed at the tls/anti-bot layer - plain http still works
             try {
-                val d = libv2ray.Libv2ray.measureOutboundDelay(ir.v2rayng.compose.core.buildPingConfig(l), url)
-                if (d >= 0) {
-                    ms = d.toInt()
-                    via = if (url == PING_URL_HTTPS) "https" else "http"
-                }
+                val d = libv2ray.Libv2ray.measureOutboundDelay(ir.v2rayng.compose.core.buildPingConfig(l), PING_URL_HTTP)
+                if (d >= 0) ms = d.toInt()
+                via = "http"
             } catch (e: Exception) {
-                if (err.isBlank()) err = shortNetError(e.message ?: "")
+                if (detail.isBlank()) {
+                    detail = e.message ?: ""
+                    token = shortNetError(detail)
+                }
             }
         }
         if (ms == null) {
-            tcpPing(l.address, l.port)?.let { ms = it; via = "tcp" }
+            val t = tcpPing(l.address, l.port)
+            if (t != null) {
+                ms = t
+                via = "tcp"
+            }
         }
         val who = l.name.ifBlank { "${l.address}:${l.port}" }
-        when {
-            ms == null -> log("WARN", "Ping $who: ${err.ifBlank { "unreachable" }}")
-            via != "https" -> log("INFO", "Ping $who: ${ms}ms ($via fallback)")
+        if (ms != null) {
+            if (via != "https") log("INFO", "Ping $who: ${ms}ms ($via fallback)")
+        } else {
+            val d = detail.trim().take(90).replace('\n', ' ')
+            log("WARN", "Ping $who: ${token.ifBlank { "timeout" }}${if (d.isNotBlank() && d != token) " - $d" else ""}")
         }
-        ms
+        Pair(ms, if (ms == null) token.ifBlank { "timeout" } else null)
     }
 
     /** Two quick tcp connects to the server itself, best of both ("tcping"). */
@@ -973,12 +1001,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     }
 
     private fun shortNetError(m: String): String = when {
-        m.contains("closed pipe") -> "server closed the connection"
+        m.contains("closed pipe") -> "server down"
         m.contains("timeout", true) || m.contains("deadline", true) -> "timeout"
-        m.contains("refused", true) -> "connection refused"
+        m.contains("refused", true) -> "refused"
         m.contains("No address", true) || m.contains("dns", true) -> "dns failed"
-        m.isBlank() -> "unreachable"
-        else -> m.take(70)
+        m.isBlank() -> "timeout"
+        else -> "failed"
     }
 
     fun needsVpnConsent(): android.content.Intent? = android.net.VpnService.prepare(AppCtx.app)
