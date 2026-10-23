@@ -1,28 +1,24 @@
 package ir.v2rayng.compose.core.sec
 
-import android.util.Base64
 import ir.v2rayng.compose.AppCtx
 import org.json.JSONObject
 
 /**
- * Option C - the strongest wiring:
- *   Handshake = ECDH P-256 (app generates an ephemeral secret; the STATIC public
- *   key of the worker is baked into the app so no trusted key ever ships).
- *   Session keys = HKDF(shared secret, "blobv1" + deviceId) hardware-sealed
- *   through BlobVault. Every request carries a one-shot HMAC token; every
- *   admin->app payload is JSON -> zlib -> AES-256-GCM inside a stego carrier.
+ * Server-issued rotating keys - the app never owns a crypto key:
+ *   POST /api/key -> worker derives kc (payload key) + kt (token key) fresh for
+ *   every 60-minute bucket (HMAC of BLOB_ROOT over deviceId + wall time) and
+ *   hands them over the TLS channel. Sessions expire at the bucket boundary;
+ *   every request carries a one-shot HMAC token; every admin->app payload is
+ *   JSON -> zlib -> AES-256-GCM(Kc, AAD BLBv1) inside a homoglyph stego carrier.
+ * The only embedded constant is ROOT (the app-auth secret, not a decrypt key).
  */
 object BlobSecure {
 
     private const val PREFS = "v2settings"
     private const val KEY = "blob-sec"
 
-    /** root secret (hex32) baked in the app - equal to worker secret BLOB_ROOT */
+    /** app-auth secret (hex32) baked in the app - equal to worker secret BLOB_ROOT */
     private const val ROOT = "02943399ed750ba5128c5df37ee79ed2314c2ee32a04206fae632b3528c0ed93"
-
-    /** worker's static P-256 public key (SPKI, base64url) */
-    private const val STATIC_PUB =
-        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2Ipq7zpde4tZDch7pSEpfggaMj5NgJ23PyriGZe09a01ieqnE4n1STm3ih3U9cm63mejLBD3gUJEdoYsvRZG_w"
 
     data class Session(val kc: ByteArray, val kt: ByteArray, val exp: Long) {
         fun wrap(): JSONObject = JSONObject()
@@ -91,64 +87,29 @@ object BlobSecure {
         return BlobB64.encode(ts + nonce + mac)
     }
 
-    private fun leftPad32(b: ByteArray): ByteArray = if (b.size >= 32) b.copyOf() else {
-        val o = ByteArray(32)
-        b.copyInto(o, 32 - b.size)
-        o
-    }
-
-    /** HKDF-SHA256(salt=32 zero bytes) -> Kc(32) + Kt(32) - identical to the worker side */
-    private fun derive(raw: ByteArray, device: String): Pair<ByteArray, ByteArray> {
-        val salt = ByteArray(32)
-        val prk = BlobStego.hmac(salt, raw)
-        val info = "blobv1$device".toByteArray(Charsets.UTF_8)
-        val hmac = javax.crypto.Mac.getInstance("HmacSHA256")
-        hmac.init(javax.crypto.spec.SecretKeySpec(prk, "HmacSHA256"))
-        val out = java.io.ByteArrayOutputStream()
-        var prev = ByteArray(0)
-        var counter = 1
-        while (out.size() < 64) {
-            prev = hmac.doFinal(prev + info + byteArrayOf(counter.toByte()))
-            out.write(prev)
-            counter++
-        }
-        val all = out.toByteArray()
-        return all.copyOfRange(0, 32) to all.copyOfRange(32, 64)
-    }
-
-    fun handshake(base: String, body: JSONObject): JSONObject? {
+    /** /api/key - get fresh 60-minute keys from the worker, persist via BlobVault.
+     *  Returns the newly stored session, or null when the worker refuses. */
+    private fun issueKeys(base: String, body: JSONObject): Session? {
         return try {
-            val kgp = java.security.KeyPairGenerator.getInstance("EC")
-            kgp.initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
-            val kp = kgp.generateKeyPair()
-            val ka = javax.crypto.KeyAgreement.getInstance("ECDH")
-            ka.init(kp.getPrivate())
-            val staticPub = java.security.KeyFactory.getInstance("EC")
-                .generatePublic(java.security.spec.X509EncodedKeySpec(urllib64Decode(STATIC_PUB)))
-            ka.doPhase(staticPub, true)
-            val (kc, kt) = derive(leftPad32(ka.generateSecret()), body.getString("device"))
-            val rootB = hexToBytes(ROOT)
             val req = JSONObject()
                 .put("device", body.getString("device"))
                 .put("model", body.optString("model", ""))
                 .put("ver", body.opt("ver") ?: 0)
                 .put("ts", System.currentTimeMillis() / 1000L)
-                .put("eph", BlobB64.encode(kp.getPublic().encoded))
                 .put("connected", body.optBoolean("connected", false))
                 .put("info", body.opt("info") ?: JSONObject())
-                .put("tok", token(body.getString("device"), rootB))
-            val text = httpPost(base, "/api/handshake", req) ?: return null
+                .put("tok", token(body.getString("device"), hexToBytes(ROOT)))
+            val text = httpPost(base, "/api/key", req) ?: return null
             val resp = JSONObject(text)
-            if (resp.optInt("v", 0) < 2) return null
-            // persist the session (worker returns exp in seconds; default 30 days)
-            val expMs = resp.optLong("exp", 0L) * 1000L
-            save(Session(kc, kt, if (expMs > System.currentTimeMillis()) expMs else System.currentTimeMillis() + 30L * 86400_000L))
-            when (resp.optString("enc")) {
-                "s" -> revealPayload(resp.getString("st"), kc)
-                "c" -> openCy(resp.getString("cy"), kc)
-                "n" -> JSONObject().put("__nc", true)
-                else -> null
-            }
+            if (resp.optInt("v", 0) < 2 || resp.optString("enc") != "k") return null
+            val kc = BlobB64.decode(resp.getString("kc")) ?: return null
+            val kt = BlobB64.decode(resp.getString("kt")) ?: return null
+            if (kc.size != 32 || kt.size != 32) return null
+            val expSec = resp.optLong("exp", 0L)
+            val expMs = if (expSec > 0) expSec * 1000L else System.currentTimeMillis() + 3600_000L
+            val s = Session(kc, kt, expMs)
+            save(s)
+            s
         } catch (_: Exception) {
             null
         }
@@ -156,11 +117,15 @@ object BlobSecure {
 
     fun syncSecure(base: String, body: JSONObject): JSONObject? {
         var session: Session? = load()
+        var issued = false
         for (attempt in 0 until 2) {
             val sNow = session
             if (sNow == null) {
-                // no usable session - handshake also stores the keys and returns the payload
-                return handshake(base, body)
+                if (issued) return null
+                issued = true
+                // worker hands us fresh keys (device + 60-min bucket) and stores them too
+                session = issueKeys(base, body) ?: return null
+                continue
             }
             val text = httpPost(
                 base,
@@ -170,9 +135,8 @@ object BlobSecure {
                 token(body.getString("device"), sNow.kt),
             )
             if (text == null) {
-                // transport failed - keep the session and let the loop retry/end
-                session = null
-                continue
+                // transport failed - keep the session, let the caller fall back
+                return null
             }
             val resp = JSONObject(text)
             when (resp.optString("enc")) {
@@ -180,10 +144,11 @@ object BlobSecure {
                 "c" -> return openCy(resp.getString("cy"), sNow.kc)
                 "n" -> return JSONObject().put("__nc", true)
                 "h" -> {
-                    // session expired/rotated server-side - clear keys; next attempt handshakes
+                    // keys expired/rotated server-side - clear and issue fresh
                     clear()
-                    session = null
-                    continue
+                    if (issued) return null
+                    issued = true
+                    session = issueKeys(base, body) ?: return null
                 }
                 "x" -> {
                     clear()
@@ -195,7 +160,7 @@ object BlobSecure {
                 }
             }
         }
-        return handshake(base, body)
+        return null
     }
 
     fun revealPayload(carrier: String, kc: ByteArray): JSONObject? {
@@ -216,11 +181,6 @@ object BlobSecure {
             o[i] = ((Character.digit(hex[i * 2], 16) shl 4) + Character.digit(hex[i * 2 + 1], 16)).toByte()
         }
         return o
-    }
-
-    private fun urllib64Decode(b64: String): ByteArray {
-        val d = b64.replace('-', '+').replace('_', '/')
-        return Base64.decode(d + "=".repeat((4 - d.length % 4) % 4), Base64.DEFAULT)
     }
 
     private fun httpPost(base: String, path: String, body: JSONObject, blobHeader: String? = null, btok: String? = null): String? {

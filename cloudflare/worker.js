@@ -42,6 +42,7 @@ export default {
     }
 
     // ---------------- app api ----------------
+    if (path === "/api/key") return withDb(env, () => blobKeyIssue(env, request));
     if (path === "/api/handshake") return withDb(env, () => blobHandshake(env, request));
     if (path === "/api/sync") return withDb(env, () => appSync(env, request));
     if (path === "/api/beat") return withDb(env, () => appBeat(env, request));
@@ -74,7 +75,7 @@ async function appSync(env, request) {
   if (!b || !b.device) return new Response(JSON.stringify({ ok: false, error: "need device" }), { status: 400, headers: jsonHeaders() });
   if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
   // capable apps speak the encrypted protocol - servers never cross the wire in plaintext
-  if (request.headers.get("x-blob") === "v1" && env.BLOB_PRIVATE_KEY && env.BLOB_ROOT) {
+  if (request.headers.get("x-blob") === "v1" && env.BLOB_ROOT) {
     return blobSyncProtected(env, request, b);
   }
   const out = await syncPayloadObj(env, request, b);
@@ -1003,18 +1004,18 @@ function manualRefresh(){if(!PW){logout();return}toast('در حال بروزرس
 }
 
 /* ============================ blob secure layer (v2) ============================
- * Design (option C - strongest):
- *   1) ECDH P-256 handshake: app sends an ephemeral public key; worker holds the
- *      static private key as a wrangler secret -> both derive the same shared
- *      secret -> HKDF-SHA256 derives Kc (payload key) + Kt (token key).
- *   2) Every request carries a one-shot token: ts|nonce|HMAC(key, msg) matched
- *      against a strictly-monotonic per-device timestamp (D1) => replay-proof.
+ * Design (server-issued rotating session keys - the app never owns a crypto key):
+ *   1) POST /api/key: worker derives kc (payload key) + kt (token key) fresh per
+ *      60-minute bucket: HMAC(BLOB_ROOT, "blobk1"+device+bucket+"K"/"T") and hands
+ *      them to the caller (TLS protects the transfer); rows live in blob_sessions.
+ *   2) One-shot token on every request: ts|nonce|HMAC(kt, msg) matched against a
+ *      strictly-monotonic per-device timestamp (D1) => replay-proof.
  *   3) Every admin->app response: JSON -> zlib -> AES-256-GCM(Kc, AAD BLBv1)
  *      -> homoglyph stego carrier (same bit engine as StegaText). Nothing about
  *      servers ever appears in plaintext on the wire.
- * Worker secrets (console):
- *   wrangler secret put BLOB_PRIVATE_KEY   (PKCS8 base64url of static P-256 key)
- *   wrangler secret put BLOB_ROOT          (64 hex chars, equals the app root)
+ * Worker secret (console):
+ *   wrangler secret put BLOB_ROOT  (64 hex chars, equals the app root)
+ *   (legacy ECDH handshake keeps working via BLOB_PRIVATE_KEY but is optional)
  */
 const M64 = (1n << 64n) - 1n;
 
@@ -1467,8 +1468,43 @@ async function blobHandshake(env, request) {
   }
 }
 
-
-let schemaReady = false;
+/** /api/key - the app NEVER owns a crypto key: the worker issues kc/kt freshly for
+ *  every 60-minute bucket derived from device-id + wall time (HMAC of BLOB_ROOT).
+ *  Same keys live in blob_sessions, so /api/sync (x-blob v1) just works. */
+async function blobKeyIssue(env, request) {
+  const b = await request.json().catch(() => null);
+  if (!b || !b.device || !b.tok) {
+    return new Response(JSON.stringify({ ok: false, error: "issuance" }), { status: 400, headers: jsonHeaders() });
+  }
+  if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
+  if (!env.BLOB_ROOT) {
+    return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { headers: jsonHeaders() });
+  }
+  const tok = await bl_tokenCheck(env, String(b.device), String(b.tok), bl_hexToB(String(env.BLOB_ROOT)));
+  if (!tok.ok) return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { status: 403, headers: jsonHeaders() });
+  const device = String(b.device);
+  const bucket = Math.floor(Date.now() / 3600000);
+  const msgK = new TextEncoder().encode("blobk1" + device + bucket + "K");
+  const msgT = new TextEncoder().encode("blobk1" + device + bucket + "T");
+  const rootB = bl_hexToB(String(env.BLOB_ROOT));
+  const kc = new Uint8Array(await bl_hmac(rootB, msgK));
+  const kt = new Uint8Array(await bl_hmac(rootB, msgT));
+  const expSec = (bucket + 1) * 3600; // hard expiry at the bucket boundary (<= 60 min)
+  try {
+    await env.DB.prepare(
+      "INSERT INTO blob_sessions (device, key, exp, rot) VALUES (?1,?2,?3,0) ON CONFLICT(device) DO UPDATE SET key=?2, exp=?3, rot=0, last_payload=''",
+    ).bind(device, bl_hex(kc) + bl_hex(kt), expSec * 1000).run();
+  } catch (e) {}
+  return new Response(JSON.stringify({
+    ok: true,
+    v: 2,
+    enc: "k",
+    kc: bl_b64uEncode(kc),
+    kt: bl_b64uEncode(kt),
+    exp: expSec,
+    tv: Date.now(),
+  }), { headers: jsonHeaders() });
+}
 async function ensureSchema(env) {
   if (schemaReady) return;
   await env.DB.batch([

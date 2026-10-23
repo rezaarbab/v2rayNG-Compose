@@ -126,9 +126,10 @@ object Remote {
         .put("info", deviceInfo())
 
     /**
-     * POST /api/sync - strongest mode first: the encrypted blob protocol (ECDH session,
-     * AES-256-GCM payload hidden inside a homoglyph stego carrier). Graceful fallback to
-     * the old plaintext protocol when the worker has no BLOB secrets or transport fails.
+     * POST /api/sync - strongest mode first: the encrypted blob protocol (server-issued
+     * rotating keys, AES-256-GCM payload hidden inside a homoglyph stego carrier).
+     * Graceful fallback to the old plaintext protocol when the worker has no
+     * BLOB_ROOT or transport fails.
      */
     fun sync(device: String, type: String, connected: Boolean): Result? {
         val body = buildSyncBody(device, type, connected)
