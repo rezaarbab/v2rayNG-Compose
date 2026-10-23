@@ -213,7 +213,9 @@ object BlobSecure {
             val conn = url.openConnection() as java.net.HttpURLConnection
             conn.requestMethod = "POST"
             conn.connectTimeout = 8000
-            conn.readTimeout = 15000
+            // stego carriers are large (up to a few MB when the admin delivers a file) -
+            // a short read timeout here looks exactly like "failed to connect to server"
+            conn.readTimeout = 60000
             conn.doOutput = true
             conn.setRequestProperty("content-type", "application/json")
             if (blobHeader != null) conn.setRequestProperty("x-blob", blobHeader)

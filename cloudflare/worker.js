@@ -1169,6 +1169,8 @@ function manualRefresh(){if(!PW){logout();return}toast('در حال بروزرس
  *   wrangler secret put BLOB_ROOT  (64 hex chars, equals the app root)
  */
 const M64 = (1n << 64n) - 1n;
+/** stego header magic (16-bit) - MUST equal the app's BlobStego.MAGIC16 (0xB10B). */
+const BL_MAGIC = 0xB10B;
 
 function bl_b64uDecode(s) {
   let t = String(s).replace(/-/g, "+").replace(/_/g, "/").trim();
@@ -1415,7 +1417,10 @@ async function bl_makeStego(cipherB, keyBytes) {
   let seed = 0n;
   for (let i = 0; i < 8; i++) seed = (seed << 8n) | BigInt(mac[i] & 0xFF);
   const rnd = new BlKeyedRandom(seed);
-  const carriers = bl_makeCarrier(Math.ceil((56 + cipherB.length * 8) * 1.5));
+  // carrier slot density is ~0.32 slots/char, so 4x the bit count keeps >20% headroom
+  // for every payload size up to the 45KB panel cap - text-in-text stego is the DEFAULT
+  // delivery (at 1.5x the capacity check always failed and every response fell back to enc:"c")
+  const carriers = bl_makeCarrier(Math.ceil((56 + cipherB.length * 8) * 4));
   const canon = bl_normalize(carriers);
   const slots = bl_slots(canon);
   const bitCount = 56 + cipherB.length * 8;
