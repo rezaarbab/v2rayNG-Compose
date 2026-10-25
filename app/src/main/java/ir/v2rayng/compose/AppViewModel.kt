@@ -2,6 +2,7 @@
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import ir.v2rayng.compose.core.CrashNote
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.AppInfo
 import ir.v2rayng.compose.data.LogLine
@@ -95,6 +96,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private var trafficJob: Job? = null
 
     init {
+        try {
+            CrashNote.take(AppCtx.app)?.let { log("ERROR", "Crash on last run - " + it) }
+        } catch (_: Exception) {
+        }
         val saved = store.loadServers()
         if (saved != null) {
             _state.value = _state.value.copy(

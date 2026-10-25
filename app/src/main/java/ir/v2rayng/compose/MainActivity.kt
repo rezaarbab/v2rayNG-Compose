@@ -15,6 +15,7 @@ import ir.v2rayng.compose.ui.AppRoot
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ir.v2rayng.compose.core.CrashNote.install(this)
         lockHighRefreshRate()
         applySystemBars(SettingsStore(this).load().dark)
         setContent {

@@ -53,6 +53,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import ir.v2rayng.compose.AppViewModel
+import ir.v2rayng.compose.core.CrashNote
 import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.SettingsStore
 import ir.v2rayng.compose.data.parseFloatList
@@ -140,6 +141,12 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
 
     val order = parseList(settings.navOrder, (0..4).toList()).take(5)
     val navIcons = parseList(settings.navIcons, (0..4).toList())
+
+    LaunchedEffect(settings.dark, tab) {
+        CrashNote.ui = (if (settings.dark) "dark" else "light") + " tab=" + tab +
+            " navStickers=" + settings.navStickers + " bubble=" + settings.bubbleOn +
+            " style=" + settings.stickerStyle
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,

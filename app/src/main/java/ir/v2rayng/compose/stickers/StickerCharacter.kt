@@ -391,6 +391,15 @@ fun StickerCharacter(
                     drawPath(shapePath, art.color)
                 } else {
                     drawCircle(art.color, radius = 0.34f * s, center = p(0.5f, 0.5f))
+                    // the clip below needs a shape even when the body is static, otherwise
+                    // the image/emoji is clipped away by an empty path and vanishes
+                    shapePath.rewind()
+                    for (i in 0 until 48) {
+                        val th = 2.0 * PI * i / 48
+                        val q = p(0.5f + 0.34f * cos(th).toFloat(), 0.5f + 0.34f * sin(th).toFloat())
+                        if (i == 0) shapePath.moveTo(q.x, q.y) else shapePath.lineTo(q.x, q.y)
+                    }
+                    shapePath.close()
                 }
 
                 clipPath(shapePath) {
