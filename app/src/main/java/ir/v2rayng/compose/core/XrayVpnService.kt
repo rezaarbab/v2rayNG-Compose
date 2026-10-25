@@ -21,14 +21,18 @@ class XrayVpnService : VpnService() {
         const val ACTION_CONNECT = "ir.blob.vpn.CONNECT"
         const val ACTION_STOP = "ir.blob.vpn.STOP"
         private const val EXTRA_LINK = "link"
+        private const val EXTRA_NAME = "name"
         var pendingLink: ProxyLink? = null
 
         fun start(context: android.content.Context, link: ProxyLink, raw: String) {
             pendingLink = link
             context.startForegroundService(
                 Intent(context, XrayVpnService::class.java)
-                .setAction(ACTION_CONNECT)
-                .putExtra(EXTRA_LINK, raw),
+                    .setAction(ACTION_CONNECT)
+                    .putExtra(EXTRA_LINK, raw)
+                    // the link's own #fragment is not the admin-assigned name, and onStartCommand
+                    // re-parses raw - so the display name travels separately
+                    .putExtra(EXTRA_NAME, link.name),
             )
         }
 
@@ -106,7 +110,8 @@ class XrayVpnService : VpnService() {
             else -> {
                 val raw = intent?.getStringExtra(EXTRA_LINK)
                 val link = if (raw != null) parseProxyLink(raw) else null
-                val effective = link ?: pendingLink
+                val nm = intent?.getStringExtra(EXTRA_NAME)
+                val effective = (link ?: pendingLink)?.let { if (!nm.isNullOrBlank()) it.copy(name = nm) else it }
                 if (effective == null) {
                     stopForegroundCompat()
                     stopSelf()

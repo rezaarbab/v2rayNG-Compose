@@ -25,7 +25,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -33,6 +34,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -61,6 +63,9 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var showImport by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var catSel by remember { mutableStateOf("") } // empty string means All
+    var delSrv by remember { mutableStateOf<ServerProfile?>(null) }
+    var askDead by remember { mutableStateOf(false) }
+    val deadCount = state.servers.count { it.ping == null && !it.pingErr.isNullOrBlank() }
 
     val categories = state.servers.mapNotNull { it.category.takeIf { c -> c.isNotBlank() } }.distinct()
     val filtered = state.servers.filter { srv ->
@@ -88,6 +93,11 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             TipIconButton(Icons.Filled.Delete, S.RESET_TRAFFIC, tint = MaterialTheme.colorScheme.onSurfaceVariant) { vm.resetAllServerTraffic() }
             TipIconButton(Icons.Filled.Refresh, S.REMOTE_SYNC) { vm.syncNow() }
             TipIconButton(Icons.Filled.Send, S.PING_TEST) { vm.pingAll() }
+            TipIconButton(
+                Icons.Filled.Clear,
+                if (deadCount > 0) S.DELETE_DEAD + " (" + deadCount + ")" else S.NOTHING_TO_DELETE,
+                tint = if (deadCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            ) { askDead = true }
         }
         Spacer(Modifier.height(10.dp))
 
@@ -139,6 +149,8 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                         onPick = { vm.select(srv.id) },
                         onIconHold = { editSrv = srv.id },
                         onPin = { vm.togglePin(srv.id) },
+                        onPingOne = { vm.pingServers(listOf(srv.id), false) },
+                        onDelete = { delSrv = srv },
                     )
                 }
             }
@@ -150,6 +162,32 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     }
     if (showImport) {
         ImportLinkDialog(vm) { showImport = false }
+    }
+
+    delSrv?.let { srv ->
+        AlertDialog(
+            onDismissRequest = { delSrv = null },
+            title = { Text(S.DELETE_Q.format(srv.name)) },
+            text = { if (srv.id.startsWith("rem-")) Text(S.REMOTE_COMES_BACK) },
+            confirmButton = {
+                TextButton(onClick = { vm.deleteServer(srv.id); delSrv = null }) { Text(S.DELETE_ONE) }
+            },
+            dismissButton = { TextButton(onClick = { delSrv = null }) { Text(S.CANCEL) } },
+        )
+    }
+
+    if (askDead) {
+        AlertDialog(
+            onDismissRequest = { askDead = false },
+            title = { Text(S.DELETE_DEAD_Q.format(deadCount)) },
+            text = { if (deadCount > 0) Text(S.REMOTE_COMES_BACK) else Text(S.NOTHING_TO_DELETE) },
+            confirmButton = {
+                TextButton(onClick = { vm.deleteUnpingable(); askDead = false }, enabled = deadCount > 0) {
+                    Text(S.DELETE_DEAD)
+                }
+            },
+            dismissButton = { TextButton(onClick = { askDead = false }) { Text(S.CANCEL) } },
+        )
     }
 }
 
@@ -191,6 +229,8 @@ private fun ServerRow(
     onPick: () -> Unit,
     onIconHold: () -> Unit,
     onPin: () -> Unit,
+    onPingOne: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
     Card(
@@ -275,6 +315,20 @@ private fun ServerRow(
                 }
             }
             PingChip(profile.ping, profile.pingErr)
+            IconButton(onClick = onPingOne) {
+                Icon(
+                    Icons.Filled.PlayArrow,
+                    contentDescription = S.PING_ONE,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = S.DELETE_ONE,
+                    tint = MaterialTheme.colorScheme.outline,
+                )
+            }
             IconButton(onClick = onPin) {
                 Icon(
                     Icons.Filled.Star,

@@ -837,7 +837,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 return
             }
             log("INFO", S.LOG_CONNECTING.format(target.name))
-            ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed, target.link)
+            ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed.copy(name = target.name.ifBlank { parsed.name }), target.link)
             return
         }
         put { s -> s.copy(vpnState = VpnState.CONNECTING) }
@@ -988,7 +988,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                         sem.withPermit {
                             val parsed = srv.link?.let { l -> try { ir.v2rayng.compose.core.parseProxyLink(l) } catch (_: Exception) { null } }
                             val (ms, msErr) = when {
-                                parsed != null -> probePing(parsed)
+                                parsed != null -> probePing(parsed, srv.name)
                                 srv.link != null -> {
                                     log("WARN", "Ping failed to parse: ${srv.name}")
                                     null to "config"
@@ -1019,7 +1019,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      * https -> (plain http only when tls/anti-bot specifically died) -> tcp for one parsed server.
      * Returns (delay ms, short error) - error is null when the ping succeeded.
      */
-    private suspend fun probePing(l: ir.v2rayng.compose.core.ProxyLink): Pair<Int?, String?> = withContext(Dispatchers.IO) {
+    private suspend fun probePing(l: ir.v2rayng.compose.core.ProxyLink, label: String = ""): Pair<Int?, String?> = withContext(Dispatchers.IO) {
         var ms: Int? = null
         var token = ""
         var detail = ""
@@ -1054,7 +1054,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 token = "tcp"
             }
         }
-        val who = l.name.ifBlank { "${l.address}:${l.port}" }
+        val who = label.ifBlank { l.name }.ifBlank { "${l.address}:${l.port}" }
         if (ms != null) {
             if (via != "https") log("INFO", "Ping $who: ${ms}ms ($via fallback)")
         } else {
@@ -1252,6 +1252,26 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         persistServers()
     }
 
+    fun deleteServer(id: String) {
+        val gone = _state.value.servers.firstOrNull { it.id == id } ?: return
+        put { s -> s.copy(servers = s.servers.filter { it.id != id }) }
+        if (_state.value.selectedId == id) _state.value.servers.firstOrNull()?.let { select(it.id) }
+        persistServers()
+        log("INFO", "Server deleted - " + gone.name)
+    }
+
+    /** Only servers that were actually measured and failed; never-measured rows are kept. */
+    fun deleteUnpingable(): Int {
+        val dead = _state.value.servers.filter { it.ping == null && !it.pingErr.isNullOrBlank() }
+        if (dead.isEmpty()) return 0
+        val ids = dead.map { it.id }.toSet()
+        put { s -> s.copy(servers = s.servers.filterNot { it.id in ids }) }
+        if (_state.value.selectedId in ids) _state.value.servers.firstOrNull()?.let { select(it.id) }
+        persistServers()
+        log("INFO", "Deleted " + dead.size + " unresponsive servers")
+        return dead.size
+    }
+
     fun resetTotalTraffic() {
         appUp = 0
         appDown = 0
@@ -1285,7 +1305,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 if (parsed != null) {
                     log("INFO", S.LOG_CONNECTING.format(sel.name))
                     // the running service's connect intent swaps the core internally (700ms settle)
-                    ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed, sel.link)
+                    ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed.copy(name = sel.name.ifBlank { parsed.name }), sel.link)
                 } else {
                     put { s -> s.copy(vpnState = VpnState.BROKEN) }
                 }
