@@ -57,30 +57,38 @@ object BlobStego {
 
     class RevealedBlob(val json: String)
 
+    /** Why the last reveal/open failed - short, log/toast safe (no URLs). */
+    @Volatile
+    var lastWhy: String? = null
+
     /** Reveal an admin response carrier into plaintext (null = wrong keys / damaged). */
     fun reveal(stego: String, kc: ByteArray): String? {
-        if (kc.size != 32) { blog("reveal: bad key size " + kc.size); return null }
-        for (robust in arrayOf(true)) {
-            val slots = buildSlots(stego, robust)
-            if (slots.size < 56) { blog("reveal: too few slots (" + slots.size + ")"); continue }
-            val rnd = KeyedRandom(orderSeed(kc))
-            val shuffled = keyShuffle(slots.size, rnd)
-            val head = BooleanArray(56)
-            for (i in 0 until 56) head[i] = evalSlot(stego, slots[shuffled[i]])
-            val magic = readIntBits(head, 0, 16)
-            if (magic != MAGIC16) { blog("reveal: magic mismatch 0x" + Integer.toHexString(magic) + " (expect 0x" + Integer.toHexString(MAGIC16) + ")"); continue }
-            val cipherLen = readIntBits(head, 16, 32)
-            if (cipherLen <= 0 || cipherLen > MAX_CIPHER) { blog("reveal: bad cipher len " + cipherLen); continue }
-            if (56 + cipherLen * 8 > slots.size) { blog("reveal: capacity short len=" + cipherLen + " slots=" + slots.size); continue }
-            val data = BooleanArray(cipherLen * 8)
-            for (i in 0 until cipherLen * 8) data[i] = evalSlot(stego, slots[shuffled[56 + i]])
-            val cipher = bytesOfBits(data)
-            val plain = blobOpen(cipher, kc)
-            if (plain == null) { blog("reveal: GCM open failed for len=" + cipherLen); continue }
-            val jsonU8 = BlobZip.open(plain)
-            blog("reveal: OK cipherLen=" + cipherLen)
-            return String(jsonU8, Charsets.UTF_8)
-        }
+        lastWhy = null
+        if (kc.size != 32) return why("stego: bad key size " + kc.size)
+        val slots = buildSlots(stego, true)
+        if (slots.size < 56) return why("stego: carrier too small for a header (" + slots.size + " slots)")
+        val rnd = KeyedRandom(orderSeed(kc))
+        val shuffled = keyShuffle(slots.size, rnd)
+        val head = BooleanArray(56)
+        for (i in 0 until 56) head[i] = evalSlot(stego, slots[shuffled[i]])
+        val magic = readIntBits(head, 0, 16)
+        // a wrong Kc scrambles the header first, so this is the key-mismatch signature
+        if (magic != MAGIC16) return why("stego: header not recognized (keys out of sync, or worker format differs)")
+        val cipherLen = readIntBits(head, 16, 32)
+        if (cipherLen <= 0 || cipherLen > MAX_CIPHER) return why("stego: bad cipher len " + cipherLen)
+        if (56 + cipherLen * 8 > slots.size) return why("stego: carrier shorter than payload (need " + (56 + cipherLen * 8) + ", got " + slots.size + ")")
+        val data = BooleanArray(cipherLen * 8)
+        for (i in 0 until cipherLen * 8) data[i] = evalSlot(stego, slots[shuffled[56 + i]])
+        val cipher = bytesOfBits(data)
+        val plain = blobOpen(cipher, kc) ?: return why("stego: GCM tag fail (wrong key or damaged carrier)")
+        val jsonU8 = BlobZip.open(plain)
+        blog("reveal: OK cipherLen=" + cipherLen)
+        return String(jsonU8, Charsets.UTF_8)
+    }
+
+    private fun why(w: String): String? {
+        blog("reveal: " + w)
+        lastWhy = w
         return null
     }
 

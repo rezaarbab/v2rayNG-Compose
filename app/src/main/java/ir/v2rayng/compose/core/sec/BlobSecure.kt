@@ -166,17 +166,20 @@ object BlobSecure {
             }
             val resp = JSONObject(text)
             when (val enc = resp.optString("enc")) {
-                "s" -> {
-                    val r = revealPayload(resp.getString("st"), sNow.kc)
-                    if (r == null) blog("enc=s but stego reveal failed (keys mismatch?)")
-                    if (r == null) fail("payload verification failed (decrypt)")
-                    return r
-                }
-                "c" -> {
-                    val r = openCy(resp.getString("cy"), sNow.kc)
-                    if (r == null) blog("enc=c but GCM open failed")
-                    if (r == null) fail("payload verification failed (decrypt)")
-                    return r
+                "s", "c" -> {
+                    val r = if (enc == "s") revealPayload(resp.getString("st"), sNow.kc) else openCy(resp.getString("cy"), sNow.kc)
+                    if (r != null) return r
+                    val why = BlobStego.lastWhy ?: "payload unreadable"
+                    blog("enc=" + enc + " open failed: " + why)
+                    // the token was accepted, so the worker holds keys this session cannot open -
+                    // drop it and re-issue once instead of failing every sync from now on
+                    if (issued) {
+                        fail("payload verification failed ($why)")
+                        return null
+                    }
+                    issued = true
+                    clear()
+                    session = issueKeys(base, body) ?: return null
                 }
                 "n" -> return JSONObject().put("__nc", true)
                 "h" -> {
@@ -206,14 +209,30 @@ object BlobSecure {
 
     fun revealPayload(carrier: String, kc: ByteArray): JSONObject? {
         val text = BlobStego.reveal(carrier, kc) ?: return null
-        return try { JSONObject(text) } catch (_: Exception) { null }
+        return try {
+            JSONObject(text)
+        } catch (_: Exception) {
+            BlobStego.lastWhy = "stego: plaintext is not json (" + text.length + " chars)"
+            blog("revealPayload: json parse failed, " + text.length + " chars")
+            null
+        }
     }
 
     fun openCy(hexCy: String, kc: ByteArray): JSONObject? {
-        val blob = BlobB64.decode(hexCy) ?: return null
-        val plain = BlobStego.blobOpen(blob, kc) ?: return null
+        val blob = BlobB64.decode(hexCy) ?: return cyWhy("cy: not base64")
+        val plain = BlobStego.blobOpen(blob, kc) ?: return cyWhy("cy: GCM tag fail (wrong key)")
         val jsonU8 = BlobZip.open(plain)
-        return try { JSONObject(String(jsonU8, Charsets.UTF_8)) } catch (_: Exception) { null }
+        return try {
+            JSONObject(String(jsonU8, Charsets.UTF_8))
+        } catch (_: Exception) {
+            cyWhy("cy: plaintext is not json (${jsonU8.size} bytes)")
+        }
+    }
+
+    private fun cyWhy(w: String): JSONObject? {
+        blog("openCy: " + w)
+        BlobStego.lastWhy = w
+        return null
     }
 
     fun hexToBytes(hex: String): ByteArray {
