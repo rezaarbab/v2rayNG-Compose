@@ -38,7 +38,7 @@ object CrashNote {
                     cause = cause.cause
                 }
                 app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                    .putString(KEY, sb.take(1800))
+                    .putString(KEY, sb.toString().take(1800))
                     .commit()
             } catch (_: Exception) {
             }
