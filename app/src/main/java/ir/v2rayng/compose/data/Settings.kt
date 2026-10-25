@@ -113,78 +113,113 @@ class SettingsStore(context: Context) {
     private val ctx: Context = context.applicationContext
 
     companion object {
-        /** load() unseals every value separately, and each unseal is ~200ms of StrongBox time on
-         *  the phone captured in the APP_SCOUT traces, so the parsed object is shared in memory.
-         *  Every write goes through save() here and keeps it current. */
+        /** Each value used to be sealed on its own, so a cold load() cost 58 StrongBox round trips
+         *  (~200ms each on the phone in the APP_SCOUT traces) and the app sat on a black screen for
+         *  about a minute after every restart. The whole object is now one sealed blob: one unseal. */
+        private const val BLOB_KEY = "sec-all"
+
         @Volatile
         private var cache: Settings? = null
+
+        @Volatile
+        private var blobJson: String? = null
 
         /** Never blocks: null until someone has actually loaded the settings once. */
         fun peek(): Settings? = cache
     }
 
-    fun load(): Settings = cache ?: build().also { cache = it }
+    fun load(): Settings = cache ?: readBlob().also { cache = it }
 
-    private fun build(): Settings = Settings(
-        dark = SecurePrefs.getBoolean("dark", true, ctx),
-        accent = SecurePrefs.getInt("accent", 0, ctx),
-        customAccent = SecurePrefs.getLong("customAccent", -1L, ctx),
-        stickerStyle = SecurePrefs.getInt("style", 0, ctx),
-        mainPack = SecurePrefs.getInt("mainPack", -1, ctx),
-        mainFx = SecurePrefs.getString("mainFx", "", ctx),
-        wallpaperStyle = SecurePrefs.getInt("wallStyle", 0, ctx),
-        wallpaperIndex = SecurePrefs.getInt("wallpaper", -1, ctx),
-        wallpaperColor = SecurePrefs.getLong("wallColor", -1L, ctx),
-        wallpaperSize = SecurePrefs.getInt("wallSize", 0, ctx),
-        wallFx = SecurePrefs.getString("wallFx", "", ctx),
-        mainColor = SecurePrefs.getLong("mainColor", -1L, ctx),
-        mainSize = SecurePrefs.getInt("mainSize", 0, ctx),
-        mainIndex = SecurePrefs.getInt("mainIndex", -1, ctx),
-        followFinger = SecurePrefs.getBoolean("followFinger", true, ctx),
-        animate = SecurePrefs.getBoolean("animate", true, ctx),
-        stateMotion = SecurePrefs.getBoolean("stateMotion", true, ctx),
-        showNotification = SecurePrefs.getBoolean("showNotification", true, ctx),
-        notifSticker = SecurePrefs.getBoolean("notifSticker", true, ctx),
-        notifColor = SecurePrefs.getLong("notifColor", -1L, ctx),
-        flagAvatars = SecurePrefs.getBoolean("flagAvatars", true, ctx),
-        connectFlagDancer = SecurePrefs.getBoolean("connectFlagDancer", true, ctx),
-        speed = SecurePrefs.getFloat("speed", 1f, ctx),
-        bgSpeed = SecurePrefs.getFloat("bgSpeed", 1f, ctx),
-        navStickers = SecurePrefs.getBoolean("navStickers", true, ctx),
-        autoFlag = SecurePrefs.getBoolean("autoFlag", true, ctx),
-        navOrder = SecurePrefs.getString("navOrder", "0,1,2,3,4", ctx),
-        navIcons = SecurePrefs.getString("navIcons", "0,1,2,3,4", ctx),
-        upIcon = SecurePrefs.getInt("upIcon", 5, ctx),
-        downIcon = SecurePrefs.getInt("downIcon", 6, ctx),
-        upPack = SecurePrefs.getInt("upPack", -1, ctx),
-        downPack = SecurePrefs.getInt("downPack", -1, ctx),
-        navPacks = SecurePrefs.getString("navPacks", "-1,-1,-1,-1,-1", ctx),
-        routePacks = SecurePrefs.getString("routePacks", "-1,-1,-1", ctx),
-        upColor = SecurePrefs.getLong("upColor", -1L, ctx),
-        downColor = SecurePrefs.getLong("downColor", -1L, ctx),
-        upSpeed = SecurePrefs.getFloat("upSpeed", 1f, ctx),
-        downSpeed = SecurePrefs.getFloat("downSpeed", 1f, ctx),
-        navColors = SecurePrefs.getString("navColors", "-1,-1,-1,-1,-1", ctx),
-        routeColors = SecurePrefs.getString("routeColors", "-1,-1,-1", ctx),
-        navSpeeds = SecurePrefs.getString("navSpeeds", "1,1,1,1,1", ctx),
-        routeSpeeds = SecurePrefs.getString("routeSpeeds", "1,1,1", ctx),
-        routeIcons = SecurePrefs.getString("routeIcons", "0,1,2", ctx),
-        upFx = SecurePrefs.getString("upFx", "", ctx),
-        downFx = SecurePrefs.getString("downFx", "", ctx),
-        navFx = SecurePrefs.getString("navFx", "", ctx),
-        routeFx = SecurePrefs.getString("routeFx", "", ctx),
-        antiFilter = SecurePrefs.getBoolean("antiFilter", false, ctx),
-        antiFilterApps = SecurePrefs.getString("antiFilterApps", "", ctx),
-        homeOrder = SecurePrefs.getString("homeOrder", "0,1,2,3,4", ctx),
-        pingOnStart = SecurePrefs.getBoolean("pingOnStart", true, ctx),
-        autoPingNew = SecurePrefs.getBoolean("autoPingNew", true, ctx),
-        flagOnStart = SecurePrefs.getBoolean("flagOnStart", true, ctx),
-        autoFlagNew = SecurePrefs.getBoolean("autoFlagNew", true, ctx),
-        flagStretch = SecurePrefs.getFloat("flagStretch", 0.66f, ctx),
-        flagRound = SecurePrefs.getFloat("flagRound", 0.45f, ctx),
-        bubbleOn = SecurePrefs.getBoolean("bubbleOn", true, ctx),
-        bubbleColor = SecurePrefs.getLong("bubbleColor", -1L, ctx),
-    )
+    /** The one key needed before the whole object, without sealing 58 of them at startup. */
+    fun dark(): Boolean {
+        val raw = blobRaw()
+        if (!raw.isNullOrBlank()) {
+            try { return JSONObject(raw).optString("dark", "true").toBoolean() } catch (_: Exception) {}
+        }
+        return SecurePrefs.getBoolean("dark", true, ctx)
+    }
+
+    private fun blobRaw(): String? = blobJson ?: SecurePrefs.get(BLOB_KEY, ctx).also { blobJson = it }
+
+    private fun readBlob(): Settings {
+        blobRaw()?.takeIf { it.isNotBlank() }?.let { raw ->
+            try {
+                val j = JSONObject(raw)
+                return fieldsFrom { k -> j.optString(k, "").takeIf { v -> v.isNotEmpty() } }
+            } catch (_: Exception) {
+            }
+        }
+        // first start after the per-key layout: read the old keys once, then fold them into the blob
+        return fieldsFrom { k -> SecurePrefs.get(k, ctx) }.also { save(it) }
+    }
+
+    private fun fieldsFrom(src: (String) -> String?): Settings {
+        fun b(k: String, d: Boolean) = src(k)?.toBoolean() ?: d
+        fun i(k: String, d: Int) = src(k)?.toIntOrNull() ?: d
+        fun l(k: String, d: Long) = src(k)?.toLongOrNull() ?: d
+        fun f(k: String, d: Float) = src(k)?.toFloatOrNull() ?: d
+        fun t(k: String, d: String) = src(k) ?: d
+        return Settings(
+            dark = b("dark", true),
+            accent = i("accent", 0),
+            customAccent = l("customAccent", -1L),
+            stickerStyle = i("style", 0),
+            mainPack = i("mainPack", -1),
+            mainFx = t("mainFx", ""),
+            wallpaperStyle = i("wallStyle", 0),
+            wallpaperIndex = i("wallpaper", -1),
+            wallpaperColor = l("wallColor", -1L),
+            wallpaperSize = i("wallSize", 0),
+            wallFx = t("wallFx", ""),
+            mainColor = l("mainColor", -1L),
+            mainSize = i("mainSize", 0),
+            mainIndex = i("mainIndex", -1),
+            followFinger = b("followFinger", true),
+            animate = b("animate", true),
+            stateMotion = b("stateMotion", true),
+            showNotification = b("showNotification", true),
+            notifSticker = b("notifSticker", true),
+            notifColor = l("notifColor", -1L),
+            flagAvatars = b("flagAvatars", true),
+            connectFlagDancer = b("connectFlagDancer", true),
+            speed = f("speed", 1f),
+            bgSpeed = f("bgSpeed", 1f),
+            navStickers = b("navStickers", true),
+            autoFlag = b("autoFlag", true),
+            navOrder = t("navOrder", "0,1,2,3,4"),
+            navIcons = t("navIcons", "0,1,2,3,4"),
+            upIcon = i("upIcon", 5),
+            downIcon = i("downIcon", 6),
+            upPack = i("upPack", -1),
+            downPack = i("downPack", -1),
+            navPacks = t("navPacks", "-1,-1,-1,-1,-1"),
+            routePacks = t("routePacks", "-1,-1,-1"),
+            upColor = l("upColor", -1L),
+            downColor = l("downColor", -1L),
+            upSpeed = f("upSpeed", 1f),
+            downSpeed = f("downSpeed", 1f),
+            navColors = t("navColors", "-1,-1,-1,-1,-1"),
+            routeColors = t("routeColors", "-1,-1,-1"),
+            navSpeeds = t("navSpeeds", "1,1,1,1,1"),
+            routeSpeeds = t("routeSpeeds", "1,1,1"),
+            routeIcons = t("routeIcons", "0,1,2"),
+            upFx = t("upFx", ""),
+            downFx = t("downFx", ""),
+            navFx = t("navFx", ""),
+            routeFx = t("routeFx", ""),
+            antiFilter = b("antiFilter", false),
+            antiFilterApps = t("antiFilterApps", ""),
+            homeOrder = t("homeOrder", "0,1,2,3,4"),
+            pingOnStart = b("pingOnStart", true),
+            autoPingNew = b("autoPingNew", true),
+            flagOnStart = b("flagOnStart", true),
+            autoFlagNew = b("autoFlagNew", true),
+            flagStretch = f("flagStretch", 0.66f),
+            flagRound = f("flagRound", 0.45f),
+            bubbleOn = b("bubbleOn", true),
+            bubbleColor = l("bubbleColor", -1L),
+        )
+    }
 
     fun loadServers(): List<ServerProfile>? {
         return try {
@@ -266,77 +301,72 @@ class SettingsStore(context: Context) {
         SecurePrefs.set("selectedId", id, ctx)
     }
 
-    /**
-     * One SecurePrefs write is a StrongBox AES-GCM seal, and MIUI devices take ~200ms for it.
-     * save() covers 58 keys, so rewriting unchanged values is what froze the UI on a toggle.
-     */
-    private val lastSaved = HashMap<String, String>()
-
-    private fun put(key: String, value: String) {
-        if (lastSaved[key] == value) return
-        lastSaved[key] = value
-        SecurePrefs.set(key, value, ctx)
-    }
-
+    /** One seal for the whole object instead of 58 - that per-key write is what froze the UI. */
     fun save(s: Settings) {
         cache = s
-        put("dark", s.dark.toString())
-        put("accent", s.accent.toString())
-        put("customAccent", s.customAccent.toString())
-        put("style", s.stickerStyle.toString())
-        put("mainPack", s.mainPack.toString())
-        put("mainFx", s.mainFx)
-        put("wallStyle", s.wallpaperStyle.toString())
-        put("wallpaper", s.wallpaperIndex.toString())
-        put("wallColor", s.wallpaperColor.toString())
-        put("wallSize", s.wallpaperSize.toString())
-        put("wallFx", s.wallFx)
-        put("mainColor", s.mainColor.toString())
-        put("mainSize", s.mainSize.toString())
-        put("mainIndex", s.mainIndex.toString())
-        put("followFinger", s.followFinger.toString())
-        put("animate", s.animate.toString())
-        put("stateMotion", s.stateMotion.toString())
-        put("showNotification", s.showNotification.toString())
-        put("notifSticker", s.notifSticker.toString())
-        put("notifColor", s.notifColor.toString())
-        put("flagAvatars", s.flagAvatars.toString())
-        put("connectFlagDancer", s.connectFlagDancer.toString())
-        put("speed", s.speed.toString())
-        put("bgSpeed", s.bgSpeed.toString())
-        put("navStickers", s.navStickers.toString())
-        put("autoFlag", s.autoFlag.toString())
-        put("navOrder", s.navOrder)
-        put("navIcons", s.navIcons)
-        put("upIcon", s.upIcon.toString())
-        put("downIcon", s.downIcon.toString())
-        put("upPack", s.upPack.toString())
-        put("downPack", s.downPack.toString())
-        put("navPacks", s.navPacks)
-        put("routePacks", s.routePacks)
-        put("upColor", s.upColor.toString())
-        put("downColor", s.downColor.toString())
-        put("upSpeed", s.upSpeed.toString())
-        put("downSpeed", s.downSpeed.toString())
-        put("navColors", s.navColors)
-        put("routeColors", s.routeColors)
-        put("navSpeeds", s.navSpeeds)
-        put("routeSpeeds", s.routeSpeeds)
-        put("routeIcons", s.routeIcons)
-        put("upFx", s.upFx)
-        put("downFx", s.downFx)
-        put("navFx", s.navFx)
-        put("routeFx", s.routeFx)
-        put("antiFilter", s.antiFilter.toString())
-        put("antiFilterApps", s.antiFilterApps)
-        put("homeOrder", s.homeOrder)
-        put("pingOnStart", s.pingOnStart.toString())
-        put("autoPingNew", s.autoPingNew.toString())
-        put("flagOnStart", s.flagOnStart.toString())
-        put("autoFlagNew", s.autoFlagNew.toString())
-        put("flagStretch", s.flagStretch.toString())
-        put("flagRound", s.flagRound.toString())
-        put("bubbleOn", s.bubbleOn.toString())
-        put("bubbleColor", s.bubbleColor.toString())
+        val j = JSONObject()
+        fun p(k: String, v: Any) { j.put(k, v.toString()) }
+        p("dark", s.dark)
+        p("accent", s.accent)
+        p("customAccent", s.customAccent)
+        p("style", s.stickerStyle)
+        p("mainPack", s.mainPack)
+        p("mainFx", s.mainFx)
+        p("wallStyle", s.wallpaperStyle)
+        p("wallpaper", s.wallpaperIndex)
+        p("wallColor", s.wallpaperColor)
+        p("wallSize", s.wallpaperSize)
+        p("wallFx", s.wallFx)
+        p("mainColor", s.mainColor)
+        p("mainSize", s.mainSize)
+        p("mainIndex", s.mainIndex)
+        p("followFinger", s.followFinger)
+        p("animate", s.animate)
+        p("stateMotion", s.stateMotion)
+        p("showNotification", s.showNotification)
+        p("notifSticker", s.notifSticker)
+        p("notifColor", s.notifColor)
+        p("flagAvatars", s.flagAvatars)
+        p("connectFlagDancer", s.connectFlagDancer)
+        p("speed", s.speed)
+        p("bgSpeed", s.bgSpeed)
+        p("navStickers", s.navStickers)
+        p("autoFlag", s.autoFlag)
+        p("navOrder", s.navOrder)
+        p("navIcons", s.navIcons)
+        p("upIcon", s.upIcon)
+        p("downIcon", s.downIcon)
+        p("upPack", s.upPack)
+        p("downPack", s.downPack)
+        p("navPacks", s.navPacks)
+        p("routePacks", s.routePacks)
+        p("upColor", s.upColor)
+        p("downColor", s.downColor)
+        p("upSpeed", s.upSpeed)
+        p("downSpeed", s.downSpeed)
+        p("navColors", s.navColors)
+        p("routeColors", s.routeColors)
+        p("navSpeeds", s.navSpeeds)
+        p("routeSpeeds", s.routeSpeeds)
+        p("routeIcons", s.routeIcons)
+        p("upFx", s.upFx)
+        p("downFx", s.downFx)
+        p("navFx", s.navFx)
+        p("routeFx", s.routeFx)
+        p("antiFilter", s.antiFilter)
+        p("antiFilterApps", s.antiFilterApps)
+        p("homeOrder", s.homeOrder)
+        p("pingOnStart", s.pingOnStart)
+        p("autoPingNew", s.autoPingNew)
+        p("flagOnStart", s.flagOnStart)
+        p("autoFlagNew", s.autoFlagNew)
+        p("flagStretch", s.flagStretch)
+        p("flagRound", s.flagRound)
+        p("bubbleOn", s.bubbleOn)
+        p("bubbleColor", s.bubbleColor)
+        val raw = j.toString()
+        if (raw == blobJson) return
+        blobJson = raw
+        SecurePrefs.set(BLOB_KEY, raw, ctx)
     }
 }
