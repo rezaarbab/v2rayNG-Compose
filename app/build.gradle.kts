@@ -13,7 +13,8 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1.0"
+        // CI commit marker: the log screen prints this, so a report always says which build ran
+        versionName = "0.1.0-" + (System.getenv("GITHUB_SHA")?.take(7) ?: "local")
     }
 
     signingConfigs {

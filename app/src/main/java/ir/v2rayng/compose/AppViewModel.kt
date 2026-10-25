@@ -97,7 +97,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     init {
         try {
+            val pkg = AppCtx.app.packageManager.getPackageInfo(AppCtx.app.packageName, 0)
+            log("INFO", "build " + (pkg.versionName ?: "?"))
             CrashNote.take(AppCtx.app)?.let { log("ERROR", "Crash on last run - " + it) }
+            CrashNote.exitReasons(AppCtx.app)?.let { log("WARN", "Last process exits - " + it) }
         } catch (_: Exception) {
         }
         val saved = store.loadServers()

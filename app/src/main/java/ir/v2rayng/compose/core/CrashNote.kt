@@ -1,5 +1,6 @@
 package ir.v2rayng.compose.core
 
+import android.app.ActivityManager
 import android.content.Context
 
 /**
@@ -15,6 +16,25 @@ object CrashNote {
     /** what the UI looked like when the crash happened, e.g. "light tab=2 srv=true" */
     @Volatile
     var ui: String = "?"
+
+    /**
+     * How the previous process actually died, straight from the system: distinguishes a Java
+     * crash from an ANR/hang, a native crash and a low-memory kill. A hang never reaches the
+     * exception handler above, so this is the only way to see it without adb. (minSdk 26.)
+     */
+    fun exitReasons(ctx: Context): String? {
+        return try {
+            val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val hist = am.getHistoricalProcessExitReasons(ctx.packageName, 0, 3)
+            if (hist.isEmpty()) return null
+            hist.joinToString(" | ") { i ->
+                "reason=" + i.reason + " sub=" + i.subReason + " imp=" + i.importance +
+                    " at " + i.timeStamp + " " + (i.description ?: "")
+            }.take(700)
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     fun install(ctx: Context) {
         val app = ctx.applicationContext
