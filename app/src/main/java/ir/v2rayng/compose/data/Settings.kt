@@ -112,7 +112,20 @@ fun parseFxPack(s: String, def: StickerFx = StickerFx()): StickerFx {
 class SettingsStore(context: Context) {
     private val ctx: Context = context.applicationContext
 
-    fun load(): Settings = Settings(
+    companion object {
+        /** load() unseals every value separately, and each unseal is ~200ms of StrongBox time on
+         *  the phone captured in the APP_SCOUT traces, so the parsed object is shared in memory.
+         *  Every write goes through save() here and keeps it current. */
+        @Volatile
+        private var cache: Settings? = null
+
+        /** Never blocks: null until someone has actually loaded the settings once. */
+        fun peek(): Settings? = cache
+    }
+
+    fun load(): Settings = cache ?: build().also { cache = it }
+
+    private fun build(): Settings = Settings(
         dark = SecurePrefs.getBoolean("dark", true, ctx),
         accent = SecurePrefs.getInt("accent", 0, ctx),
         customAccent = SecurePrefs.getLong("customAccent", -1L, ctx),
@@ -266,6 +279,7 @@ class SettingsStore(context: Context) {
     }
 
     fun save(s: Settings) {
+        cache = s
         put("dark", s.dark.toString())
         put("accent", s.accent.toString())
         put("customAccent", s.customAccent.toString())

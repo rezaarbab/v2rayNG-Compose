@@ -181,25 +181,45 @@ class XrayVpnService : VpnService() {
             val channel = android.app.NotificationChannel("blob_vpn", "Blob VPN", android.app.NotificationManager.IMPORTANCE_LOW)
             manager?.createNotificationChannel(channel)
         }
-        val settings = SettingsStore(applicationContext).load()
-        val big = stickerBitmap(settings)
-        val builder = NotificationCompat.Builder(this, "blob_vpn")
+        // startForeground() has to happen within seconds of onStartCommand, and reading the
+        // settings means 58 StrongBox unseals - go up with the cheap notification first
+        androidx.core.app.ServiceCompat.startForeground(
+            this,
+            1001,
+            notification(link, null).build(),
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+        )
+        Persist.write {
+            var big: android.graphics.Bitmap? = null
+            try {
+                big = stickerBitmap(SettingsStore(applicationContext).load())
+            } catch (_: Exception) {
+            }
+            try {
+                manager?.notify(1001, notification(link, big).build())
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun notification(link: ProxyLink, big: android.graphics.Bitmap?): NotificationCompat.Builder {
+        val b = NotificationCompat.Builder(this, "blob_vpn")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentTitle("Blob")
             .setOngoing(true)
+            .setContentText(link.name.ifBlank { "Connected - ${link.address}" })
         big?.let {
-            builder.setLargeIcon(it)
-            builder.setColor(it.getPixel(128, 128))
+            b.setLargeIcon(it)
+            b.setColor(it.getPixel(128, 128))
         }
-        builder.setContentText(link.name.ifBlank { "Connected - ${link.address}" })
         val stopIntent = android.app.PendingIntent.getService(
             this,
             7,
             Intent(this, XrayVpnService::class.java).setAction(ACTION_STOP),
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        builder.addAction(0, "Disconnect", stopIntent)
-        androidx.core.app.ServiceCompat.startForeground(this, 1001, builder.build(), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        b.addAction(0, "Disconnect", stopIntent)
+        return b
     }
 
     private fun startCore(link: ProxyLink) {
