@@ -27,13 +27,20 @@ object SecurePrefs {
     private fun sp(context: Context?): android.content.SharedPreferences =
         (context ?: AppCtx.app).getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
 
+    /** Reading a value is a StrongBox unseal (~200ms on the phone in the APP_SCOUT traces), and
+     *  startup touches the same keys repeatedly, so decoded values are memoized for the process
+     *  and dropped the moment the key is written. */
+    private val memo = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     fun set(key: String, value: String?, context: Context? = null) {
+        memo.remove(key)
         try {
             if (value == null) {
                 sp(context).edit().remove(key).apply()
             } else {
                 val sealed = BlobVault.seal(value.toByteArray(Charsets.UTF_8)) ?: return
                 sp(context).edit().putString(key, sealed).apply()
+                memo[key] = value
             }
         } catch (_: Exception) {
         }
@@ -41,6 +48,13 @@ object SecurePrefs {
 
     /** null = absent (or unreadable); falls back to legacy plaintext and migrates it */
     fun get(key: String, context: Context? = null): String? {
+        memo[key]?.let { return it }
+        val v = readStored(key, context) ?: return null
+        memo[key] = v
+        return v
+    }
+
+    private fun readStored(key: String, context: Context?): String? {
         return try {
             val s = sp(context)
             val raw = s.getString(key, null)
@@ -84,6 +98,7 @@ object SecurePrefs {
     fun contains(key: String, context: Context? = null): Boolean =
         try { sp(context).contains(key) } catch (_: Exception) { false }
     fun remove(key: String, context: Context? = null) {
+        memo.remove(key)
         try {
             sp(context).edit().remove(key).apply()
         } catch (_: Exception) {

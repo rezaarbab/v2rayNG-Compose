@@ -46,6 +46,9 @@ import kotlin.random.Random
 object AppCtx {
     @Volatile
     lateinit var app: android.content.Context
+
+    @Volatile
+    var bootMs: Long = 0L
 }
 
 /** delay probes: https is the honest one, plain http survives anti-bot TLS blocks, tcp is the last resort */
@@ -105,13 +108,16 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             CrashNote.exitReasons(AppCtx.app)?.let { log("WARN", "Last process exits - " + it) }
         } catch (_: Exception) {
         }
+        val tLoad0 = android.os.SystemClock.elapsedRealtime()
         val saved = store.loadServers()
+        val sel = store.loadSelectedId()
         if (saved != null) {
             _state.value = _state.value.copy(
                 servers = saved,
-                selectedId = if (saved.any { it.id == store.loadSelectedId() }) store.loadSelectedId() else saved.first().id,
+                selectedId = if (saved.any { it.id == sel }) sel else saved.first().id,
             )
         }
+        log("INFO", "startup: stored data in " + (android.os.SystemClock.elapsedRealtime() - tLoad0) + "ms")
         if (_state.value.servers.isNotEmpty() && effPingStart()) {
             pingServers(null, effFlagStart())
         }
@@ -802,6 +808,15 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private fun log(level: String, msg: String) {
         put { s -> s.copy(logs = (s.logs + LogLine(TimeKit.now(), level, msg)).takeLast(240)) }
+    }
+
+    /** Once the first frame is drawn: what the user actually feels as "the app takes long to open". */
+    fun logStartup() {
+        val boot = AppCtx.bootMs
+        if (boot > 0L) {
+            AppCtx.bootMs = 0L
+            log("INFO", "startup: first frame in " + (android.os.SystemClock.elapsedRealtime() - boot) + "ms")
+        }
     }
 
     fun toggleVpn() {

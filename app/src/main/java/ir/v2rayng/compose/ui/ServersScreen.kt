@@ -283,29 +283,27 @@ private fun ServerRow(
                     text = profile.name,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
-                if (profile.note.isNotBlank() || !profile.id.startsWith("rem-")) {
+                // one compact line for host/note and traffic: as separate lines the traffic text
+                // fell below the card edge and was cut in half once the row got action buttons
+                val sub = buildString {
+                    if (profile.note.isNotBlank() || !profile.id.startsWith("rem-")) append(profile.note.ifBlank { profile.host })
+                    if (profile.up > 0 || profile.down > 0) {
+                        if (isNotEmpty()) append("  ·  ")
+                        append("↑ ").append(ir.v2rayng.compose.data.TimeKit.human(profile.up))
+                        append("  ↓ ").append(ir.v2rayng.compose.data.TimeKit.human(profile.down))
+                    }
+                    if (profile.category.isNotBlank()) {
+                        if (isNotEmpty()) append("  ·  ")
+                        append(profile.category)
+                    }
+                }
+                if (sub.isNotBlank()) {
                     Text(
-                        text = profile.note.ifBlank { profile.host },
+                        text = sub,
                         style = MaterialTheme.typography.bodySmall,
-                        fontFamily = if (profile.note.isBlank()) FontFamily.Monospace else FontFamily.Default,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
-                }
-                if (profile.category.isNotBlank()) {
-                    Text(
-                        text = profile.category,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                if (profile.up > 0 || profile.down > 0) {
-                    Text(
-                        text = "↑ " + ir.v2rayng.compose.data.TimeKit.human(profile.up) + "   ↓ " + ir.v2rayng.compose.data.TimeKit.human(profile.down),
-                        style = MaterialTheme.typography.labelSmall,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -315,24 +313,19 @@ private fun ServerRow(
                 }
             }
             PingChip(profile.ping, profile.pingErr)
-            IconButton(onClick = onPingOne) {
-                Icon(
-                    Icons.Filled.PlayArrow,
-                    contentDescription = S.PING_ONE,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            IconButton(onClick = onPingOne, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = S.PING_ONE, modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            IconButton(onClick = onDelete) {
-                Icon(
-                    Icons.Filled.Delete,
-                    contentDescription = S.DELETE_ONE,
-                    tint = MaterialTheme.colorScheme.outline,
-                )
+            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Filled.Delete, contentDescription = S.DELETE_ONE, modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.outline)
             }
-            IconButton(onClick = onPin) {
+            IconButton(onClick = onPin, modifier = Modifier.size(36.dp)) {
                 Icon(
                     Icons.Filled.Star,
                     contentDescription = "Pin",
+                    modifier = Modifier.size(20.dp),
                     tint = if (profile.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                 )
             }
@@ -341,7 +334,7 @@ private fun ServerRow(
                     Icons.Filled.Check,
                     contentDescription = S.SELECTED,
                     tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(start = 6.dp),
+                    modifier = Modifier.padding(start = 4.dp).size(18.dp),
                 )
             }
         }
