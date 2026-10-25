@@ -14,8 +14,18 @@
  *     Variables and Secrets > Add > ADMIN_PASSWORD (نوع: Secret)
  *     یا کنسول:  wrangler secret put ADMIN_PASSWORD
  *  5) پنل: https://god-panel.lastofanarchy.workers.dev
+ *  6) دیباگ (از هر مرورگری، داخل کنسول همان دامنه):
+ *     fetch('/admin/api',{method:'POST',headers:{'content-type':'application/json'},
+ *       body:JSON.stringify({action:'ver',pw:'رمز_پنل'})}).then(r=>r.text()).then(console.log)
+ *     => build (نسخهٔ واقعیِ مستقر)، cols (ستون‌های واقعی جدول servers)، count، dbErr، pwSet
+ *     اگر build آن رشتهٔ پایینِ سرِ این فایل نبود، یعنی deploy روی همین worker ننشسته است.
  * ------------------------------------------------------------------ /SETUP
  */
+
+/** Bump this string when you deploy: the panel header and every srv.all reply carry it, so a
+ *  stuck panel immediately says whether the worker running in the cloud is this code or an old
+ *  one (that is the single most common cause of "همیشه در حال دریافت"). */
+const WORKER_BUILD = "panel-2026-10-25-2";
 
 export default {
   async fetch(request, env, ctx) {
@@ -37,7 +47,15 @@ export default {
       } catch (e) {
         // very first hit right after deploy - create missing tables then retry once
         try { await ensureSchema(env); } catch (e2) {}
-        return adminApi(env, body);
+        try {
+          return await adminApi(env, body);
+        } catch (e3) {
+          // never hand the panel an opaque 500: say what the worker actually hit
+          return new Response(JSON.stringify({
+            ok: false, build: WORKER_BUILD, action: String((body && body.action) || ""),
+            error: "worker: " + String((e3 && e3.message) || e3).slice(0, 200),
+          }), { headers: jsonHeaders() });
+        }
       }
     }
 
@@ -533,6 +551,16 @@ async function adminApi(env, b) {
           cats,
           app: (await getSettings(env, ["app_enabled"])).app_enabled !== "0" }), { headers: jsonHeaders() });
       }
+      case "ver": {
+        // one-call diagnosis of what is deployed and what the database really looks like
+        let cols = [], cnt = -1, dbErr = "";
+        try { cols = ((await env.DB.prepare("PRAGMA table_info(servers)").all()).results || []).map((c) => c.name); } catch (e) { dbErr = String((e && e.message) || e).slice(0, 160); }
+        try { cnt = Number((await env.DB.prepare("SELECT COUNT(*) c FROM servers").first()).c); } catch (e) { }
+        return new Response(JSON.stringify({
+          ok: true, build: WORKER_BUILD, cols, count: cnt, dbErr,
+          pwSet: !!env.ADMIN_PASSWORD, dbBound: !!env.DB,
+        }), { headers: jsonHeaders() });
+      }
       case "srv.all": {
         // one fast round-trip for the whole admin bootstrap: servers + cats + kill-switch + behavior flags + update cfg
         const now3 = Date.now();
@@ -622,6 +650,7 @@ async function finishSrvAll(env, cacheNow, d) {
   if (catsList.length === 0) catsList = ["VIP", "Normal"];
   const sAll = {
     ok: true,
+    build: WORKER_BUILD,
     servers: servers,
     cats: catsList,
     app: early.app_enabled !== "0",
@@ -826,7 +855,7 @@ function panelPage(env) {
 <div class=card><h2>🛡 کنترل کلی اپ (Kill switch)</h2>
 <div class=toolbar>
 <label class=switch><input type=checkbox id=app_sw onchange=appToggle(this.checked)><span></span></label>
-<span id=app_state class=note></span>
+<span id=app_state class=note></span><span id=wrkr_build class=note></span>
 </div>
 <p class=note>وقتی خاموش باشه، اپ روی همه دستگاه‌ها قفل میشه.</p></div>
 
@@ -965,7 +994,10 @@ async function api(body){
  try{r=await fetch('/admin/api',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...body,pw:PW})})}
  catch(e){showErr('network error: '+e);toast('خطای شبکه',1);throw e}
  if(r.status===401){const j=await r.json().catch(()=>({}));logout(j.error||'رمز غلط است');throw new Error('locked')}
- const j=await r.json().catch(()=>({ok:false,error:'bad json from worker'}));
+ const txt=await r.text().catch(()=>'');
+ let j=null;
+ try{j=txt?JSON.parse(txt):{ok:false,error:'empty response (http '+r.status+')'}}catch(e){j={ok:false,error:'http '+r.status+': '+txt.slice(0,90)}}
+ j.__status=r.status;
  if(j.error){showErr(null);toast('خطا: '+j.error,1)}else{showErr(null);toast()}
  return j}
 function toast(msg,err){const t=$('toast');t.textContent=msg||'✓ انجام شد';t.className=err?'toast err':'toast';t.style.display='block';clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',1400)}
@@ -1024,8 +1056,14 @@ async function saveFlags(){await api({action:'set.flags',flags:{
 async function loadServers(){
  const box=$('srv_list');
  let j=null;try{j=await api({action:'srv.all'})}catch(e){j=null}
- // never leave the "در حال دریافت..." placeholder standing: a bad response has to say so
- if(!j||!j.ok||!Array.isArray(j.servers)){if(box){box.className='empty';box.textContent='دریافت سرورها ناموفق بود — با 🔄 دوباره تلاش کن'}return}
+ // never leave the "در حال دریافت..." placeholder standing: a bad response has to say why
+ if(!j||!j.ok||!Array.isArray(j.servers)){
+  const why=(j&&j.error)||('http '+((j&&j.__status)||0));
+  const bld=(j&&j.build)||'نامعلوم';
+  if(box){box.className='empty';box.textContent='دریافت سرورها ناموفق — '+why+' | نسخهٔ ورکر: '+bld+(j&&j.build?'':' (احتمالاً ورکرِ روی Cloudflare قدیمی است: همین cloudflare/worker.js را دوباره deploy کن)')+' — با 🔄 دوباره'}
+  if($('err'))$('err').textContent='srv.all: '+why+' | build: '+bld+' | status: '+((j&&j.__status)||0);
+  return}
+ if($('wrkr_build'))$('wrkr_build').textContent='ورکر '+j.build;
  CATS=j.cats||[];
  const cfg=j.cfg||{};
  const on=cfg.app_enabled!=='0';
