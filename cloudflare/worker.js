@@ -1532,7 +1532,10 @@ async function blobSealResponse(env, device, obj, kc) {
   // would never repeat and the app would re-download the same payload forever.
   const json = JSON.stringify(obj);
   const hash = bl_hex(await bl_sha(new TextEncoder().encode(json)));
-  const cipher = await bl_seal(kc, new TextEncoder().encode(json));
+  // the envelope byte MUST be on the wire: the app reads plain[0] as the zip mode and
+  // strips it, so sealing bare json makes every payload lose its leading "{"
+  const envelope = await bl_zipEnv(new TextEncoder().encode(json));
+  const cipher = await bl_seal(kc, envelope);
   let row = null;
   try {
     row = await env.DB.prepare("SELECT last_payload FROM blob_sessions WHERE device=?1").bind(device).first();

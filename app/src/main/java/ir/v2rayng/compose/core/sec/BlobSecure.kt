@@ -212,7 +212,7 @@ object BlobSecure {
         return try {
             JSONObject(text)
         } catch (_: Exception) {
-            BlobStego.lastWhy = "stego: plaintext is not json (" + text.length + " chars)"
+            BlobStego.lastWhy = "stego: plaintext is not json (" + text.length + " chars, head=" + preview(text) + ")"
             blog("revealPayload: json parse failed, " + text.length + " chars")
             null
         }
@@ -221,12 +221,30 @@ object BlobSecure {
     fun openCy(hexCy: String, kc: ByteArray): JSONObject? {
         val blob = BlobB64.decode(hexCy) ?: return cyWhy("cy: not base64")
         val plain = BlobStego.blobOpen(blob, kc) ?: return cyWhy("cy: GCM tag fail (wrong key)")
+        // mode byte says which envelope scheme the worker used: 0 raw, 2 zlib, 1 = raw deflate
+        val mode = if (plain.isEmpty()) -1 else plain[0].toInt() and 0xFF
         val jsonU8 = BlobZip.open(plain)
         return try {
             JSONObject(String(jsonU8, Charsets.UTF_8))
         } catch (_: Exception) {
-            cyWhy("cy: plaintext is not json (${jsonU8.size} bytes)")
+            cyWhy(
+                "cy: not json - sealed " + plain.size + "B mode=" + mode + " -> " + jsonU8.size +
+                    "B head=" + preview(String(jsonU8, Charsets.ISO_8859_1))
+            )
         }
+    }
+
+    /** First bytes as text + hex, to tell envelope schemes apart without logging the payload. */
+    private fun preview(s: String): String {
+        val n = minOf(8, s.length)
+        val hx = StringBuilder()
+        val asc = StringBuilder()
+        for (i in 0 until n) {
+            val v = s[i].code
+            hx.append(String.format("%02x ", v))
+            asc.append(if (v in 33..126) s[i] else '.')
+        }
+        return "\"" + asc + "\"][" + hx.toString().trim() + "]"
     }
 
     private fun cyWhy(w: String): JSONObject? {
