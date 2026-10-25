@@ -306,11 +306,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun syncNow() {
         val dev = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
+        infoToast(S.SYNC_FETCHING)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val res = Remote.sync(dev, "sync", _state.value.vpnState == VpnState.CONNECTED)
                 if (res != null) {
                     applyRemote(res)
+                    infoToast(S.SYNC_OK)
+                    log("INFO", "Sync OK - settings refreshed")
                 } else {
                     handleSyncFail()
                 }
@@ -322,12 +325,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private suspend fun handleSyncFail() {
         val online = withContext(Dispatchers.IO) { netOnline() }
+        val reason = Remote.lastFail ?: "unknown"
         if (online) {
             srvFailToast()
-            log("WARN", "Failed to connect to server")
+            log("WARN", "Sync failed - $reason")
         } else {
             netToast()
-            log("WARN", "No internet connection")
+            log("WARN", "Sync failed - no internet connection")
         }
     }
 
@@ -428,6 +432,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     val dev = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
                     val res = Remote.sync(dev, if (first) "sync" else "heartbeat", connected)
                     if (res != null) applyRemote(res)
+                    else log("WARN", "Sync failed - " + (Remote.lastFail ?: "unknown"))
                     // no separate beat request - the sync body itself refreshes last_seen/connected
                 } catch (_: Exception) {
                 }
@@ -460,6 +465,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     link = e.link,
                     pinned = ex?.pinned ?: false,
                     pack = ex?.pack ?: -1,
+                    bubbleColor = ex?.bubbleColor ?: -1L,
                     category = e.category,
                     note = e.msg,
                 )
@@ -662,6 +668,19 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun srvStickerIndex(id: String): Int =
         _state.value.servers.firstOrNull { it.id == id }?.stickerIndex ?: 0
+
+    fun srvBubbleColor(id: String): Long =
+        _state.value.servers.firstOrNull { it.id == id }?.bubbleColor ?: -1L
+
+    /** Per-server bubble color override (-1 = follow the global bubble color). */
+    fun setSrvBubbleColor(id: String, color: Long) {
+        put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(bubbleColor = color) else it }) }
+        store.saveServers(_state.value.servers, _state.value.selectedId)
+    }
+
+    fun setBubbleOn(v: Boolean) = setSettings { it.copy(bubbleOn = v) }
+
+    fun setBubbleColor(v: Long) = setSettings { it.copy(bubbleColor = v) }
 
     fun setServerIcon(id: String, idx: Int, pack: Int = -1) {
         put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(stickerIndex = idx, pack = pack) else it }) }

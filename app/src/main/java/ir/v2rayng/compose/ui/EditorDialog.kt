@@ -148,6 +148,7 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
     val styleId = if (isWall) settings.wallpaperStyle else settings.stickerStyle
     val hasColor = srvId == null && styleId != 2
     val showHex = remember { mutableStateOf(false) }
+    val showBubHex = remember { mutableStateOf(false) }
 
     fun setColor(v: Long) {
         when {
@@ -302,6 +303,32 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
                     }
                 }
 
+                if (srvId != null) {
+                    // per-server bubble: circle behind stickers, rectangle behind flags
+                    val srvBub = vm.srvBubbleColor(srvId)
+                    Text(
+                        S.BUBBLE_COLOR,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        S.BUBBLE_HINT,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        MiniChip(S.BUBBLE_GLOBAL, srvBub < 0, { vm.setSrvBubbleColor(srvId, -1L) })
+                        PALETTE.forEach { c ->
+                            ColorDot(c, srvBub == c, { vm.setSrvBubbleColor(srvId, c) })
+                        }
+                        MiniChip("Custom", false, { showBubHex.value = true })
+                        MiniChip("Random", false, { vm.setSrvBubbleColor(srvId, PALETTE[(0 until PALETTE.size).random()]) })
+                    }
+                }
+
                 if (isMain || isWall) {
                     Text(
                         S.SIZE,
@@ -388,6 +415,9 @@ fun StickerEditorDialog(zone: String, settings: Settings, vm: AppViewModel, onDi
 
     if (showHex.value) {
         HexColorDialog(colorCur, ::setColor) { showHex.value = false }
+    }
+    if (showBubHex.value && srvId != null) {
+        SimpleHexColorDialog(S.BUBBLE_COLOR, vm.srvBubbleColor(srvId), { vm.setSrvBubbleColor(srvId, it) }) { showBubHex.value = false }
     }
 }
 

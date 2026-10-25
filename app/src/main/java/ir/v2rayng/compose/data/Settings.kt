@@ -76,6 +76,8 @@ data class Settings(
     val autoPingNew: Boolean = true,
     val flagOnStart: Boolean = true,
     val autoFlagNew: Boolean = true,
+    val bubbleOn: Boolean = true,
+    val bubbleColor: Long = -1L,
 )
 
 fun parseList(s: String, def: List<Int>): List<Int> {
@@ -167,6 +169,8 @@ class SettingsStore(context: Context) {
         autoFlagNew = SecurePrefs.getBoolean("autoFlagNew", true, ctx),
         flagStretch = SecurePrefs.getFloat("flagStretch", 0.66f, ctx),
         flagRound = SecurePrefs.getFloat("flagRound", 0.45f, ctx),
+        bubbleOn = SecurePrefs.getBoolean("bubbleOn", true, ctx),
+        bubbleColor = SecurePrefs.getLong("bubbleColor", -1L, ctx),
     )
 
     fun loadServers(): List<ServerProfile>? {
@@ -191,6 +195,7 @@ class SettingsStore(context: Context) {
                         link = link.takeIf { it.isNotBlank() },
                         category = o.optString("category", ""),
                         note = o.optString("note", ""),
+                        bubbleColor = if (o.has("bub")) o.optLong("bub", -1L) else -1L,
                     ),
                 )
             }
@@ -215,6 +220,7 @@ class SettingsStore(context: Context) {
                 if (s.link != null) o.put("link", s.link)
                 if (s.category.isNotBlank()) o.put("category", s.category)
                 if (s.note.isNotBlank()) o.put("note", s.note)
+                if (s.bubbleColor >= 0L) o.put("bub", s.bubbleColor)
                 arr.put(o)
             }
             SecurePrefs.set("servers", arr.toString(), ctx)
@@ -304,5 +310,7 @@ class SettingsStore(context: Context) {
         SecurePrefs.set("autoFlagNew", s.autoFlagNew.toString(), ctx)
         SecurePrefs.set("flagStretch", s.flagStretch.toString(), ctx)
         SecurePrefs.set("flagRound", s.flagRound.toString(), ctx)
+        SecurePrefs.set("bubbleOn", s.bubbleOn.toString(), ctx)
+        SecurePrefs.set("bubbleColor", s.bubbleColor.toString(), ctx)
     }
 }

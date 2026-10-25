@@ -26,6 +26,8 @@ data class ServerProfile(
     val pack: Int = -1,
     val category: String = "",
     val note: String = "",
+    /** per-server bubble color override; -1 = follow the global bubble color */
+    val bubbleColor: Long = -1L,
 )
 
 data class TrafficStat(

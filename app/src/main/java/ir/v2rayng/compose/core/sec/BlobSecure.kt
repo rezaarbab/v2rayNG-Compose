@@ -33,6 +33,15 @@ object BlobSecure {
             .put("exp", exp)
     }
 
+    /** Human-readable reason of the last secure-path failure (no URLs, log/toast safe). */
+    @Volatile
+    var lastReason: String? = null
+
+    fun fail(r: String): String {
+        lastReason = r
+        return r
+    }
+
     @Volatile
     private var live: Session? = null
 
@@ -105,15 +114,16 @@ object BlobSecure {
                 .put("connected", body.optBoolean("connected", false))
                 .put("info", body.opt("info") ?: JSONObject())
                 .put("tok", token(body.getString("device"), hexToBytes(ROOT)))
-            val text = httpPost(base, "/api/key", req) ?: run { blog("issueKeys: /api/key transport failed"); return null }
+            val text = httpPost(base, "/api/key", req) ?: run { blog("issueKeys: /api/key transport failed"); fail("key request: server unreachable (network)"); return null }
             val resp = JSONObject(text)
             if (resp.optInt("v", 0) < 2 || resp.optString("enc") != "k") {
                 blog("issueKeys: refused enc=" + resp.optString("enc", "?") + " v=" + resp.optInt("v", 0) + " -> set BLOB_ROOT secret on the worker?")
+                fail("session keys rejected (auth - secret mismatch or missing)")
                 return null
             }
-            val kc = BlobB64.decode(resp.getString("kc")) ?: run { blog("issueKeys: bad b64 kc"); return null }
-            val kt = BlobB64.decode(resp.getString("kt")) ?: run { blog("issueKeys: bad b64 kt"); return null }
-            if (kc.size != 32 || kt.size != 32) { blog("issueKeys: bad key sizes " + kc.size + "/" + kt.size); return null }
+            val kc = BlobB64.decode(resp.getString("kc")) ?: run { blog("issueKeys: bad b64 kc"); fail("session keys: invalid response (protocol)"); return null }
+            val kt = BlobB64.decode(resp.getString("kt")) ?: run { blog("issueKeys: bad b64 kt"); fail("session keys: invalid response (protocol)"); return null }
+            if (kc.size != 32 || kt.size != 32) { blog("issueKeys: bad key sizes " + kc.size + "/" + kt.size); fail("session keys: invalid response (protocol)"); return null }
             val expSec = resp.optLong("exp", 0L)
             val expMs = if (expSec > 0) expSec * 1000L else System.currentTimeMillis() + 3600_000L
             val s = Session(kc, kt, expMs)
@@ -122,11 +132,13 @@ object BlobSecure {
             s
         } catch (e: Exception) {
             blog("issueKeys: exception " + e.javaClass.simpleName)
+            fail("key request failed (network)")
             null
         }
     }
 
     fun syncSecure(base: String, body: JSONObject): JSONObject? {
+        lastReason = null
         var session: Session? = load()
         var issued = false
         for (attempt in 0 until 2) {
@@ -147,20 +159,23 @@ object BlobSecure {
                 token(body.getString("device"), sNow.kt),
             )
             if (text == null) {
-                blog("sync: transport failed -> plaintext fallback")
-                // transport failed - keep the session, let the caller fall back
+                blog("sync: transport failed")
+                // transport failed - keep the session, let the caller retry on the next sync
+                fail("server unreachable (network or timeout)")
                 return null
             }
             val resp = JSONObject(text)
             when (val enc = resp.optString("enc")) {
                 "s" -> {
                     val r = revealPayload(resp.getString("st"), sNow.kc)
-                    if (r == null) blog("enc=s but stego reveal failed (keys mismatch?")
+                    if (r == null) blog("enc=s but stego reveal failed (keys mismatch?)")
+                    if (r == null) fail("payload verification failed (decrypt)")
                     return r
                 }
                 "c" -> {
                     val r = openCy(resp.getString("cy"), sNow.kc)
                     if (r == null) blog("enc=c but GCM open failed")
+                    if (r == null) fail("payload verification failed (decrypt)")
                     return r
                 }
                 "n" -> return JSONObject().put("__nc", true)
@@ -168,17 +183,19 @@ object BlobSecure {
                     // keys expired/rotated server-side - clear and issue fresh
                     blog("enc=h (expired/rotated) -> re-issuing")
                     clear()
-                    if (issued) return null
+                    if (issued) { fail("session rotated twice in a row"); return null }
                     issued = true
                     session = issueKeys(base, body) ?: return null
                 }
                 "x" -> {
                     blog("enc=x (auth rejected) -> clearing")
+                    fail("request rejected (auth)")
                     clear()
                     return null
                 }
                 else -> {
-                    blog("unexpected enc=" + enc + " -> clearing + fallback (worker has no blob layer?)")
+                    blog("unexpected enc=" + enc + " -> clearing (worker has no blob layer?)")
+                    fail("unexpected server response (protocol)")
                     clear()
                     return null
                 }

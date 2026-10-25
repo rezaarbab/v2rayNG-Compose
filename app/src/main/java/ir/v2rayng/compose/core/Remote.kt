@@ -160,6 +160,10 @@ object Remote {
         }
     }
 
+    /** Reason of the last failed sync (no URLs - safe for the in-app log). */
+    @Volatile
+    var lastFail: String? = null
+
     /**
      * POST /api/sync - the ONLY data channel: the encrypted blob protocol
      * (server-issued rotating keys, AES-256-GCM payload hidden inside a homoglyph
@@ -173,12 +177,15 @@ object Remote {
             BlobSecure.syncSecure(BASE, body)
         } catch (e: Exception) {
             try { android.util.Log.d("BlobSec", "secure path exception: " + e.javaClass.simpleName) } catch (_: Exception) {}
+            BlobSecure.fail("request failed (network)")
             null
         }
         if (secure == null) {
+            lastFail = BlobSecure.lastReason ?: "server unreachable (network)"
             try { android.util.Log.d("BlobSec", "secure path failed -> keeping local state, retry next sync") } catch (_: Exception) {}
             return null
         }
+        lastFail = null
         clearAckQueue() // worker consumed the acks (idempotent, safe to re-send on loss)
         if (secure.optBoolean("__nc", false)) {
             // worker says the payload is unchanged since the last sync; apply nothing

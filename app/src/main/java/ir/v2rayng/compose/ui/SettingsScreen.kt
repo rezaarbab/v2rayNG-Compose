@@ -68,6 +68,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var moveHome by remember { mutableStateOf(false) }
     var showAppPicker by remember { mutableStateOf(false) }
     var showNotifHex by remember { mutableStateOf(false) }
+    var showBubbleHex by remember { mutableStateOf(false) }
     var showCreator by remember { mutableStateOf(false) }
     var showRemoteUrl by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -161,6 +162,20 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 }
 
                 ToggleRow(S.FLAG_AVATARS, S.FLAG_AVATARS_SUB, settings.flagAvatars) { vm.setFlagAvatars(it) }
+                ToggleRow(S.BUBBLE, S.BUBBLE_SUB, settings.bubbleOn) { vm.setBubbleOn(it) }
+                if (settings.bubbleOn) {
+                    Text(S.BUBBLE_COLOR, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        ColorDot(Color(0xFF888888), S.BUBBLE_GLOBAL, settings.bubbleColor < 0) { vm.setBubbleColor(-1) }
+                        NotifPalette.forEach { c ->
+                            ColorDot(Color(c), "", settings.bubbleColor == c) { vm.setBubbleColor(c) }
+                        }
+                        SelectChip("Custom", false, { showBubbleHex = true })
+                    }
+                }
                 ToggleRow(S.CONNECT_FLAG_DANCER, S.CONNECT_FLAG_DANCER_SUB, settings.connectFlagDancer) { vm.setConnectFlagDancer(it) }
                 ToggleRow(S.FOLLOW_FINGER, S.FOLLOW_SUB, settings.followFinger) { vm.setFollowFinger(it) }
 
@@ -322,6 +337,9 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     }
     if (showNotifHex) {
         NotifColorDialog(settings.notifColor, vm) { showNotifHex = false }
+    }
+    if (showBubbleHex) {
+        SimpleHexColorDialog(S.BUBBLE_COLOR, settings.bubbleColor, { vm.setBubbleColor(it) }) { showBubbleHex = false }
     }
     if (showCreator) {
         CreatorDialog(vm) { showCreator = false }
@@ -590,6 +608,41 @@ private fun NotifColorDialog(current: Long, vm: AppViewModel, onDismiss: () -> U
         },
         dismissButton = {
             TextButton(onClick = { vm.setNotifColor(-1L); onDismiss() }) { Text(S.CANCEL) }
+        },
+    )
+}
+
+/** Generic hex color entry used by the bubble color pickers. */
+@Composable
+fun SimpleHexColorDialog(title: String, current: Long, onSet: (Long) -> Unit, onDismiss: () -> Unit) {
+    var hex by remember { mutableStateOf(if (current >= 0) String.format("%08X", current) else "#FF8CDDB2") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = hex,
+                onValueChange = { hex = it },
+                singleLine = true,
+                label = { Text("#AARRGGBB") },
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val cleaned = hex.removePrefix("#").trim()
+                    val v = cleaned.toLongOrNull(16)
+                    if (cleaned.length == 6) {
+                        onSet(0xFF000000L or v!!)
+                    } else if (cleaned.length == 8) {
+                        onSet(v!!)
+                    }
+                    onDismiss()
+                },
+            ) { Text(S.APPLY) }
+        },
+        dismissButton = {
+            TextButton(onClick = { onSet(-1L); onDismiss() }) { Text(S.CANCEL) }
         },
     )
 }
