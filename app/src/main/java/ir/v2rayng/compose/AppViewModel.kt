@@ -94,6 +94,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private var connectJob: Job? = null
     private var trafficJob: Job? = null
+    private var saveJob: Job? = null
 
     init {
         try {
@@ -246,7 +247,20 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun setSettings(f: (Settings) -> Settings) {
         val s = f(_settings.value)
         _settings.value = s
-        store.save(s)
+        queueSave()
+    }
+
+    /**
+     * Saving means one StrongBox seal per setting key, which is seconds of work on devices like
+     * the MIUI one in the APP_SCOUT_HANG trace - never do it on the click thread. A burst of
+     * toggles also collapses into a single write instead of queueing dozens of full saves.
+     */
+    private fun queueSave() {
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch(Dispatchers.IO) {
+            delay(120)
+            store.save(_settings.value)
+        }
     }
 
     fun setDark(v: Boolean) = setSettings { it.copy(dark = v) }
