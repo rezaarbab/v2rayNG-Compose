@@ -239,7 +239,7 @@ async function syncPayloadObj(env, request, b) {
 
 async function listServers(env) {
   const rows = await env.DB.prepare(
-    "SELECT id, name, address, port, link, category, msg FROM servers WHERE active=1 ORDER BY ord ASC, id ASC LIMIT 500",
+    "SELECT id, name, address, port, link, category, msg FROM servers WHERE active=1 ORDER BY ord ASC, id ASC LIMIT 1000",
   ).all();
   return (rows.results || []).map((r) => ({
     id: String(r.id),
@@ -546,7 +546,7 @@ async function adminApi(env, b) {
         return new Response(JSON.stringify({ ok: true, link: (one && one.link) || "" }), { headers: jsonHeaders() });
       }
       case "srv.list": {
-        const rows = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
+        const rows = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 2000").all();
         return new Response(JSON.stringify({ ok: true, servers: rows.results,
           cats,
           app: (await getSettings(env, ["app_enabled"])).app_enabled !== "0" }), { headers: jsonHeaders() });
@@ -585,7 +585,8 @@ async function adminApi(env, b) {
         try {
           batchOut = await env.DB.batch([
             env.DB.prepare(`SELECT key, value FROM settings WHERE key IN (${phAll})`).bind(...keysAll),
-            env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500"),
+            env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 2000"),
+            env.DB.prepare("SELECT COUNT(*) c FROM servers"),
           ]);
         } catch (e) {
           batchOut = null;
@@ -594,13 +595,14 @@ async function adminApi(env, b) {
           // schema not ready / older shape - fall through to the lazy per-query path
           const early = await getSettings(env, ["app_enabled", "min_version", "latest_version", "latest_url", "ping_on_start", "flag_on_start", "auto_ping_new", "auto_flag_new"]);
           let rowsS = { results: [] };
-          try { rowsS = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all(); } catch (e2) {}
+          try { rowsS = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 2000").all(); } catch (e2) {}
           batchOut = null;
           return finishSrvAll(env, now3, { settings: early, servers: rowsS.results || [] });
         }
         const merged = {};
         for (const r of (batchOut[0].results || [])) merged[r.key] = r.value;
-        return finishSrvAll(env, now3, { settings: merged, servers: batchOut[1].results || [] });
+        const cntRow = (batchOut[2] && batchOut[2].results && batchOut[2].results[0]) || null;
+        return finishSrvAll(env, now3, { settings: merged, servers: batchOut[1].results || [], total: cntRow ? Number(cntRow.c) : 0 });
       }
       case "devices.list": {
         let rows;
@@ -660,9 +662,13 @@ async function finishSrvAll(env, cacheNow, d) {
   try { catsList = JSON.parse(early.categories || "[]"); } catch (e) { catsList = []; }
   catsList = (Array.isArray(catsList) ? catsList : []).filter((c) => typeof c === "string").map((c) => c.trim()).filter(Boolean).slice(0, 64);
   if (catsList.length === 0) catsList = ["VIP", "Normal"];
+  const total = Number(d.total || 0) || servers.length;
   const sAll = {
     ok: true,
     build: WORKER_BUILD,
+    // say out loud when the query window cut rows off - a silent cap looked like "servers missing"
+    total,
+    truncated: total > servers.length,
     servers: servers,
     cats: catsList,
     app: early.app_enabled !== "0",
@@ -1068,6 +1074,12 @@ async function saveFlags(){await api({action:'set.flags',flags:{
 async function loadServers(){
  const box=$('srv_list');
  let j=null;try{j=await api({action:'srv.all'})}catch(e){j=null}
+ // second, independent route to the same rows: srv.list runs a plain .all() query, so a
+ // batch/transaction problem in srv.all can no longer leave the list empty
+ if(!j||!j.ok||!Array.isArray(j.servers)){
+  let k=null;try{k=await api({action:'srv.list'})}catch(e){k=null}
+  if(k&&Array.isArray(k.servers)){j=k;if(!j.cfg)j.cfg={};if(!j.build)j.build='srv.list';if(!j.ok)j.ok=true}
+ }
  // never leave the "در حال دریافت..." placeholder standing: a bad response has to say why
  if(!j||!j.ok||!Array.isArray(j.servers)){
   const why=(j&&j.error)||('http '+((j&&j.__status)||0));
@@ -1080,9 +1092,14 @@ async function loadServers(){
  const cfg=j.cfg||{};
  const on=cfg.app_enabled!=='0';
  if($('app_sw'))$('app_sw').checked=on;
- appState(on);
  SRV=j.servers||[];
- renderFilters();renderCatUI();renderServers();processFlagsUI(j)}
+ // each step on its own: a missing element or a filter problem must not stop the server list
+ try{renderFilters()}catch(e){}
+ try{renderCatUI()}catch(e){}
+ try{appState(on)}catch(e){}
+ try{renderServers()}catch(e){if(box){box.className='empty';box.textContent='خطای رندر لیست: '+e}}
+ try{processFlagsUI(j)}catch(e){}
+ if(j.truncated&&$('srv_cnt'))$('srv_cnt').textContent=' ⚠ فقط '+j.servers.length+' از '+j.total+' سرور نمایش داده شد'}
 function appState(on){$('app_state').innerHTML=on?'<span class="badge b-on">اپ فعال است</span>':'<span class="badge b-off">اپ قفل - همه دستگاه‌ها بسته اند</span>'}
 function appToggle(on){api({action:'set.app',on:on})}
 function srvRow(s,i,list){
