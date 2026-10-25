@@ -9,7 +9,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import android.graphics.Color
-import ir.v2rayng.compose.data.SettingsStore
+import ir.v2rayng.compose.core.sec.SecurePrefs
 import ir.v2rayng.compose.ui.AppRoot
 
 class MainActivity : ComponentActivity() {
@@ -17,7 +17,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         ir.v2rayng.compose.core.CrashNote.install(this)
         lockHighRefreshRate()
-        applySystemBars(SettingsStore(this).load().dark)
+        applySystemBars(SecurePrefs.getBoolean("dark", true, this))
         setContent {
             AppRoot()
         }
