@@ -528,7 +528,7 @@ async function adminApi(env, b) {
         return new Response(JSON.stringify({ ok: true, link: (one && one.link) || "" }), { headers: jsonHeaders() });
       }
       case "srv.list": {
-        const rows = await env.DB.prepare("SELECT id, name, address, port, category, msg, active, ord FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
+        const rows = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
         return new Response(JSON.stringify({ ok: true, servers: rows.results,
           cats,
           app: (await getSettings(env, ["app_enabled"])).app_enabled !== "0" }), { headers: jsonHeaders() });
@@ -545,7 +545,7 @@ async function adminApi(env, b) {
         try {
           batchOut = await env.DB.batch([
             env.DB.prepare(`SELECT key, value FROM settings WHERE key IN (${phAll})`).bind(...keysAll),
-            env.DB.prepare("SELECT id, name, address, port, category, msg, active, ord FROM servers ORDER BY ord ASC, id ASC LIMIT 500"),
+            env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500"),
           ]);
         } catch (e) {
           batchOut = null;
@@ -553,7 +553,8 @@ async function adminApi(env, b) {
         if (!batchOut || batchOut.length < 2) {
           // schema not ready / older shape - fall through to the lazy per-query path
           const early = await getSettings(env, ["app_enabled", "min_version", "latest_version", "latest_url", "ping_on_start", "flag_on_start", "auto_ping_new", "auto_flag_new"]);
-          const rowsS = await env.DB.prepare("SELECT id, name, address, port, category, msg, active, ord FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
+          let rowsS = { results: [] };
+          try { rowsS = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all(); } catch (e2) {}
           batchOut = null;
           return finishSrvAll(env, now3, { settings: early, servers: rowsS.results || [] });
         }
@@ -600,8 +601,21 @@ function srvAllInvalidate() { SRV_ALL_CACHE = { t: 0, v: null }; }
 
 /** Assemble the srv.all bootstrap response from one settings lookup + one servers query. */
 async function finishSrvAll(env, cacheNow, d) {
-  const early = d.settings;
-  const servers = d.servers;
+  const early = d.settings || {};
+  const raw = Array.isArray(d.servers) ? d.servers : ((d.servers && d.servers.results) || []);
+  // Light rows only: the fat link column stays in D1 and the panel fetches one link when it is
+  // copied. SELECT * (not a column list) keeps this working on databases created before the
+  // msg/category ALTERs - a missing column must degrade, not 500 the whole panel.
+  const servers = raw.map((r) => ({
+    id: r.id,
+    name: r.name || "",
+    address: r.address || "",
+    port: r.port || 443,
+    category: r.category || "",
+    msg: r.msg || "",
+    active: r.active === undefined ? 1 : r.active,
+    ord: r.ord,
+  }));
   let catsList;
   try { catsList = JSON.parse(early.categories || "[]"); } catch (e) { catsList = []; }
   catsList = (Array.isArray(catsList) ? catsList : []).filter((c) => typeof c === "string").map((c) => c.trim()).filter(Boolean).slice(0, 64);
@@ -1008,9 +1022,15 @@ async function saveFlags(){await api({action:'set.flags',flags:{
  auto_ping_new:$('f_auto_ping_new').value,
  auto_flag_new:$('f_auto_flag_new').value}});toast('فرمان‌ها ذخیره شد — اپ‌ها با سینک بعدی اعمال میکنن')}
 async function loadServers(){
- const j=await api({action:'srv.all'});
+ const box=$('srv_list');
+ let j=null;try{j=await api({action:'srv.all'})}catch(e){j=null}
+ // never leave the "در حال دریافت..." placeholder standing: a bad response has to say so
+ if(!j||!j.ok||!Array.isArray(j.servers)){if(box){box.className='empty';box.textContent='دریافت سرورها ناموفق بود — با 🔄 دوباره تلاش کن'}return}
  CATS=j.cats||[];
- $('app_sw').checked=!!j.cfg.app_enabled;appState(j.cfg.app_enabled!=='0');
+ const cfg=j.cfg||{};
+ const on=cfg.app_enabled!=='0';
+ if($('app_sw'))$('app_sw').checked=on;
+ appState(on);
  SRV=j.servers||[];
  renderFilters();renderCatUI();renderServers();processFlagsUI(j)}
 function appState(on){$('app_state').innerHTML=on?'<span class="badge b-on">اپ فعال است</span>':'<span class="badge b-off">اپ قفل - همه دستگاه‌ها بسته اند</span>'}
