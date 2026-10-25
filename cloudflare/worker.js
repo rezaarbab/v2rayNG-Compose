@@ -287,7 +287,16 @@ async function adminApi(env, b) {
         let seq = Number((await env.DB.prepare("SELECT COUNT(*) c FROM servers").first()).c) + 1;
         const defCat = String(b.category || "").trim().slice(0, 64) || (cats[0] || "Normal");
         const defMsg = String(b.msg || "").trim().slice(0, 200);
-        let added = 0;
+        const INS = "INSERT INTO servers (name, address, port, link, category, ord, active, msg) VALUES (?1,?2,?3,?4,?5,?6,1,?7)";
+        const rows = [];
+        const endpointOf = (l) => {
+          const at = l.indexOf("@");
+          if (at < 0) return ["0.0.0.0", 443];
+          const seg = l.slice(at + 1).split(/[/?#]/)[0];
+          const c = seg.lastIndexOf(":");
+          if (c < 0) return [seg, 443];
+          return [seg.slice(0, c), Number(seg.slice(c + 1)) || 443];
+        };
         for (const rawPiece of String(b.text || "").split("\n")) {
           const parts = rawPiece.split("|").map((x) => x.trim());
           let name = "", link = "", cat = "", msg = "";
@@ -296,10 +305,25 @@ async function adminApi(env, b) {
           else if (parts.length === 2) { name = parts[0]; link = parts[1]; }
           else { link = parts[0] || ""; }
           if (!link) continue;
-          await env.DB.prepare(
-            "INSERT INTO servers (name, address, port, link, category, ord, active, msg) VALUES (?1,?2,?3,?4,?5,?6,1,?7)",
-          )          .bind(name.slice(0, 64) || `srv-${seq}`, "0.0.0.0", 443, link.slice(0, 4096), (cat || defCat).slice(0, 64), seq++, (msg || defMsg).slice(0, 200)).run();
-          added++;
+          // the link already carries its endpoint: keep it in address/port so the panel can
+          // list servers without shipping the whole link string
+          const ep = endpointOf(link);
+          rows.push([name.slice(0, 64) || `srv-${rows.length + seq}`, ep[0].slice(0, 256), ep[1], link.slice(0, 4096),
+            (cat || defCat).slice(0, 64), seq++, (msg || defMsg).slice(0, 200)]);
+        }
+        // one await per server turned a 500-line paste into 500 sequential D1 round trips
+        // (minutes, and the worker can hit its wall-clock limit mid-import); batch in chunks
+        let added = 0;
+        for (let i = 0; i < rows.length; i += 95) {
+          const chunk = rows.slice(i, i + 95);
+          try {
+            await env.DB.batch(chunk.map((v) => env.DB.prepare(INS).bind(...v)));
+            added += chunk.length;
+          } catch (e) {
+            for (const v of chunk) {
+              try { await env.DB.prepare(INS).bind(...v).run(); added++; } catch (e2) {}
+            }
+          }
         }
         srvAllInvalidate();
         return okJson({ added });
@@ -498,8 +522,13 @@ async function adminApi(env, b) {
       case "clear.last_payload":
         await env.DB.prepare("UPDATE blob_sessions SET last_payload=''").run();
         return okJson();
+      case "srv.link": {
+        // the fat link column is deliberately NOT in srv.all - fetch one row's link on demand
+        const one = await env.DB.prepare("SELECT link FROM servers WHERE id=?1").bind(Number(b.id)).first();
+        return new Response(JSON.stringify({ ok: true, link: (one && one.link) || "" }), { headers: jsonHeaders() });
+      }
       case "srv.list": {
-        const rows = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
+        const rows = await env.DB.prepare("SELECT id, name, address, port, category, msg, active, ord FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
         return new Response(JSON.stringify({ ok: true, servers: rows.results,
           cats,
           app: (await getSettings(env, ["app_enabled"])).app_enabled !== "0" }), { headers: jsonHeaders() });
@@ -516,7 +545,7 @@ async function adminApi(env, b) {
         try {
           batchOut = await env.DB.batch([
             env.DB.prepare(`SELECT key, value FROM settings WHERE key IN (${phAll})`).bind(...keysAll),
-            env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500"),
+            env.DB.prepare("SELECT id, name, address, port, category, msg, active, ord FROM servers ORDER BY ord ASC, id ASC LIMIT 500"),
           ]);
         } catch (e) {
           batchOut = null;
@@ -524,9 +553,9 @@ async function adminApi(env, b) {
         if (!batchOut || batchOut.length < 2) {
           // schema not ready / older shape - fall through to the lazy per-query path
           const early = await getSettings(env, ["app_enabled", "min_version", "latest_version", "latest_url", "ping_on_start", "flag_on_start", "auto_ping_new", "auto_flag_new"]);
-          const rowsS = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
+          const rowsS = await env.DB.prepare("SELECT id, name, address, port, category, msg, active, ord FROM servers ORDER BY ord ASC, id ASC LIMIT 500").all();
           batchOut = null;
-          return finishSrvAll(env, now3, { settings: early, servers: rowsS });
+          return finishSrvAll(env, now3, { settings: early, servers: rowsS.results || [] });
         }
         const merged = {};
         for (const r of (batchOut[0].results || [])) merged[r.key] = r.value;
@@ -912,7 +941,7 @@ function panelPage(env) {
 let PW='';
 
 const $=(id)=>document.getElementById(id);
-let CATS=[],SRV=[],DEVS=[],CUT=0,FILT=-1;
+let CATS=[],SRV=[],DEVS=[],CUT=0,FILT=-1,SRV_SHOW=150;
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function showErr(m){const b=$('err');if(!m){b.style.display='none';return}b.style.display='block';b.textContent=m}
 let supportModal=null;
@@ -1007,9 +1036,10 @@ function srvRow(s,i,list){
  tb.onclick=()=>api({action:'srv.active',id:s.id,on:!s.active}).then(loadServers);d.appendChild(tb);
  const db=document.createElement('button');db.className='red sm';db.textContent='حذف';
  db.onclick=()=>{if(confirm('سرور «'+(s.name||s.id)+'» حذف شود؟'))api({action:'srv.del',id:s.id}).then(loadServers)};d.appendChild(db);
- const lk=document.createElement('div');lk.className='lnk';lk.textContent=(s.link||'')+(s.address&&s.address!=='0.0.0.0'?' | '+s.address+':'+(s.port||443):'');
- lk.title='کلیک = کپی لینک';
- lk.onclick=()=>{navigator.clipboard&&navigator.clipboard.writeText(s.link||'').then(()=>toast('لینک کپی شد'))};d.appendChild(lk);
+ const lk=document.createElement('div');lk.className='lnk';
+ lk.textContent=(s.address&&s.address!=='0.0.0.0')?s.address+':'+(s.port||443):'کلیک = کپی لینک کامل';
+ lk.title='کلیک = کپی لینک کامل';
+ lk.onclick=async()=>{const j=await api({action:'srv.link',id:s.id});if(j&&j.link&&navigator.clipboard)navigator.clipboard.writeText(j.link).then(()=>toast('لینک کپی شد'))};d.appendChild(lk);
  return d}
 async function renderServers(){
  if(!$('tab_srv'))return;
@@ -1017,11 +1047,13 @@ async function renderServers(){
  let list=SRV.filter(s=>{
   if(only&&!s.active)return false;
   if(fc&&s.category!==fc)return false;
-  if(q&&!(((s.name||'')+' '+(s.category||'')+' '+(s.link||'')).toLowerCase().includes(q)))return false;return true});
+  if(q&&!(((s.name||'')+' '+(s.category||'')+' '+(s.address||'')).toLowerCase().includes(q)))return false;return true});
 $('srv_cnt').textContent=list.length+'/'+SRV.length;
 const box=$('srv_list');box.className='';box.innerHTML='';
 if(!list.length){box.className='empty';box.textContent='موردی یافت نشد';return}
-list.forEach((s,i)=>box.appendChild(srvRow(s,i,list)))}
+// rendering 500 rows x ~10 nodes is what froze the browser; grow the window on demand
+list.slice(0,SRV_SHOW).forEach((s,i)=>box.appendChild(srvRow(s,i,list)));
+if(list.length>SRV_SHOW){const mb=document.createElement('button');mb.className='gray';mb.textContent='نمایش بیشتر (+'+Math.min(150,list.length-SRV_SHOW)+' از '+(list.length-SRV_SHOW)+')';mb.onclick=()=>{SRV_SHOW+=150;renderServers()};box.appendChild(mb)}}
 
 /* ---- update / popup / notifs ---- */
 async function loadUpdate(){
