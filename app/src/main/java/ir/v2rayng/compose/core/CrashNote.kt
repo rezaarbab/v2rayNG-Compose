@@ -2,6 +2,7 @@ package ir.v2rayng.compose.core
 
 import android.app.ActivityManager
 import android.content.Context
+import android.os.Build
 
 /**
  * Records the last uncaught exception so a crash that kills the process can still be read
@@ -20,18 +21,20 @@ object CrashNote {
     /**
      * How the previous process actually died, straight from the system: distinguishes a Java
      * crash from an ANR/hang, a native crash and a low-memory kill. A hang never reaches the
-     * exception handler above, so this is the only way to see it without adb. (minSdk 26.)
+     * exception handler above, so this is the only way to see it without adb.
+     * ApplicationExitInfo and getHistoricalProcessExitReasons are API 30, the app runs down to 26.
      */
     fun exitReasons(ctx: Context): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         return try {
             val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
             val hist = am.getHistoricalProcessExitReasons(ctx.packageName, 0, 3)
             if (hist.isEmpty()) return null
             hist.joinToString(" | ") { i ->
-                "reason=" + i.reason + " sub=" + i.subReason + " imp=" + i.importance +
-                    " at " + i.timeStamp + " " + (i.description ?: "")
+                "reason=" + i.reason + " status=" + i.status + " ts=" + i.timestamp + " " + (i.description ?: "")
             }.take(700)
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
+            // diagnostics only: a missing platform method on a tweaked ROM must never kill the app
             null
         }
     }
