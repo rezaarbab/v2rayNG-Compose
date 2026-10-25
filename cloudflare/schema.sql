@@ -1,9 +1,11 @@
 -- ARBAB Panel — D1 schema
 -- Run:  wrangler d1 execute arbab-db --file=schema.sql --remote
 --
--- NOTE: "ALTER TABLE" at the bottom is expected to error once (duplicate column)
---       on fresh databases where the column already exists - that is fine; D1
---       keeps applying the rest. The worker also self-heals via ensureSchema().
+-- NOTE: this file is idempotent - every statement is IF NOT EXISTS / OR IGNORE, so it can be
+--       re-run any number of times. It used to end with ALTER TABLE statements that failed with
+--       "duplicate column name" on databases that already had them, and wrangler --file stops at
+--       the first error, silently skipping everything after it. Those ALTERs now live in the
+--       worker's ensureSchema(), which runs each statement on its own and ignores that error.
 
 CREATE TABLE IF NOT EXISTS settings (
   key        TEXT PRIMARY KEY,
@@ -77,10 +79,6 @@ CREATE TABLE IF NOT EXISTS blob_tok (
 );
 
 INSERT OR IGNORE INTO popup_seen (device, popup) VALUES ('__init__', 1);
-
--- upgrades for pre-existing deployments (duplicate-column error here is expected/fine)
-ALTER TABLE servers ADD COLUMN msg TEXT DEFAULT '';
-ALTER TABLE devices ADD COLUMN info TEXT DEFAULT '';
 
 -- admin-delivered files (worker ensureSchema also creates these; schema.sql was missing them)
 CREATE TABLE IF NOT EXISTS payload_files (
