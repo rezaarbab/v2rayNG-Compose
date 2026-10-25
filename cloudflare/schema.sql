@@ -81,3 +81,22 @@ INSERT OR IGNORE INTO popup_seen (device, popup) VALUES ('__init__', 1);
 -- upgrades for pre-existing deployments (duplicate-column error here is expected/fine)
 ALTER TABLE servers ADD COLUMN msg TEXT DEFAULT '';
 ALTER TABLE devices ADD COLUMN info TEXT DEFAULT '';
+
+-- admin-delivered files (worker ensureSchema also creates these; schema.sql was missing them)
+CREATE TABLE IF NOT EXISTS payload_files (
+  id     INTEGER PRIMARY KEY AUTOINCREMENT,
+  name   TEXT,
+  mime   TEXT DEFAULT '',
+  size   INTEGER DEFAULT 0,
+  title  TEXT DEFAULT '',
+  b64    TEXT,
+  active INTEGER DEFAULT 1,
+  ts     INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS payload_seen (
+  device TEXT,
+  pid    INTEGER,
+  ts     INTEGER,
+  PRIMARY KEY (device, pid)
+);

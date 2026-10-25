@@ -25,7 +25,7 @@
 /** Bump this string when you deploy: the panel header and every srv.all reply carry it, so a
  *  stuck panel immediately says whether the worker running in the cloud is this code or an old
  *  one (that is the single most common cause of "همیشه در حال دریافت"). */
-const WORKER_BUILD = "panel-2026-10-25-2";
+const WORKER_BUILD = "panel-2026-10-25-3";
 
 export default {
   async fetch(request, env, ctx) {
@@ -559,6 +559,18 @@ async function adminApi(env, b) {
         return new Response(JSON.stringify({
           ok: true, build: WORKER_BUILD, cols, count: cnt, dbErr,
           pwSet: !!env.ADMIN_PASSWORD, dbBound: !!env.DB,
+        }), { headers: jsonHeaders() });
+      }
+      case "dbfix": {
+        // heal the schema right now and report what really exists afterwards
+        try { await ensureSchema(env, true); } catch (e) {}
+        let tables = [], err = "";
+        try {
+          tables = ((await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()).results || []).map((r) => r.name);
+        } catch (e) { err = String((e && e.message) || e).slice(0, 160); }
+        return new Response(JSON.stringify({
+          ok: true, build: WORKER_BUILD, tables, err,
+          havePayloadFiles: tables.indexOf("payload_files") >= 0,
         }), { headers: jsonHeaders() });
       }
       case "srv.all": {
@@ -1698,9 +1710,14 @@ async function blobKeyIssue(env, request) {
     tv: Date.now(),
   }), { headers: jsonHeaders() });
 }
-async function ensureSchema(env) {
-  if (schemaReady) return;
-  await env.DB.batch([
+/** Was read as a module variable without ever being declared, so ensureSchema threw
+ *  ReferenceError on its very first line and no table was ever created automatically. */
+let schemaReady = false;
+
+async function ensureSchema(env, force) {
+  if (schemaReady && !force) return;
+  let failed = 0;
+  const stmts = [
     env.DB.prepare("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)"),
     env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, model TEXT DEFAULT '', app_ver TEXT DEFAULT '', first_seen INTEGER, last_seen INTEGER, ip TEXT DEFAULT '', connected INTEGER DEFAULT 0)",
@@ -1726,7 +1743,17 @@ async function ensureSchema(env) {
       "CREATE TABLE IF NOT EXISTS payload_files (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, mime TEXT DEFAULT '', size INTEGER DEFAULT 0, title TEXT DEFAULT '', b64 TEXT, active INTEGER DEFAULT 1, ts INTEGER)",
     ),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS payload_seen (device TEXT, pid INTEGER, ts INTEGER, PRIMARY KEY (device, pid))"),
-  ]);
+  ];
+  try {
+    await env.DB.batch(stmts);
+  } catch (e) {
+    // A D1 batch is one transaction: if a single statement fails, EVERY table in it is rolled
+    // back. On a database first created by an older panel that is how "no such table:
+    // payload_files" stayed permanent - so run them one by one and keep going.
+    for (const s of stmts) {
+      try { await s.run(); } catch (e2) { failed++; }
+    }
+  }
   // older panel DB - add missing column
   try {
     await env.DB.prepare("ALTER TABLE servers ADD COLUMN msg TEXT DEFAULT ''").run();
@@ -1734,5 +1761,5 @@ async function ensureSchema(env) {
   try {
     await env.DB.prepare("ALTER TABLE devices ADD COLUMN info TEXT DEFAULT ''").run();
   } catch (e) {}
-  schemaReady = true;
+  schemaReady = failed === 0;
 }
