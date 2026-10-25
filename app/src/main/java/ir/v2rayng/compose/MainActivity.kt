@@ -19,7 +19,7 @@ class MainActivity : ComponentActivity() {
         ir.v2rayng.compose.core.CrashNote.install(this)
         lockHighRefreshRate()
         ir.v2rayng.compose.core.Persist.write { ir.v2rayng.compose.data.SettingsStore(this).load() }
-        applySystemBars(SettingsStore(this).dark())
+        applySystemBars(SettingsStore(this).darkFast())
         setContent {
             AppRoot()
         }

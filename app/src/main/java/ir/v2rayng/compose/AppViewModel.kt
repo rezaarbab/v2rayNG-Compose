@@ -60,7 +60,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
-    private val _settings = MutableStateFlow(store.load())
+    private val _settings = MutableStateFlow(Settings())
+
+    /** Set by the first IO load, and by any user edit that happens before it finishes. */
+    @Volatile
+    private var userEdited = false
     val settings: StateFlow<Settings> = _settings.asStateFlow()
 
     /** admin-driven behavior flags - MUST be before init (Kotlin field order) */
@@ -108,24 +112,37 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             CrashNote.exitReasons(AppCtx.app)?.let { log("WARN", "Last process exits - " + it) }
         } catch (_: Exception) {
         }
-        val tLoad0 = android.os.SystemClock.elapsedRealtime()
-        val saved = store.loadServers()
-        val sel = store.loadSelectedId()
-        if (saved != null) {
-            _state.value = _state.value.copy(
-                servers = saved,
-                selectedId = if (saved.any { it.id == sel }) sel else saved.first().id,
-            )
+        // every stored value is behind a StrongBox unseal, so none of it may run while the first
+        // frame is being composed - the UI paints from defaults and the data lands milliseconds later
+        viewModelScope.launch(Dispatchers.IO) {
+            val tLoad0 = android.os.SystemClock.elapsedRealtime()
+            val s = store.load()
+            val saved = store.loadServers()
+            val sel = store.loadSelectedId()
+            val base = store.loadRemoteBase()
+            if (userEdited) {
+                log("WARN", "Stored data arrived after an edit - keeping what is on screen")
+            } else {
+                _settings.value = s
+                if (saved != null) {
+                    _state.update { st ->
+                        st.copy(
+                            servers = saved,
+                            selectedId = if (saved.any { it.id == sel }) sel else saved.first().id,
+                        )
+                    }
+                }
+                Remote.BASE = base
+            }
+            loadRemoteState()
+            log("INFO", "startup: stored data in " + (android.os.SystemClock.elapsedRealtime() - tLoad0) + "ms")
+            if (_state.value.servers.isNotEmpty() && effPingStart()) {
+                pingServers(null, effFlagStart())
+            }
+            // remote admin backend (cloudflare worker - see cloudflare/worker.js)
+            syncNow()
+            startRemoteLoop()
         }
-        log("INFO", "startup: stored data in " + (android.os.SystemClock.elapsedRealtime() - tLoad0) + "ms")
-        if (_state.value.servers.isNotEmpty() && effPingStart()) {
-            pingServers(null, effFlagStart())
-        }
-        // remote admin backend (cloudflare worker - see cloudflare/worker.js)
-        Remote.BASE = store.loadRemoteBase()
-        loadRemoteState()
-        syncNow()
-        startRemoteLoop()
         var lastRealState = ir.v2rayng.compose.core.RealState.IDLE
         viewModelScope.launch {
             ir.v2rayng.compose.core.XrayBridge.status.collect { st ->
@@ -252,6 +269,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun put(f: (AppState) -> AppState) = _state.update(f)
 
     private fun setSettings(f: (Settings) -> Settings) {
+        userEdited = true
         val s = f(_settings.value)
         _settings.value = s
         queueSave()
@@ -270,11 +288,17 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
     }
 
-    private fun persistServers() = Persist.write {
-        store.saveServers(_state.value.servers, _state.value.selectedId)
+    private fun persistServers() {
+        userEdited = true
+        Persist.write {
+            store.saveServers(_state.value.servers, _state.value.selectedId)
+        }
     }
 
-    private fun persistSelectedId(id: String) = Persist.write { store.saveSelectedId(id) }
+    private fun persistSelectedId(id: String) {
+        userEdited = true
+        Persist.write { store.saveSelectedId(id) }
+    }
 
     fun setDark(v: Boolean) = setSettings { it.copy(dark = v) }
     fun setAccent(i: Int) = setSettings { it.copy(accent = i) }

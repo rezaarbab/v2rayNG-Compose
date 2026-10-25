@@ -117,6 +117,7 @@ class SettingsStore(context: Context) {
          *  (~200ms each on the phone in the APP_SCOUT traces) and the app sat on a black screen for
          *  about a minute after every restart. The whole object is now one sealed blob: one unseal. */
         private const val BLOB_KEY = "sec-all"
+        private const val UI_PREFS = "v2ui"
 
         @Volatile
         private var cache: Settings? = null
@@ -130,7 +131,14 @@ class SettingsStore(context: Context) {
 
     fun load(): Settings = cache ?: readBlob().also { cache = it }
 
-    /** The one key needed before the whole object, without sealing 58 of them at startup. */
+    /** The one value needed before the first frame. Reading it through SecurePrefs would cost a
+     *  StrongBox unseal inside onCreate, which is exactly what made the app start slowly. */
+    fun darkFast(): Boolean = try {
+        ctx.getSharedPreferences(UI_PREFS, android.content.Context.MODE_PRIVATE).getBoolean("dark", true)
+    } catch (_: Exception) {
+        dark()
+    }
+
     fun dark(): Boolean {
         val raw = blobRaw()
         if (!raw.isNullOrBlank()) {
@@ -304,6 +312,11 @@ class SettingsStore(context: Context) {
     /** One seal for the whole object instead of 58 - that per-key write is what froze the UI. */
     fun save(s: Settings) {
         cache = s
+        try {
+            ctx.getSharedPreferences(UI_PREFS, android.content.Context.MODE_PRIVATE).edit()
+                .putBoolean("dark", s.dark).apply()
+        } catch (_: Exception) {
+        }
         val j = JSONObject()
         fun p(k: String, v: Any) { j.put(k, v.toString()) }
         p("dark", s.dark)

@@ -286,15 +286,8 @@ private fun ServerRow(
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
-                // one compact line for host/note and traffic: as separate lines the traffic text
-                // fell below the card edge and was cut in half once the row got action buttons
                 val sub = buildString {
                     if (profile.note.isNotBlank() || !profile.id.startsWith("rem-")) append(profile.note.ifBlank { profile.host })
-                    if (profile.up > 0 || profile.down > 0) {
-                        if (isNotEmpty()) append("  ·  ")
-                        append("↑ ").append(ir.v2rayng.compose.data.TimeKit.human(profile.up))
-                        append("  ↓ ").append(ir.v2rayng.compose.data.TimeKit.human(profile.down))
-                    }
                     if (profile.category.isNotBlank()) {
                         if (isNotEmpty()) append("  ·  ")
                         append(profile.category)
@@ -309,6 +302,19 @@ private fun ServerRow(
                         maxLines = 1,
                         softWrap = false,
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
+                if (profile.up > 0 || profile.down > 0) {
+                    // its own line with room: sharing a line made the two counters run into each other
+                    Text(
+                        text = "↑ " + ir.v2rayng.compose.data.TimeKit.human(profile.up) + "     ↓ " + ir.v2rayng.compose.data.TimeKit.human(profile.down),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 3.dp),
                     )
                 }
             }
