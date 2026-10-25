@@ -3,6 +3,7 @@
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ir.v2rayng.compose.core.CrashNote
+import ir.v2rayng.compose.core.Persist
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.AppInfo
 import ir.v2rayng.compose.data.LogLine
@@ -187,7 +188,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                                 altCountry = res.altCountry,
                                             )
                                         }
-                                        store.saveServers(_state.value.servers, _state.value.selectedId)
+                                        persistServers()
                                         log("INFO", "Exit IP: ${res.ip} (${res.code}) ${res.detail}")
                                     } else {
                                         log("WARN", S.LOG_IP_FAIL)
@@ -263,6 +264,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
     }
 
+    private fun persistServers() = Persist.write {
+        store.saveServers(_state.value.servers, _state.value.selectedId)
+    }
+
+    private fun persistSelectedId(id: String) = Persist.write { store.saveSelectedId(id) }
+
     fun setDark(v: Boolean) = setSettings { it.copy(dark = v) }
     fun setAccent(i: Int) = setSettings { it.copy(accent = i) }
     fun setCustomAccent(v: Long) = setSettings { it.copy(customAccent = v) }
@@ -310,18 +317,20 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     }
 
     private fun saveRemoteState() {
-        store.saveRemote(
-            JSONObject()
-                .put("pd", popupDismissed)
-                .put("ud", updateDismiss)
-                .put("ns", notifSeen)
-                .toString(),
-        )
+        Persist.write {
+            store.saveRemote(
+                JSONObject()
+                    .put("pd", popupDismissed)
+                    .put("ud", updateDismiss)
+                    .put("ns", notifSeen)
+                    .toString(),
+            )
+        }
     }
 
     fun setRemoteBase(url: String) {
         Remote.BASE = url.trim()
-        store.saveRemoteBase(Remote.BASE)
+        Persist.write { store.saveRemoteBase(Remote.BASE) }
     }
 
     fun remoteBase(): String = Remote.BASE
@@ -501,7 +510,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             }
             s.copy(servers = kept + rem, selectedId = selectId)
         }
-        store.saveServers(_state.value.servers, _state.value.selectedId)
+        persistServers()
         mergeStamp = System.currentTimeMillis()
         // auto-ping freshly delivered servers (admin added new ones)
         val newIds = list.map { it.id }.filter { !knownBefore.contains(it) }.toSet()
@@ -697,7 +706,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     /** Per-server bubble color override (-1 = follow the global bubble color). */
     fun setSrvBubbleColor(id: String, color: Long) {
         put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(bubbleColor = color) else it }) }
-        store.saveServers(_state.value.servers, _state.value.selectedId)
+        persistServers()
     }
 
     fun setBubbleOn(v: Boolean) = setSettings { it.copy(bubbleOn = v) }
@@ -706,7 +715,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun setServerIcon(id: String, idx: Int, pack: Int = -1) {
         put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(stickerIndex = idx, pack = pack) else it }) }
-        store.saveServers(_state.value.servers, _state.value.selectedId)
+        persistServers()
     }
 
     fun setRouteIcon(slot: Int, idx: Int, pack: Int = -1) = setSettings { s ->
@@ -725,7 +734,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     /** Def on a server: back to the default sticker AND re-detect its country flag. */
     fun resetServerIcon(id: String) {
         put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(pack = -1) else it }) }
-        store.saveServers(_state.value.servers, _state.value.selectedId)
+        persistServers()
         log("INFO", "Server sticker reset - detecting country...")
         viewModelScope.launch {
             val connectedSel = _state.value.vpnState == VpnState.CONNECTED && _state.value.selectedId == id
@@ -1224,7 +1233,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             )
         }
         log("INFO", S.LOG_ADDED.format(shownName))
-        store.saveServers(_state.value.servers, _state.value.selectedId)
+        persistServers()
     }
 
     fun resetTraffic() {
@@ -1240,7 +1249,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun togglePin(id: String) {
         put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(pinned = !it.pinned) else it }) }
-        store.saveServers(_state.value.servers, _state.value.selectedId)
+        persistServers()
     }
 
     fun resetTotalTraffic() {
@@ -1266,7 +1275,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         val name = _state.value.servers.firstOrNull { it.id == id }?.name ?: return
         val tunnelUp = _state.value.vpnState == VpnState.CONNECTED || _state.value.vpnState == VpnState.CONNECTING
         put { s -> s.copy(selectedId = id) }
-        store.saveSelectedId(id)
+        persistSelectedId(id)
         log("INFO", S.LOG_SELECTED.format(name))
         if (tunnelUp) {
             // hot swap: drop the old tunnel and bring the newly selected one up

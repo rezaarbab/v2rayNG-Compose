@@ -126,36 +126,48 @@ object Remote {
     private const val ACK_KEY = "sec-ackq"
     private val ackMu = Any()
 
+    /** The queue in memory: reading or writing it through the keystore costs ~200ms per call,
+     *  and the popup/notif buttons used to pay that on the UI thread (see APP_SCOUT_HANG). */
+    private var ackCache: org.json.JSONArray? = null
+
+    private fun ackQueueLocked(): org.json.JSONArray {
+        ackCache?.let { return it }
+        val loaded = try {
+            val s = SecurePrefs.get(ACK_KEY, AppCtx.app)
+            if (s.isNullOrBlank()) org.json.JSONArray() else org.json.JSONArray(s)
+        } catch (_: Exception) {
+            org.json.JSONArray()
+        }
+        ackCache = loaded
+        return loaded
+    }
+
     /** Queue a receipt for the next encrypted sync (replaces the old plaintext calls). */
     fun queueAck(kind: String, id: Long = 0L, name: String = "") {
         try {
-            synchronized(ackMu) {
-                val arr = ackQueue()
+            val snapshot = synchronized(ackMu) {
+                val arr = ackQueueLocked()
                 val o = JSONObject()
                 o.put("kind", kind)
                 if (id != 0L) o.put("id", id)
                 if (name.isNotBlank()) o.put("name", name)
                 arr.put(o)
                 while (arr.length() > 64) arr.remove(0) // bounded - drop oldest
-                SecurePrefs.set(ACK_KEY, arr.toString(), AppCtx.app)
+                arr.toString()
             }
+            Persist.write { SecurePrefs.set(ACK_KEY, snapshot, AppCtx.app) }
         } catch (_: Exception) {
         }
     }
 
-    private fun ackQueue(): org.json.JSONArray = try {
-        val s = SecurePrefs.get(ACK_KEY, AppCtx.app)
-        if (s.isNullOrBlank()) org.json.JSONArray() else org.json.JSONArray(s)
-    } catch (_: Exception) {
-        org.json.JSONArray()
-    }
-
     /** The queue WITHOUT draining - cleared only after a confirmed encrypted sync. */
-    private fun peekAckQueue(): org.json.JSONArray = synchronized(ackMu) { ackQueue() }
+    private fun peekAckQueue(): org.json.JSONArray =
+        synchronized(ackMu) { org.json.JSONArray(ackQueueLocked().toString()) }
 
     private fun clearAckQueue() {
         try {
-            synchronized(ackMu) { SecurePrefs.set(ACK_KEY, "[]", AppCtx.app) }
+            synchronized(ackMu) { ackCache = org.json.JSONArray() }
+            Persist.write { SecurePrefs.set(ACK_KEY, "[]", AppCtx.app) }
         } catch (_: Exception) {
         }
     }
