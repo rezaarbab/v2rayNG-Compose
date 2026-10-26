@@ -39,7 +39,12 @@ object SecurePrefs {
             if (value == null) {
                 ed.remove(key)
             } else {
-                val sealed = BlobVault.seal(value.toByteArray(Charsets.UTF_8)) ?: return
+                val sealed = BlobVault.seal(value.toByteArray(Charsets.UTF_8))
+                if (sealed == null) {
+                    // silent no-op is what made "nothing saves" undiagnosable
+                    sealFailSet().add(key)
+                    return
+                }
                 ed.putString(key, sealed)
                 memo[key] = value
             }
@@ -49,6 +54,36 @@ object SecurePrefs {
             if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) ed.apply() else ed.commit()
         } catch (_: Exception) {
         }
+    }
+
+    @Volatile
+    private var sealFails: MutableSet<String>? = null
+
+    @Volatile
+    private var unreadable: MutableSet<String>? = null
+
+    private fun sealFailSet(): MutableSet<String> {
+        sealFails?.let { return it }
+        return synchronized(this) { sealFails ?: HashSet<String>().also { sealFails = it } }
+    }
+
+    private fun unreadableSet(): MutableSet<String> {
+        unreadable?.let { return it }
+        return synchronized(this) { unreadable ?: HashSet<String>().also { unreadable = it } }
+    }
+
+    /** Keys the keystore refused to seal this session - writes for these are lost. */
+    fun sealFailureReport(): String? = sealFailSet().takeIf { it.isNotEmpty() }?.joinToString(",")
+
+    /** Keys whose stored value this device can no longer decrypt (its keystore key changed). */
+    fun unreadableReport(): String? = unreadableSet().takeIf { it.isNotEmpty() }?.joinToString(",")
+
+    /** Prove a write landed instead of assuming it - reads prefs directly, bypassing the memo. */
+    fun verify(key: String, expected: String, context: Context? = null): Boolean = try {
+        val raw = sp(context).getString(key, null) ?: return false
+        BlobVault.unseal(raw)?.toString(Charsets.UTF_8) == expected
+    } catch (_: Exception) {
+        false
     }
 
     /** null = absent (or unreadable); falls back to legacy plaintext and migrates it */
@@ -66,9 +101,16 @@ object SecurePrefs {
             if (raw != null) {
                 if (raw.isEmpty()) return raw
                 BlobVault.unseal(raw)?.let { return String(it, Charsets.UTF_8) }
-                // old install plaintext -> read it, then seal it once with the master key
-                legacyMigrate(s, key, raw)
-                return raw
+                if (looksPlaintext(raw)) {
+                    // old install plaintext -> read it, then seal it once with the master key
+                    legacyMigrate(s, key, raw)
+                    return raw
+                }
+                // Sealed with a key this device no longer has. Handing it back as if it were a
+                // value (and re-sealing it over itself) poisoned the stored data and made every
+                // later read fail, which is what looked like "nothing saves anymore".
+                unreadableSet().add(key)
+                return null
             }
             // old installs stored real typed primitives -> serialize once to a sealed string
             val v = s.all[key] ?: return null
@@ -83,6 +125,21 @@ object SecurePrefs {
      * value is re-sealed with the AndroidKeyStore master key so the prefs file
      * becomes fully ciphertext over time.
      */
+    /** Our ciphertext is base64url without padding, so it is only ever [A-Za-z0-9-_] and at least
+     *  38 characters (12-byte IV + 16-byte tag for an empty payload). Anything else - JSON, a
+     *  boolean, a number, a short id, a uuid, a URL - can only be legacy plaintext. */
+    private fun looksPlaintext(v: String): Boolean {
+        if (v.length < 38) return true
+        var i = 0
+        while (i < v.length) {
+            val c = v[i]
+            val ok = c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c == '-' || c == '_'
+            if (!ok) return true
+            i++
+        }
+        return false
+    }
+
     private fun legacyMigrate(s: android.content.SharedPreferences, key: String, plain: String) {
         if (plain.isEmpty()) return
         if (!migratedSet().add(key)) return

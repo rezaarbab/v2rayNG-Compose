@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ir.v2rayng.compose.core.CrashNote
 import ir.v2rayng.compose.core.Persist
+import ir.v2rayng.compose.core.sec.SecurePrefs
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.AppInfo
 import ir.v2rayng.compose.data.LogLine
@@ -185,6 +186,15 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             }
             Remote.BASE = base
             storedListLoaded = true
+            log(
+                "INFO",
+                "restored: " + _state.value.servers.size + " servers, style " + _settings.value.stickerStyle +
+                    ", traffic " + ir.v2rayng.compose.data.TimeKit.human(appUp) + "/" +
+                    ir.v2rayng.compose.data.TimeKit.human(appDown) +
+                    if (SettingsStore.lastSaveVerified == false) " (last save NOT verified)" else ""
+            )
+            SecurePrefs.unreadableReport()?.let { log("ERROR", "Stored values this device cannot decrypt (keystore key changed): " + it) }
+            SecurePrefs.sealFailureReport()?.let { log("ERROR", "Keystore refused to write: " + it) }
             loadRemoteState()
             log("INFO", "startup: stored data in " + (android.os.SystemClock.elapsedRealtime() - tLoad0) + "ms")
             if (_state.value.servers.isNotEmpty() && effPingStart()) {
@@ -391,6 +401,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         saveJob = viewModelScope.launch(Dispatchers.IO) {
             delay(120)
             store.save(_settings.value)
+            if (SettingsStore.lastSaveVerified == false) {
+                log("ERROR", "Settings write did NOT stick - the keystore rejected it or read-back differs")
+            }
         }
     }
 
@@ -425,7 +438,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setDark(v: Boolean) = setSettings { it.copy(dark = v) }
     fun setAccent(i: Int) = setSettings { it.copy(accent = i) }
     fun setCustomAccent(v: Long) = setSettings { it.copy(customAccent = v) }
-    fun setStickerStyle(i: Int) = setSettings { it.copy(stickerStyle = i) }
+    fun setStickerStyle(i: Int) {
+        setSettings { it.copy(stickerStyle = i) }
+        log("INFO", "Sticker style set to " + i)
+    }
     fun setWallpaperStyle(i: Int) = setSettings { it.copy(wallpaperStyle = i) }
     fun setWallpaper(i: Int) = setSettings { it.copy(wallpaperIndex = i) }
     fun setWallpaperColor(v: Long) = setSettings { it.copy(wallpaperColor = v) }
