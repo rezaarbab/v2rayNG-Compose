@@ -90,6 +90,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      *  counters begin at zero again, but the row must show what the server has really carried. */
     private var trafficBaseUp = 0L
     private var trafficBaseDown = 0L
+
+    /** Highest session counters seen, kept so the zeroing at disconnect cannot erase them. */
+    private var sessionUp = 0L
+    private var sessionDown = 0L
     val settings: StateFlow<Settings> = _settings.asStateFlow()
 
     /** admin-driven behavior flags - MUST be before init (Kotlin field order) */
@@ -228,13 +232,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                         if (st.state == ir.v2rayng.compose.core.RealState.IDLE ||
                             st.state == ir.v2rayng.compose.core.RealState.BROKEN
                         ) {
-                            // stopCore clears the counters, so fold the session that just ended into
-                            // the base instead of letting the row fall back to yesterday's total
-                            val srv = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
-                            if (srv != null && (srv.up > 0L || srv.down > 0L) && st.up == 0L && st.down == 0L) {
-                                trafficBaseUp = srv.up
-                                trafficBaseDown = srv.down
-                            }
+                            // fold this session into the lifetime base from the counters we saw last,
+                            // because stopCore() already zeroed them in the bridge
+                            trafficBaseUp += sessionUp
+                            trafficBaseDown += sessionDown
+                            sessionUp = 0L
+                            sessionDown = 0L
                         }
                         when (st.state) {
                             ir.v2rayng.compose.core.RealState.CONNECTING -> {
@@ -275,7 +278,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             ir.v2rayng.compose.core.RealState.BROKEN -> {
                                 watchdogJob?.cancel()
                                 Remote.queueAck("event", name = "disconnect")
-                                persistServers()
+                                persistTraffic("tunnel broke")
                                 log("ERROR", "${S.LOG_FAILED}${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
                             }
                             ir.v2rayng.compose.core.RealState.IDLE -> {
@@ -287,7 +290,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                 }
                                 // the core counters go back to zero with the tunnel: store the
                                 // lifetime totals of this session before that happens
-                                persistServers()
+                                persistTraffic("disconnect")
                                 log("INFO", S.LOG_DISCONNECTED)
                             }
                         }
@@ -322,6 +325,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             }
                         }
                     }
+                    if (st.up > sessionUp) sessionUp = st.up
+                    if (st.down > sessionDown) sessionDown = st.down
                     put { s ->
                         val targetId = s.selectedId
                         if (st.state == ir.v2rayng.compose.core.RealState.CONNECTED) {
@@ -347,7 +352,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             },
                             servers = s.servers.map { srv ->
                                 if (srv.id == targetId) {
-                                    srv.copy(up = trafficBaseUp + st.up, down = trafficBaseDown + st.down)
+                                    // max(): a zeroed or momentary dip in the core counters must never
+                                    // walk a lifetime total backwards
+                                    srv.copy(
+                                        up = maxOf(srv.up, trafficBaseUp + st.up),
+                                        down = maxOf(srv.down, trafficBaseDown + st.down),
+                                    )
                                 } else srv
                             },
                         )
@@ -358,7 +368,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                         val nowMs = android.os.SystemClock.elapsedRealtime()
                         if (nowMs - lastTrafficPersist > 15_000L) {
                             lastTrafficPersist = nowMs
-                            persistServers()
+                            persistTraffic("15s while connected")
                         }
                     }
                 }
@@ -455,6 +465,21 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         val srv = _state.value.servers.firstOrNull { it.id == _state.value.selectedId } ?: return
         trafficBaseUp = (srv.up - sessionUp).coerceAtLeast(0L)
         trafficBaseDown = (srv.down - sessionDown).coerceAtLeast(0L)
+        // a new session starts its own peak from zero, or the next fold would add it twice
+        this.sessionUp = 0L
+        this.sessionDown = 0L
+    }
+
+    /** Persists the list and says so, with the numbers that went to disk. */
+    private fun persistTraffic(reason: String) {
+        val sel = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
+        log(
+            "INFO",
+            "traffic persist (" + reason + "): base " + trafficBaseUp + "/" + trafficBaseDown +
+                ", session " + sessionUp + "/" + sessionDown + ", row " +
+                (sel?.up ?: -1L) + "/" + (sel?.down ?: -1L) + ", total " + appUp + "/" + appDown
+        )
+        persistServers()
     }
 
     private fun persistServers(now: Boolean = false) {
