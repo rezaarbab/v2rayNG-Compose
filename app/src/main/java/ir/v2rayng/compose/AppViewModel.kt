@@ -1063,8 +1063,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                     null to "config"
                                 }
                                 else -> {
-                                    delay(350)
-                                    (40 + Random.nextInt(400)) to null
+                                    // nothing to measure: report that instead of inventing a latency
+                                    null to "no link"
                                 }
                             }
                             put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms, pingErr = msErr) else it }) }
