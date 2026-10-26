@@ -71,6 +71,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     @Volatile
     private var serversTouched = false
 
+    /** Set once the stored server list has actually been read (or proven absent). */
+    @Volatile
+    private var storedListLoaded = false
+
+    private var lastTrafficPersist = 0L
+
     /** Lifetime totals of the selected server before this tunnel session started: the core
      *  counters begin at zero again, but the row must show what the server has really carried. */
     private var trafficBaseUp = 0L
@@ -170,6 +176,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 }
             }
             Remote.BASE = base
+            storedListLoaded = true
             loadRemoteState()
             log("INFO", "startup: stored data in " + (android.os.SystemClock.elapsedRealtime() - tLoad0) + "ms")
             if (_state.value.servers.isNotEmpty() && effPingStart()) {
@@ -200,12 +207,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                         }
                         when (st.state) {
                             ir.v2rayng.compose.core.RealState.CONNECTING -> {
-                                val srv = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
-                                trafficBaseUp = srv?.up ?: 0L
-                                trafficBaseDown = srv?.down ?: 0L
+                                captureTrafficBase(st.up, st.down)
                                 log("INFO", "Core connecting${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
                             }
                             ir.v2rayng.compose.core.RealState.CONNECTED -> {
+                                // the app can also arrive here without ever seeing CONNECTING: the
+                                // tunnel kept running while the app was closed
+                                captureTrafficBase(st.up, st.down)
                                 log("INFO", S.LOG_CONNECTED)
                                 Remote.queueAck("event", name = "connect")
                                 // tunnel watchdog: only trust CONNECTED when real internet passes through it
@@ -313,6 +321,15 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             },
                         )
                     }
+                    // the counters used to reach the disk only when the tunnel stopped, so closing
+                    // the app without disconnecting lost the whole session's traffic
+                    if (st.state == ir.v2rayng.compose.core.RealState.CONNECTED) {
+                        val nowMs = android.os.SystemClock.elapsedRealtime()
+                        if (nowMs - lastTrafficPersist > 15_000L) {
+                            lastTrafficPersist = nowMs
+                            persistServers()
+                        }
+                    }
                 }
             }
         }
@@ -353,10 +370,28 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
     }
 
-    private fun persistServers() {
-        Persist.write {
-            store.saveServers(_state.value.servers, _state.value.selectedId)
-        }
+    /** Closing the app must not lose the counters - write them down on the way out, on this
+     *  thread, because the queue's worker is a daemon and dies with the process. */
+    override fun onCleared() {
+        persistServers(now = true)
+        super.onCleared()
+    }
+
+    /** The core counts from its own start, the row must show lifetime totals: the difference
+     *  between the two is whatever was stored before this session began. Works both for a fresh
+     *  connect (st.up is 0) and for reopening the app while the tunnel is still running. */
+    private fun captureTrafficBase(sessionUp: Long, sessionDown: Long) {
+        val srv = _state.value.servers.firstOrNull { it.id == _state.value.selectedId } ?: return
+        trafficBaseUp = (srv.up - sessionUp).coerceAtLeast(0L)
+        trafficBaseDown = (srv.down - sessionDown).coerceAtLeast(0L)
+    }
+
+    private fun persistServers(now: Boolean = false) {
+        // before the stored list has been read, an empty screen means "not loaded yet", not
+        // "the user has no servers" - writing that would erase the real list
+        if (!storedListLoaded && _state.value.servers.isEmpty()) return
+        val block = { store.saveServers(_state.value.servers, _state.value.selectedId) }
+        if (now) Persist.writeNow(block) else Persist.write { block() }
     }
 
     private fun persistSelectedId(id: String) {

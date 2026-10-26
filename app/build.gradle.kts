@@ -20,11 +20,9 @@ android {
     signingConfigs {
         create("ci") {
             storeFile = rootProject.file("ci-release.jks")
-            // the same certificate on every build, otherwise installing an update means uninstalling
-            // the app first and Android throws away the keystore key with all the stored data
-            storePassword = System.getenv("RELEASE_STORE_PASSWORD") ?: "blob-tmp-2026"
+            storePassword = "blob-tmp-2026"
             keyAlias = "blob"
-            keyPassword = System.getenv("RELEASE_KEY_PASSWORD") ?: System.getenv("RELEASE_STORE_PASSWORD") ?: "blob-tmp-2026"
+            keyPassword = "blob-tmp-2026"
         }
     }
 

@@ -19,4 +19,13 @@ object Persist {
         } catch (_: Exception) {
         }
     }
+
+    /** Runs on the calling thread. Used when the process is on its way out: the worker thread is
+     *  a daemon, so a write still sitting in its queue would be lost with it. */
+    fun writeNow(block: () -> Unit) {
+        try {
+            block()
+        } catch (_: Exception) {
+        }
+    }
 }

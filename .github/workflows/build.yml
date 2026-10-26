@@ -20,52 +20,13 @@ jobs:
         with:
           gradle-version: "8.11.1"
 
-      - name: Restore or create the signing keystore
-        env:
-          KS_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
-          KS_PASS: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          KS_KEYPASS: ${{ secrets.RELEASE_KEY_PASSWORD }}
+      - name: Generate signing keystore
         run: |
-          if [ -n "$KS_B64" ]; then
-            if [ -z "$KS_PASS" ]; then
-              echo "::error::RELEASE_KEYSTORE_B64 is set but RELEASE_STORE_PASSWORD is not, so Gradle tries the fallback password and packaging dies with 'keystore password was incorrect'. Add the password you gave keytool -storepass as a secret."
-              exit 1
-            fi
-            printf %s "$KS_B64" | tr -d '\r\n' | base64 -d > ci-release.jks
-            if [ ! -s ci-release.jks ]; then
-              echo "::error::RELEASE_KEYSTORE_B64 did not decode to anything. Produce it with: base64 -w 0 blob-release.jks (certutil PEM output is not accepted)."
-              exit 1
-            fi
-            if ! keytool -list -keystore ci-release.jks -storepass "$KS_PASS" >/dev/null 2>&1; then
-              echo "::error::the restored keystore cannot be opened with RELEASE_STORE_PASSWORD: wrong password secret, or the secret is not the raw .jks file."
-              ls -l ci-release.jks
-              exit 1
-            fi
-            if [ -n "$KS_KEYPASS" ] && [ "$KS_KEYPASS" != "$KS_PASS" ]; then
-              echo "note: RELEASE_KEY_PASSWORD differs from RELEASE_STORE_PASSWORD - the private key entry is protected by its own password, so both are tried below"
-            fi
-            # loading the keystore is not enough: Gradle also has to read the key, and a key
-            # protected by another password fails later with 'keystore password was incorrect'
-            KS_KEY="${KS_KEYPASS:-$KS_PASS}"
-            mkdir -p _signtest
-            printf 'Manifest-Version: 1.0\n\n' > _signtest/manifest.mf
-            jar cfm _signtest/t.jar _signtest/manifest.mf
-            if ! jarsigner -keystore ci-release.jks -storepass "$KS_PASS" -keypass "$KS_KEY" _signtest/t.jar blob >/dev/null 2>&1; then
-              if [ "$KS_KEY" != "$KS_PASS" ] && jarsigner -keystore ci-release.jks -storepass "$KS_PASS" -keypass "$KS_PASS" _signtest/t.jar blob >/dev/null 2>&1; then
-                echo "::error::the key 'blob' is protected by the STORE password, but RELEASE_KEY_PASSWORD holds something else. Set RELEASE_KEY_PASSWORD to the same value as RELEASE_STORE_PASSWORD (or delete it - the build then uses the store password)."
-              else
-                echo "::error::the keystore opens with RELEASE_STORE_PASSWORD but the private key 'blob' cannot be decrypted. Its key password is not what the build was given. Fix it once with: keytool -keypasswd -alias blob -keystore blob-release.jks -storepass <STORE_PASS> -keypass <OLD_KEY_PASS> -new <STORE_PASS>, then re-upload the base64. (This happens when the keystore was created with -storepass and -keypass set to different values.)"
-              fi
-              rm -rf _signtest
-              exit 1
-            fi
-            rm -rf _signtest
-            echo "keystore and key both readable - certificate:"
-            keytool -list -v -keystore ci-release.jks -storepass "$KS_PASS" | sed -n '1,10p'
-          else
-            keytool -genkeypair -v -keystore ci-release.jks -alias blob -keyalg RSA -keysize 2048 -validity 7300 -storepass blob-tmp-2026 -keypass blob-tmp-2026 -dname "CN=Blob, O=Blob, C=IR"
-            echo "::warning::RELEASE_KEYSTORE_B64 is not set, so this APK is signed with a throwaway certificate. Installing over the previous one forces an uninstall, and Android then deletes the keystore key plus all app data: settings, server list and traffic look wiped on every build."
-          fi
+          keytool -genkeypair -v \
+            -keystore ci-release.jks -alias blob \
+            -keyalg RSA -keysize 2048 -validity 7300 \
+            -storepass blob-tmp-2026 -keypass blob-tmp-2026 \
+            -dname "CN=Blob, O=Blob, C=IR"
 
       - name: Fetch Xray core library
         run: |
@@ -74,9 +35,6 @@ jobs:
           ls -la app/libs || dir app/libs || true
 
       - name: Build release APK
-        env:
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: gradle :app:assembleRelease --no-daemon --stacktrace
 
       - uses: actions/upload-artifact@v4
