@@ -100,7 +100,6 @@ object S {
     const val BUBBLE_GLOBAL = "Global"
     const val BUBBLE_HINT = "Circle for stickers, rectangle for flags - default follows the global color"
     const val SYNC_FETCHING = "Fetching settings…"
-    const val SYNC_OK = "Settings updated"
     const val CONNECT_FLAG_DANCER = "Connect button is the server flag"
     const val CONNECT_FLAG_DANCER_SUB = "After the server exit IP is found, the main sticker dances as that country"
     const val MY_IP = "My IP"

@@ -344,6 +344,23 @@ class SettingsStore(context: Context) {
 
     private fun uiPrefs() = ctx.getSharedPreferences(UI_PREFS, android.content.Context.MODE_PRIVATE)
 
+    /* ---- log tail, kept in plaintext so it survives what it is diagnosing -------------------
+     * The reproduction is "change the sticker, close the app, open it again" - which also kills the
+     * log. The last lines are therefore parked in the plain prefs file and shown again under a
+     * "previous run" header. Temporary instrument, no secrets in it (LogSanitize already ran). */
+    fun saveLogTail(text: String) {
+        try {
+            uiPrefs().edit().putString("logtail", text.take(12000)).apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    fun loadLogTail(): String = try {
+        uiPrefs().getString("logtail", "").orEmpty()
+    } catch (_: Exception) {
+        ""
+    }
+
     private fun setSelectedIdFast(id: String) {
         try {
             uiPrefs().edit().putString("sel", id).apply()

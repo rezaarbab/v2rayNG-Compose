@@ -53,6 +53,7 @@ object BlobVault {
      */
     private fun key(): SecretKey? {
         keyRef?.let { return it }
+        val t0 = android.os.SystemClock.elapsedRealtime()
         synchronized(this) {
             if (keyRef != null) return keyRef
             var k = readKey()
@@ -83,6 +84,11 @@ object BlobVault {
                 if (k == null) recoveryNote = "the keystore gives no key at all on this device - saving cannot work"
             }
             keyRef = k
+            SecJournal.note(
+                "keystore key " + (if (k != null) "ok" else "UNAVAILABLE") +
+                    " ${android.os.SystemClock.elapsedRealtime() - t0}ms" +
+                    (recoveryNote?.let { " - $it" } ?: "")
+            )
             return k
         }
     }
@@ -118,17 +124,21 @@ object BlobVault {
     /** returns base64url(iv || ct) or null when the keystore refuses */
     fun seal(plain: ByteArray): String? {
         val k = key() ?: return null
+        val t0 = android.os.SystemClock.elapsedRealtime()
         return try {
             // one StrongBox operation at a time: concurrent Cipher use fails on some devices
-            synchronized(this) {
+            val out = synchronized(this) {
                 val c = Cipher.getInstance("AES/GCM/NoPadding")
                 c.init(Cipher.ENCRYPT_MODE, k)
                 c.updateAAD(AAD.toByteArray(Charsets.UTF_8))
                 val ct = c.doFinal(plain)
                 BlobB64.encode(c.iv + ct)
             }
-        } catch (_: Exception) {
+            SecJournal.note("seal ${plain.size}B ${android.os.SystemClock.elapsedRealtime() - t0}ms")
+            out
+        } catch (e: Exception) {
             keyRef = null
+            SecJournal.note("seal ERROR ${e.javaClass.simpleName} ${android.os.SystemClock.elapsedRealtime() - t0}ms")
             null
         }
     }
@@ -137,15 +147,19 @@ object BlobVault {
         val blob = BlobB64.decode(raw) ?: return null
         if (blob.size < 13) return null
         val k = key() ?: return null
+        val t0 = android.os.SystemClock.elapsedRealtime()
         return try {
-            synchronized(this) {
+            val out = synchronized(this) {
                 val c = Cipher.getInstance("AES/GCM/NoPadding")
                 c.init(Cipher.DECRYPT_MODE, k, GCMParameterSpec(128, blob.copyOfRange(0, 12)))
                 c.updateAAD(AAD.toByteArray(Charsets.UTF_8))
                 c.doFinal(blob.copyOfRange(12, blob.size))
             }
-        } catch (_: Exception) {
+            SecJournal.note("unseal ${out.size}B ${android.os.SystemClock.elapsedRealtime() - t0}ms")
+            out
+        } catch (e: Exception) {
             keyRef = null
+            SecJournal.note("unseal ${e.javaClass.simpleName} ${android.os.SystemClock.elapsedRealtime() - t0}ms")
             null
         }
     }

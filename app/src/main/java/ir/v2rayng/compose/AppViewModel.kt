@@ -81,6 +81,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private var lastTrafficPersist = 0L
 
+    private var logCount = 0
+
     @Volatile
     private var settingsLoaded = false
 
@@ -154,9 +156,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         // every stored value is behind a StrongBox unseal, so none of it may run while the first
         // frame is being composed - the UI paints from the plaintext theme mirror and the rest
         // lands as soon as the unseals are done
+        restorePreviousLog()
         viewModelScope.launch(Dispatchers.IO) {
             val tLoad0 = android.os.SystemClock.elapsedRealtime()
+            log("INFO", "load begin (build " + (try { AppCtx.app.packageManager.getPackageInfo(AppCtx.app.packageName, 0).versionName } catch (e: Exception) { "?" }) + ")")
             val s = store.load()
+            log("INFO", "settings unsealed in " + (android.os.SystemClock.elapsedRealtime() - tLoad0) + "ms: " + describe(s))
             settingsLoaded = true
             // palette, stickers and wallpaper are what the eye notices, so they are applied before
             // the server list is unsealed; anything the user changed in the meantime is replayed on
@@ -171,9 +176,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             _settings.value = merged
             if (replayed > 0) log("INFO", "Merged " + replayed + " change(s) made while settings were loading")
             queueSave()
+            val tSrv = android.os.SystemClock.elapsedRealtime()
             val saved = store.loadServers()
             val sel = store.loadSelectedId()
             val base = store.loadRemoteBase()
+            log("INFO", "server list read in " + (android.os.SystemClock.elapsedRealtime() - tSrv) + "ms: " + (saved?.size ?: -1) + " entries, sel=" + sel)
             // A stored server list and the admin URL are data, not an edit. A running tunnel writes
             // server state (flag, traffic) while this read is still in flight, and treating that as
             // an edit is what made the whole app look reset when it was reopened.
@@ -398,6 +405,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      * the MIUI one in the APP_SCOUT_HANG trace - never do it on the click thread. A burst of
      * toggles also collapses into a single write instead of queueing dozens of full saves.
      */
+    /** The fields this bug hunt cares about - enough to compare what was read with what was written. */
+    private fun describe(s: Settings): String =
+        "style=" + s.stickerStyle + " dark=" + s.dark + " accent=" + s.accent +
+            " custom=" + s.customAccent + " mainIdx=" + s.mainIndex + " mainPack=" + s.mainPack +
+            " wallStyle=" + s.wallpaperStyle + " wallIdx=" + s.wallpaperIndex +
+            " flagAvatars=" + s.flagAvatars + " bubble=" + s.bubbleOn
+
     private fun queueSave() {
         // nothing may be sealed before the stored settings were read: the in-memory object is still
         // a default-filled placeholder at that point. The load itself calls this once it is done,
@@ -406,10 +420,17 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         saveJob?.cancel()
         saveJob = viewModelScope.launch(Dispatchers.IO) {
             delay(120)
-            store.save(_settings.value)
-            if (SettingsStore.lastSaveVerified == false) {
-                log("ERROR", "Settings write did NOT stick - the keystore rejected it or read-back differs")
-            }
+            val t0 = android.os.SystemClock.elapsedRealtime()
+            val cur = _settings.value
+            store.save(cur)
+            val ok = SettingsStore.lastSaveVerified
+            log(
+                if (ok == false) "ERROR" else "INFO",
+                "settings save " + (if (ok == true) "VERIFIED" else "NOT VERIFIED (" + ok + ")") +
+                    " in " + (android.os.SystemClock.elapsedRealtime() - t0) + "ms: " + describe(cur)
+            )
+            drainJournal("after save")
+            flushLogTail()
         }
     }
 
@@ -417,6 +438,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      *  thread, because the queue's worker is a daemon and dies with the process. */
     override fun onCleared() {
         persistServers(now = true)
+        flushLogTail()
         super.onCleared()
     }
 
@@ -446,7 +468,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setCustomAccent(v: Long) = setSettings { it.copy(customAccent = v) }
     fun setStickerStyle(i: Int) {
         setSettings { it.copy(stickerStyle = i) }
-        log("INFO", "Sticker style set to " + i)
+        log("INFO", "Sticker style set to " + i + " -> now " + describe(_settings.value))
     }
     fun setWallpaperStyle(i: Int) = setSettings { it.copy(wallpaperStyle = i) }
     fun setWallpaper(i: Int) = setSettings { it.copy(wallpaperIndex = i) }
@@ -526,16 +548,21 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     /** announce=true only for an explicit user action - a background refresh must never pop
      *  "Fetching settings…" over the list the user already has on screen. */
     fun syncNow(announce: Boolean = true) {
+        val tSync = android.os.SystemClock.elapsedRealtime()
         val dev = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
+        log("INFO", "sync request start (device " + dev.take(8) + "…)")
         if (announce) infoToast(S.SYNC_FETCHING)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val res = Remote.sync(dev, "sync", _state.value.vpnState == VpnState.CONNECTED)
                 if (res != null) {
                     applyRemote(res)
-                    if (announce) infoToast(S.SYNC_OK)
-                    log("INFO", "Sync OK - settings refreshed")
+                    val n = res.servers.size
+                    val msg = if (res.unchanged) "Server list unchanged" else "Found " + n + " server" + (if (n == 1) "" else "s")
+                    infoToast(msg)
+                    log("INFO", "Sync OK in " + (android.os.SystemClock.elapsedRealtime() - tSync) + "ms - " + msg)
                 } else {
+                    log("WARN", "Sync failed in " + (android.os.SystemClock.elapsedRealtime() - tSync) + "ms: " + (Remote.lastFail ?: "unknown"))
                     handleSyncFail()
                 }
             } catch (e: Exception) {
@@ -648,9 +675,18 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             // first sync right away, then every two minutes - and silent, because the user is
             // already looking at everything that was stored on the device
             try {
+                val t0 = android.os.SystemClock.elapsedRealtime()
                 val dev0 = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
                 val r0 = Remote.sync(dev0, "sync", _state.value.vpnState == VpnState.CONNECTED)
-                if (r0 != null) applyRemote(r0) else log("WARN", "Sync failed - " + (Remote.lastFail ?: "unknown"))
+                if (r0 != null) {
+                    applyRemote(r0)
+                    log("INFO", "startup sync OK in " + (android.os.SystemClock.elapsedRealtime() - t0) + "ms - " + r0.servers.size + " servers")
+                    infoToast(if (r0.unchanged) "Server list unchanged" else "Found " + r0.servers.size + " servers")
+                } else {
+                    log("WARN", "startup sync failed in " + (android.os.SystemClock.elapsedRealtime() - t0) + "ms: " + (Remote.lastFail ?: "unknown"))
+                }
+                drainJournal("after startup sync")
+                flushLogTail()
             } catch (e: Exception) {
                 log("WARN", "Sync failed - " + (e.javaClass.simpleName))
             }
@@ -1007,7 +1043,39 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun log(level: String, msg: String) {
         // the log is shown on screen and pasted around: it must never carry an endpoint
         val clean = ir.v2rayng.compose.core.LogSanitize.clean(msg)
-        put { s -> s.copy(logs = (s.logs + LogLine(TimeKit.now(), level, clean)).takeLast(240)) }
+        val line = LogLine(TimeKit.now(), level, clean)
+        logCount++
+        put { s -> s.copy(logs = (s.logs + line).takeLast(400)) }
+        // every sixth line and every error: the repro ("change sticker, close app, reopen")
+        // otherwise deletes the very log that would explain it
+        if (level == "ERROR" || logCount % 6 == 0) flushLogTail()
+    }
+
+    private fun flushLogTail() {
+        val text = _state.value.logs.joinToString("\n") { it.time + "|" + it.level + "|" + it.msg }
+        Persist.write { store.saveLogTail(text) }
+    }
+
+    /** Shows what the previous run left behind, then clears the journal into the visible log. */
+    private fun restorePreviousLog() {
+        val tail = store.loadLogTail()
+        if (tail.isBlank()) return
+        val lines = tail.split('\n').filter { it.isNotBlank() }.takeLast(80)
+        put { s -> s.copy(logs = (s.logs + LogLine("--", "INFO", "---- previous run (" + lines.size + " lines) ----")) }
+        for (l in lines) {
+            val a = l.indexOf('|'); val b = l.indexOf('|', a + 1)
+            if (a < 0 || b < 0) continue
+            put { s -> s.copy(logs = (s.logs + LogLine(l.substring(0, a), l.substring(a + 1, b), l.substring(b + 1))).takeLast(400)) }
+        }
+        drainJournal("end of previous run")
+    }
+
+    /** Dumps the keystore journal - timings and failures - into the on-screen log. */
+    private fun drainJournal(when: String) {
+        val lines = ir.v2rayng.compose.core.sec.SecJournal.drain()
+        if (lines.isEmpty()) return
+        log("DEBUG", "keystore journal @ " + when + " (" + lines.size + ")")
+        for (l in lines) log("DEBUG", "  " + l)
     }
 
     /** Once the first frame is drawn: what the user actually feels as "the app takes long to open". */

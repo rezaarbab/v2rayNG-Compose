@@ -4,6 +4,30 @@ import android.content.Context
 import ir.v2rayng.compose.AppCtx
 
 /**
+ * Temporary diagnostic journal shared by the keystore layer, so the ViewModel can print what the
+ * hardware actually did (durations, failures) into the in-app log - the phone has no adb here.
+ */
+object SecJournal {
+
+    private const val MAX = 160
+    private val lines = ArrayDeque<String>()
+
+    fun note(line: String) {
+        synchronized(lines) {
+            if (lines.size >= MAX) lines.removeFirst()
+            lines.addLast(line)
+        }
+    }
+
+    /** Hands out everything recorded so far and clears it. */
+    fun drain(): List<String> = synchronized(lines) {
+        val out = lines.toList()
+        lines.clear()
+        out
+    }
+}
+
+/**
  * Every value persisted in SharedPreferences is sealed with the AndroidKeyStore
  * master key (AES-256-GCM, StrongBox when available) - plaintext never touches
  * prefs files. Broken/unrecognized seals still read as legacy plaintext so old
@@ -27,6 +51,8 @@ object SecurePrefs {
     private fun sp(context: Context?): android.content.SharedPreferences =
         (context ?: AppCtx.app).getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
 
+    private fun note(line: String) = SecJournal.note(line)
+
     /** Reading a value is a StrongBox unseal (~200ms on the phone in the APP_SCOUT traces), and
      *  startup touches the same keys repeatedly, so decoded values are memoized for the process
      *  and dropped the moment the key is written. */
@@ -34,6 +60,7 @@ object SecurePrefs {
 
     fun set(key: String, value: String?, context: Context? = null) {
         memo.remove(key)
+        val t0 = android.os.SystemClock.elapsedRealtime()
         try {
             val ed = sp(context).edit()
             if (value == null) {
@@ -43,6 +70,7 @@ object SecurePrefs {
                 if (sealed == null) {
                     // silent no-op is what made "nothing saves" undiagnosable
                     sealFailSet().add(key)
+                    note("SEAL FAIL ${key} (${value.length}ch) in ${android.os.SystemClock.elapsedRealtime() - t0}ms")
                     return
                 }
                 ed.putString(key, sealed)
@@ -51,8 +79,14 @@ object SecurePrefs {
             // apply() only hands the write to a background thread, and MIUI kills the process when
             // the app is swiped away - on a worker thread the write is committed instead, so a
             // setting saved a second ago is still there when the app opens again
-            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) ed.apply() else ed.commit()
-        } catch (_: Exception) {
+            val onMain = android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+            if (onMain) ed.apply() else ed.commit()
+            note(
+                "write ${key} ${value?.length ?: 0}ch " +
+                    (if (onMain) "apply" else "commit") + " ${android.os.SystemClock.elapsedRealtime() - t0}ms"
+            )
+        } catch (e: Exception) {
+            note("write FAIL ${key}: ${e.javaClass.simpleName} ${android.os.SystemClock.elapsedRealtime() - t0}ms")
         }
     }
 
@@ -79,11 +113,16 @@ object SecurePrefs {
     fun unreadableReport(): String? = unreadableSet().takeIf { it.isNotEmpty() }?.joinToString(",")
 
     /** Prove a write landed instead of assuming it - reads prefs directly, bypassing the memo. */
-    fun verify(key: String, expected: String, context: Context? = null): Boolean = try {
-        val raw = sp(context).getString(key, null) ?: return false
-        BlobVault.unseal(raw)?.toString(Charsets.UTF_8) == expected
-    } catch (_: Exception) {
-        false
+    fun verify(key: String, expected: String, context: Context? = null): Boolean {
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        val ok = try {
+            val raw = sp(context).getString(key, null) ?: return false.also { note("verify ${key}: ABSENT") }
+            BlobVault.unseal(raw)?.toString(Charsets.UTF_8) == expected
+        } catch (_: Exception) {
+            false
+        }
+        note("verify ${key} ${if (ok) "OK" else "MISMATCH"} ${android.os.SystemClock.elapsedRealtime() - t0}ms")
+        return ok
     }
 
     /** null = absent (or unreadable); falls back to legacy plaintext and migrates it */
@@ -95,17 +134,25 @@ object SecurePrefs {
     }
 
     private fun readStored(key: String, context: Context?): String? {
+        val t0 = android.os.SystemClock.elapsedRealtime()
         return try {
             val s = sp(context)
             val raw = s.getString(key, null)
             if (raw != null) {
                 if (raw.isEmpty()) return raw
-                BlobVault.unseal(raw)?.let { return String(it, Charsets.UTF_8) }
+                val opened = BlobVault.unseal(raw)
+                val ms = android.os.SystemClock.elapsedRealtime() - t0
+                if (opened != null) {
+                    note("read ${key} ok ${ms}ms (${raw.length}ch)")
+                    return String(opened, Charsets.UTF_8)
+                }
                 if (looksPlaintext(raw)) {
+                    note("read ${key} plaintext legacy ${ms}ms")
                     // old install plaintext -> read it, then seal it once with the master key
                     legacyMigrate(s, key, raw)
                     return raw
                 }
+                note("read ${key} UNDECIPHERABLE ${ms}ms (${raw.length}ch) -> treated as absent")
                 // Sealed with a key this device no longer has. Handing it back as if it were a
                 // value (and re-sealing it over itself) poisoned the stored data and made every
                 // later read fail, which is what looked like "nothing saves anymore".
@@ -114,8 +161,10 @@ object SecurePrefs {
             }
             // old installs stored real typed primitives -> serialize once to a sealed string
             val v = s.all[key] ?: return null
+            note("read ${key} typed-legacy ${android.os.SystemClock.elapsedRealtime() - t0}ms")
             (v as? String ?: v.toString()).also { legacyMigrate(s, key, it) }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            note("read ${key} ERROR ${e.javaClass.simpleName} ${android.os.SystemClock.elapsedRealtime() - t0}ms")
             null
         }
     }
