@@ -10,21 +10,20 @@ fun blog(msg: String) {
 }
 
 /**
- * Server-issued rotating keys - the app never owns a crypto key:
- *   POST /api/key -> worker derives kc (payload key) + kt (token key) fresh for
- *   every 60-minute bucket (HMAC of BLOB_ROOT over deviceId + wall time) and
- *   hands them over the TLS channel. Sessions expire at the bucket boundary;
+ * Server-issued rotating keys - the app owns no shared secret:
+ *   POST /api/key -> the handset proves itself with a signature from a NON-EXPORTABLE
+ *   AndroidKeyStore EC key (BlobIdentity); the worker memorises that public key on first
+ *   sight and answers with fresh RANDOM kc (payload key) + kt (token key) for the next
+ *   60-minute bucket; the session dies at the bucket boundary.
  *   every request carries a one-shot HMAC token; every admin->app payload is
  *   JSON -> zlib -> AES-256-GCM(Kc, AAD BLBv1) inside a homoglyph stego carrier.
- * The only embedded constant is ROOT (the app-auth secret, not a decrypt key).
+ * Nothing crypto-related is baked into the APK any more: BLOB_ROOT used to let anyone who
+ * decompiled it derive any device's keys, and it is gone.
  */
 object BlobSecure {
 
     private const val PREFS = "v2settings"
     private const val KEY = "blob-sec"
-
-    /** app-auth secret (hex32) baked in the app - equal to worker secret BLOB_ROOT */
-    private const val ROOT = "02943399ed750ba5128c5df37ee79ed2314c2ee32a04206fae632b3528c0ed93"
 
     data class Session(val kc: ByteArray, val kt: ByteArray, val exp: Long) {
         fun wrap(): JSONObject = JSONObject()
@@ -91,39 +90,75 @@ object BlobSecure {
     @Volatile
     private var lastTokTs: Int = 0
 
-    fun token(device: String, kt: ByteArray): String {
+    private fun nextTs(): Int {
         var now = (System.currentTimeMillis() / 1000L).toInt()
         synchronized(this) {
             if (now <= lastTokTs) now = lastTokTs + 1
             lastTokTs = now
         }
-        val ts = byteArrayOf((now shr 24).toByte(), (now shr 16).toByte(), (now shr 8).toByte(), now.toByte())
-        val nonce = ByteArray(8)
-        val mac = BlobStego.hmac(
-            kt,
-            "blb".toByteArray(Charsets.UTF_8) +
-                device.toByteArray(Charsets.UTF_8) + byteArrayOf(0x00) + ts + nonce,
-        )
-        return BlobB64.encode(ts + nonce + mac)
+        return now
+    }
+
+    private fun tsBytes(ts: Int): ByteArray =
+        byteArrayOf((ts shr 24).toByte(), (ts shr 16).toByte(), (ts shr 8).toByte(), ts.toByte())
+
+    private fun newNonce(): ByteArray {
+        val n = ByteArray(8)
+        java.security.SecureRandom().nextBytes(n)
+        return n
+    }
+
+    /** the exact bytes the worker recomputes its mac / verifies its signature over */
+    private fun tokMsg(device: String, ts: ByteArray, nonce: ByteArray): ByteArray =
+        "blb".toByteArray(Charsets.UTF_8) +
+            device.toByteArray(Charsets.UTF_8) + byteArrayOf(0x00) + ts + nonce
+
+    fun token(device: String, kt: ByteArray): String {
+        val ts = tsBytes(nextTs())
+        val nonce = newNonce()
+        return BlobB64.encode(ts + nonce + BlobStego.hmac(kt, tokMsg(device, ts, nonce)))
+    }
+
+    /** Proof that this install owns its hardware key: the same message, signed instead of MACed.
+     *  Sent only on /api/key, where the worker checks it against the public key stored for this
+     *  device. null = the keystore refused to sign, so no session can be opened. */
+    fun deviceProof(device: String): String? {
+        val ts = tsBytes(nextTs())
+        val nonce = newNonce()
+        val sig = BlobIdentity.sign(tokMsg(device, ts, nonce)) ?: return null
+        return BlobB64.encode(ts + nonce + sig)
     }
 
     /** /api/key - get fresh 60-minute keys from the worker, persist via BlobVault.
      *  Returns the newly stored session, or null when the worker refuses. */
     private fun issueKeys(base: String, body: JSONObject): Session? {
         return try {
+            val device = body.getString("device")
+            val pub = BlobIdentity.publicKeyB64() ?: run {
+                blog("issueKeys: this device has no keystore identity key")
+                fail("no device identity key (" + (BlobIdentity.note ?: "keystore unavailable") + ")")
+                return null
+            }
+            val proof = deviceProof(device) ?: run {
+                blog("issueKeys: keystore signing failed")
+                fail("device identity signature failed (keystore)")
+                return null
+            }
             val req = JSONObject()
-                .put("device", body.getString("device"))
+                .put("device", device)
                 .put("model", body.optString("model", ""))
                 .put("ver", body.opt("ver") ?: 0)
                 .put("ts", System.currentTimeMillis() / 1000L)
                 .put("connected", body.optBoolean("connected", false))
                 .put("info", body.opt("info") ?: JSONObject())
-                .put("tok", token(body.getString("device"), hexToBytes(ROOT)))
+                .put("alg", "ec")
+                .put("pub", pub)
+                .put("sig", proof)
             val text = httpPost(base, "/api/key", req) ?: run { blog("issueKeys: /api/key transport failed"); fail("key request: server unreachable (network)"); return null }
             val resp = JSONObject(text)
             if (resp.optInt("v", 0) < 2 || resp.optString("enc") != "k") {
-                blog("issueKeys: refused enc=" + resp.optString("enc", "?") + " v=" + resp.optInt("v", 0) + " -> set BLOB_ROOT secret on the worker?")
-                fail("session keys rejected (auth - secret mismatch or missing)")
+                blog("issueKeys: refused enc=" + resp.optString("enc", "?") + " v=" + resp.optInt("v", 0) + " -> worker has no device-key auth (deploy the newest worker?)")
+                fail("session keys rejected - worker does not accept device-key auth")
                 return null
             }
             val kc = BlobB64.decode(resp.getString("kc")) ?: run { blog("issueKeys: bad b64 kc"); fail("session keys: invalid response (protocol)"); return null }
@@ -265,14 +300,6 @@ object BlobSecure {
         blog("openCy: " + w)
         BlobStego.lastWhy = w
         return null
-    }
-
-    fun hexToBytes(hex: String): ByteArray {
-        val o = ByteArray(hex.length / 2)
-        for (i in o.indices) {
-            o[i] = ((Character.digit(hex[i * 2], 16) shl 4) + Character.digit(hex[i * 2 + 1], 16)).toByte()
-        }
-        return o
     }
 
     private fun httpPost(base: String, path: String, body: JSONObject, blobHeader: String? = null, btok: String? = null): String? {

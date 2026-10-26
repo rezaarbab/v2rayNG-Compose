@@ -27,9 +27,11 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE TABLE IF NOT EXISTS events (
   device TEXT,
   type   TEXT,
-  ts     INTEGER
+  ts     INTEGER,
+  ip     TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts);
+CREATE INDEX IF NOT EXISTS idx_events_dev ON events (device, ts);
 
 CREATE TABLE IF NOT EXISTS servers (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +42,8 @@ CREATE TABLE IF NOT EXISTS servers (
   category TEXT DEFAULT '',
   ord      INTEGER DEFAULT 99,
   active   INTEGER DEFAULT 1,
-  msg      TEXT DEFAULT ''
+  msg      TEXT DEFAULT '',
+  owner    TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS popup_seen (
@@ -70,7 +73,10 @@ CREATE TABLE IF NOT EXISTS blob_sessions (
   key          TEXT,
   exp          INTEGER,
   rot          INTEGER DEFAULT 0,
-  last_payload TEXT DEFAULT ''
+  last_payload TEXT DEFAULT '',
+  -- how this session was authenticated: "ec" = signed by this handset's keystore key,
+  -- "legacy" = an app build from before that, accepted while legacy_auth stays on
+  mode         TEXT DEFAULT 'legacy'
 );
 
 CREATE TABLE IF NOT EXISTS blob_tok (
@@ -98,3 +104,24 @@ CREATE TABLE IF NOT EXISTS payload_seen (
   ts     INTEGER,
   PRIMARY KEY (device, pid)
 );
+
+-- one public key per device id (trust-on-first-use). The private half never leaves the handset's
+-- AndroidKeyStore, so a copied device id cannot be used to ask for session keys.
+CREATE TABLE IF NOT EXISTS dev_keys (
+  device  TEXT PRIMARY KEY,
+  pub     TEXT,
+  created INTEGER,
+  updated INTEGER,
+  -- how many times this id showed up with a different key (reinstall, or a stolen id - the
+  -- panel shows it and the admin decides)
+  rot     INTEGER DEFAULT 0
+);
+
+-- every key this id ever arrived with, with the IP and time it was first seen
+CREATE TABLE IF NOT EXISTS dev_key_log (
+  device TEXT,
+  pub    TEXT,
+  ts     INTEGER,
+  ip     TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_keylog_dev ON dev_key_log (device, ts);

@@ -94,8 +94,9 @@ async function appSync(env, request) {
   if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
   // encrypted protocol ONLY - servers/admin data never cross the wire in plaintext.
   // A caller without a valid blob session gets enc:"h" (issue keys via /api/key first);
-  // there is deliberately NO plaintext fallback anymore.
-  if (request.headers.get("x-blob") === "v1" && env.BLOB_ROOT) {
+  // there is deliberately NO plaintext fallback anymore. The session keys are stored per device
+  // in D1, so this path needs no shared secret at all any more.
+  if (request.headers.get("x-blob") === "v1") {
     return blobSyncProtected(env, request, b);
   }
   return new Response(JSON.stringify({ ok: true, v: 2, enc: "h" }), { headers: jsonHeaders() });
@@ -120,11 +121,7 @@ async function syncPayloadObj(env, request, b) {
       .bind(String(b.device), String(b.model || "").slice(0, 64), String(b.ver || 0), now, clientIp(request))
       .run();
   }
-  await env.DB.prepare("INSERT INTO events (device, type, ts) VALUES (?1,?2,?3)").bind(
-    String(b.device),
-    b.type || "sync",
-    now,
-  ).run();
+  await insEvent(env, String(b.device), b.type || "sync", now, clientIp(request));
 
   // consume the app's ack receipts delivered INSIDE the encrypted body (no plaintext
   // /api/ack exists anymore): connect/disconnect events, popup/notif seen, payload received.
@@ -133,8 +130,7 @@ async function syncPayloadObj(env, request, b) {
     for (const a of ackArr) {
       const kind = String((a && a.kind) || "");
       if (kind === "event" && a.name) {
-        await env.DB.prepare("INSERT INTO events (device, type, ts) VALUES (?1,?2,?3)")
-          .bind(String(b.device), String(a.name).slice(0, 32), now).run();
+        await insEvent(env, String(b.device), String(a.name).slice(0, 32), now, clientIp(request));
       } else if ((kind === "popup" || kind === "notif") && a.id) {
         const ins = await env.DB.prepare("INSERT OR IGNORE INTO acks (device, popup, kind, ts) VALUES (?1,?2,?3,?4)")
           .bind(String(b.device), String(a.id), kind, now).run();
@@ -174,12 +170,16 @@ async function syncPayloadObj(env, request, b) {
   else if (inList(blk.blocked_ips, ipAddr)) { notEnabled = true; blockReason = "ip"; }
   else if (inList(blk.blocked_models, model)) { notEnabled = true; blockReason = "model"; }
 
+  const shared = await listServers(env);
+  // trap servers are generated per device and only ever appended to that device's payload, so a
+  // leaked list can be matched back to the handset it came from
+  const traps = appEnabled && !notEnabled ? await canaryFor(env, devId, shared) : [];
   let out = {
     ok: true,
     now,
     enabled: appEnabled && !notEnabled,
     blocked: blockReason,
-    servers: await listServers(env),
+    servers: traps.length ? shared.concat(traps) : shared,
   };
   // admin-driven server behavior flags ("1"/"0" force; "" = follow user's own toggle)
   const pf = await getSettings(env, ["ping_on_start", "flag_on_start", "auto_ping_new", "auto_flag_new"]);
@@ -243,7 +243,7 @@ async function syncPayloadObj(env, request, b) {
 
 async function listServers(env) {
   const rows = await env.DB.prepare(
-    "SELECT id, name, address, port, link, category, msg FROM servers WHERE active=1 ORDER BY ord ASC, id ASC LIMIT 1000",
+    "SELECT id, name, address, port, link, category, msg FROM servers WHERE active=1 AND COALESCE(owner,'')='' ORDER BY ord ASC, id ASC LIMIT 1000",
   ).all();
   return (rows.results || []).map((r) => ({
     id: String(r.id),
@@ -254,6 +254,158 @@ async function listServers(env) {
     category: r.category || "",
     msg: r.msg || "",
   }));
+}
+
+/** Every app request is one row: who, what, when, from which IP. The panel's device history is
+ *  built from this, so a missing ip column would silently blank the leak timeline. */
+async function insEvent(env, device, type, ts, ip) {
+  try {
+    await env.DB.prepare("INSERT INTO events (device, type, ts, ip) VALUES (?1,?2,?3,?4)")
+      .bind(String(device), String(type || "sync").slice(0, 32), ts, String(ip || "").slice(0, 64)).run();
+    return;
+  } catch (e) { /* database from before the ip column */ }
+  try {
+    await env.DB.prepare("INSERT INTO events (device, type, ts) VALUES (?1,?2,?3)")
+      .bind(String(device), String(type || "sync").slice(0, 32), ts).run();
+  } catch (e2) {}
+}
+
+/* ============================ trap (canary) servers ============================
+ * The admin's question is "somebody published my server list - who?". A canary answers it:
+ * rows derived from a real config with one thing changed (credential, port, name, or host),
+ * stored with owner = that device id and delivered ONLY to that device. Nothing about them
+ * marks them as traps - same name pool, same hosts, ordinary ports - so a leaker cannot pick
+ * them out of the list and strip them.
+ * Attribution = match the pasted leaked list against the stored rows (whole link, credential,
+ * or host+port+name). The links deliberately do not work; that is fine, they are only there to
+ * be used and thereby confess.
+ */
+const BL_PORTS = [443, 443, 8443, 2053, 2083, 2096, 2087, 8080, 4443];
+
+function bl_pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+function bl_uuid() {
+  const h = "0123456789abcdef";
+  const r = crypto.getRandomValues(new Uint8Array(16));
+  let s = "";
+  for (let i = 0; i < 16; i++) s += h[r[i] >> 4] + h[r[i] & 15];
+  // 8-4-4-4-12, version 4 shape so it looks like every other uuid in the wild
+  return s.slice(0, 8) + "-" + s.slice(8, 12) + "-4" + s.slice(13, 16) + "-" + h[8 + (r[6] & 3)] + s.slice(17, 20) + "-" + s.slice(20, 32);
+}
+
+function bl_hexSecret() {
+  const h = "0123456789abcdef";
+  const r = crypto.getRandomValues(new Uint8Array(16));
+  let s = "";
+  for (let i = 0; i < 16; i++) s += h[r[i] >> 4] + h[r[i] & 15];
+  return s;
+}
+
+/** Change exactly one recognisable thing in a real link - never the whole shape. */
+function bl_mutate(link) {
+  const l = String(link || "");
+  const scheme = (l.split("://")[0] || "").toLowerCase();
+  const tail = l.indexOf("://") >= 0 ? l.slice(l.indexOf("://") + 3) : l;
+  if (scheme === "vless" || scheme === "trojan" || scheme === "anytls" || scheme === "hy2" || scheme === "tuic") {
+    const at = tail.indexOf("@");
+    if (at > 0) {
+      const cred = tail.slice(0, at);
+      // keep the credential the same KIND as the real one - a uuid where a password normally
+      // sits is exactly the sort of thing that gives a trap away
+      const fresh = /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(cred) ? bl_uuid() : bl_hexSecret();
+      return scheme + "://" + fresh + tail.slice(at);
+    }
+  }
+  if (scheme === "vless" || scheme === "trojan") {
+    const swapped = l.replace(/([?&](?:id|password)=)[^&#]+/i, "$1" + bl_uuid());
+    if (swapped !== l) return swapped;
+  }
+  return l;
+}
+
+function bl_endpoint(link) {
+  const l = String(link || "");
+  const at = l.indexOf("@");
+  if (at < 0) return null;
+  const seg = l.slice(at + 1).split(/[/?#]/)[0];
+  const c = seg.lastIndexOf(":");
+  if (c < 0) return { host: seg, port: 443 };
+  return { host: seg.slice(0, c), port: Number(seg.slice(c + 1)) || 443 };
+}
+
+/** One trap row built from one real server row. */
+function bl_canaryLink(real, sinkHosts) {
+  const link = String(real.link || "");
+  if (!link || !link.includes("://")) return null;
+  const ep = bl_endpoint(link);
+  if (!ep) return null;
+  const kinds = ["cred", "cred", "port", "name"];
+  const kind = bl_pick(kinds);
+  let out = link;
+  if (kind === "cred") out = bl_mutate(link);
+  else if (kind === "port") {
+    const p = bl_pick(BL_PORTS);
+    out = link.replace(ep.host + ":" + ep.port, ep.host + ":" + p);
+  } else if (sinkHosts.length) {
+    out = link.replace(ep.host + ":" + ep.port, bl_pick(sinkHosts) + ":" + bl_pick(BL_PORTS));
+  }
+  if (out === link) out = bl_mutate(link);
+  if (out === link) return null;
+  // the fragment is the name the victim client shows - keep it in the same style as the list
+  const name = (real.name || "srv") + (Math.random() < 0.5 ? " " + (2 + Math.floor(Math.random() * 7)) : "");
+  const hash = out.lastIndexOf("#");
+  const base = hash >= 0 ? out.slice(0, hash) : out;
+  out = base + "#" + encodeURIComponent(name);
+  const ep2 = bl_endpoint(out) || ep;
+  return { link: out, name: name.slice(0, 64), address: ep2.host, port: ep2.port || 443, category: real.category || "", kind };
+}
+
+/** Ensure the device owns `want` traps and hand them back in the same shape as listServers. */
+async function canaryFor(env, device, shared) {
+  const cfg = await getSettings(env, ["canary_on", "canary_count", "canary_hosts"]);
+  if (cfg.canary_on !== "1") return [];
+  const want = Math.max(0, Math.min(12, Number(cfg.canary_count || 3)));
+  let mine = [];
+  try {
+    const r = await env.DB.prepare(
+      "SELECT id, name, address, port, link, category, msg FROM servers WHERE owner=?1 AND active=1 ORDER BY id",
+    ).bind(String(device)).all();
+    mine = r.results || [];
+  } catch (e) { return []; }
+  if (mine.length > want) {
+    const drop = mine.slice(want).map((r) => env.DB.prepare("UPDATE servers SET active=0 WHERE id=?1").bind(r.id));
+    try { await env.DB.batch(drop); } catch (e2) {}
+    mine = mine.slice(0, want);
+  }
+  const pool = (shared || []).filter((s) => s.link && String(s.link).includes("://"));
+  const sinkHosts = String(cfg.canary_hosts || "").split(/[,\s]+/).map((x) => x.trim()).filter((x) => x && x.length < 120);
+  const need = want - mine.length;
+  const made = [];
+  for (let i = 0; i < need; i++) {
+    if (!pool.length) break;
+    let gen = null;
+    // ss:// links carry an opaque base64 blob and can only be changed by port/name, so one draw
+    // sometimes yields nothing - try a few different sources before giving up on the slot
+    for (let t = 0; t < 3 && !gen; t++) gen = bl_canaryLink(bl_pick(pool), sinkHosts);
+    if (!gen) continue;
+    const ord = 1000 + Math.floor(Math.random() * 90000); // scattered among the real rows
+    try {
+      const ins = await env.DB.prepare(
+        "INSERT INTO servers (name, address, port, link, category, ord, active, msg, owner) VALUES (?1,?2,?3,?4,?5,?6,1,'',?7)",
+      ).bind(gen.name, String(gen.address).slice(0, 256), Number(gen.port) || 443, String(gen.link).slice(0, 4096),
+        String(gen.category).slice(0, 64), ord, String(device).slice(0, 128)).run();
+      const m = (ins && ins.meta) || {};
+      const rowId = Number(m.last_row_id || (m.row && m.row.last_row_id) || 0);
+      // a missing last_row_id must not hand every trap the same id - the app keys its rows on it
+      const idStr = rowId > 0 ? String(rowId) : "t" + Date.now().toString(36) + "-" + i;
+      made.push({ id: idStr, name: gen.name, address: gen.address, port: gen.port, link: gen.link, category: gen.category, msg: "" });
+    } catch (e3) {}
+  }
+  if (made.length) srvAllInvalidate();
+  return mine.map((r) => ({
+    id: String(r.id), name: r.name, address: r.address, port: r.port || 443,
+    link: r.link, category: r.category || "", msg: r.msg || "",
+  })).concat(made);
 }
 
 function clientIp(request) {
@@ -290,6 +442,72 @@ async function getCategories(env) {
 }
 
 /* ============================ admin actions ============================ */
+
+/** device ids handed over by the panel, deduped and capped */
+function idList(b) {
+  return [...new Set(String(b.ids || "").split(",").map((x) => x.trim()).filter(Boolean))].slice(0, 120);
+}
+
+/** one query, degrading to "nothing" instead of 500-ing the panel when a column is older */
+async function qAll(env, sql, args) {
+  try {
+    const r = await env.DB.prepare(sql).bind(...(args || [])).all();
+    return r.results || [];
+  } catch (e) {
+    return null;
+  }
+}
+
+/** the credential a link is built on - uuid / password / id= parameter */
+function bl_credOf(link) {
+  const l = String(link || "");
+  const m = l.match(/^[a-z0-9]+:\/\/([^@/?#\s]+)@/i);
+  if (m) return m[1];
+  const p = l.match(/[?&](?:id|password|uuid)=([^&#\s]+)/i);
+  if (p) return decodeURIComponent(p[1]);
+  return "";
+}
+
+/** Paste whatever leaked - links, a subscription, a forwarded chat - and find out which handset
+ *  it came from. Two match levels: the whole trap link, or the credential inside it, so trimming
+ *  the #name or re-ordering the list does not hide the owner. A credential that also sits in a
+ *  SHARED server is never blamed on anybody - a port-only trap carries the real password, and
+ *  every honest user has that link, so matching on it would accuse the first device at random. */
+async function leakCheck(env, text) {
+  const hay = String(text || "").toLowerCase();
+  let rows = null;
+  try {
+    rows = (await env.DB.prepare(
+      "SELECT id, name, address, port, link, owner FROM servers WHERE COALESCE(owner,'')<>'' LIMIT 4000",
+    ).all()).results || [];
+  } catch (e) { rows = null; }
+  if (rows == null) return okJson({ ok: false, error: "servers table has no owner column yet - open the panel once so the schema heals, then retry" });
+  const sharedCreds = new Set();
+  try {
+    const sh = (await env.DB.prepare("SELECT link FROM servers WHERE COALESCE(owner,'')='' AND link<>'' LIMIT 4000").all()).results || [];
+    for (const r of sh) {
+      const c = bl_credOf(r.link).toLowerCase();
+      if (c) sharedCreds.add(c);
+    }
+  } catch (e) {}
+  const pasted = new Set();
+  for (const c of hay.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g) || []) pasted.add(c);
+  for (const c of hay.match(/[0-9a-f]{32}/g) || []) pasted.add(c);
+  const hits = [];
+  for (const r of rows) {
+    const link = String(r.link || "");
+    if (!link) continue;
+    const ll = link.toLowerCase();
+    if (hay.includes(ll)) { hits.push({ device: String(r.owner), id: r.id, name: r.name, link, how: "whole link" }); continue; }
+    const cred = bl_credOf(link).toLowerCase();
+    if (cred && cred.length > 12 && !sharedCreds.has(cred) && pasted.has(cred)) {
+      hits.push({ device: String(r.owner), id: r.id, name: r.name, link, how: "credential" });
+    }
+  }
+  const byDevice = {};
+  for (const h of hits) byDevice[h.device] = (byDevice[h.device] || 0) + 1;
+  return okJson({ hits: hits.slice(0, 200), byDevice, traps: rows.length, scanned: String(text || "").length });
+}
 
 async function adminApi(env, b) {
   const act = b.action;
@@ -440,6 +658,11 @@ async function adminApi(env, b) {
         const ph = ids.map((_, i) => "?" + (i + 1)).join(",");
         const q = env.DB.prepare("DELETE FROM devices WHERE id IN (" + ph + ")");
         await q.bind(...ids).run();
+        // their trap servers go too, otherwise they stay in D1 owned by a device nobody sees
+        try {
+          await env.DB.prepare("DELETE FROM servers WHERE owner IN (" + ph + ")").bind(...ids).run();
+        } catch (e) {}
+        srvAllInvalidate();
         return okJson({ deleted: ids.length });
       }
       case "dev.blocklists": {
@@ -449,9 +672,15 @@ async function adminApi(env, b) {
         await setSetting(env, "blocked_models", clean(b.models));
         return okJson();
       }
-      case "dev.del":
-        await env.DB.prepare("DELETE FROM devices WHERE id=?1").bind(String(b.id || "").slice(0, 128)).run();
+      case "dev.del": {
+        const one = String(b.id || "").slice(0, 128);
+        await env.DB.prepare("DELETE FROM devices WHERE id=?1").bind(one).run();
+        try {
+          await env.DB.prepare("DELETE FROM servers WHERE owner=?1").bind(one).run();
+        } catch (e) {}
+        srvAllInvalidate();
         return okJson();
+      }
       case "set.update":
         await setSetting(env, "min_version", String(Number(b.minVersion || 0)));
         await setSetting(env, "latest_version", String(Number(b.latestVersion || 0)));
@@ -517,8 +746,16 @@ async function adminApi(env, b) {
         const onlineConn = await env.DB.prepare("SELECT COUNT(*) c FROM devices WHERE last_seen>?1 AND connected=1").bind(onlineCut).first();
         const connectsToday = await env.DB.prepare("SELECT COUNT(*) c FROM events WHERE ts>?1 AND type='connect'").bind(dayStart).first();
         const syncsToday = await env.DB.prepare("SELECT COUNT(*) c FROM events WHERE ts>?1").bind(dayStart).first();
-        const act1 = await env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE active=1").first();
-        const deact = await env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE active=0").first();
+        const act1 = await env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE active=1 AND COALESCE(owner,'')=''").first();
+        const deact = await env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE active=0 AND COALESCE(owner,'')=''").first();
+        let trapC = 0;
+        try {
+          trapC = Number((await env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE active=1 AND COALESCE(owner,'')<>''").first()).c);
+        } catch (e) {}
+        let legacyC = 0;
+        try {
+          legacyC = Number((await env.DB.prepare("SELECT COUNT(*) c FROM blob_sessions WHERE COALESCE(mode,'legacy')<>'ec'").first()).c);
+        } catch (e) {}
         return new Response(JSON.stringify({ ok: true, stats: {
           devices: total.c,
           online: online.c,
@@ -528,6 +765,8 @@ async function adminApi(env, b) {
           syncsToday: syncsToday ? syncsToday.c : 0,
           activeServers: act1.c,
           offServers: deact.c,
+          traps: trapC,
+          legacyClients: legacyC,
         } }), { headers: jsonHeaders() });
       }
       case "payload.add": {
@@ -621,8 +860,8 @@ async function adminApi(env, b) {
         try {
           batchOut = await env.DB.batch([
             env.DB.prepare(`SELECT key, value FROM settings WHERE key IN (${phAll})`).bind(...keysAll),
-            env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 2000"),
-            env.DB.prepare("SELECT COUNT(*) c FROM servers"),
+            env.DB.prepare("SELECT * FROM servers WHERE COALESCE(owner,'')='' ORDER BY ord ASC, id ASC LIMIT 2000"),
+            env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE COALESCE(owner,'')=''"),
           ]);
         } catch (e) {
           batchOut = null;
@@ -631,7 +870,10 @@ async function adminApi(env, b) {
           // schema not ready / older shape - fall through to the lazy per-query path
           const early = await getSettings(env, ["app_enabled", "min_version", "latest_version", "latest_url", "ping_on_start", "flag_on_start", "auto_ping_new", "auto_flag_new"]);
           let rowsS = { results: [] };
-          try { rowsS = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 2000").all(); } catch (e2) {}
+          try { rowsS = await env.DB.prepare("SELECT * FROM servers WHERE COALESCE(owner,'')='' ORDER BY ord ASC, id ASC LIMIT 2000").all(); } catch (e2) {
+            // database without the owner column yet - show everything rather than nothing
+            try { rowsS = await env.DB.prepare("SELECT * FROM servers ORDER BY ord ASC, id ASC LIMIT 2000").all(); } catch (e3) {}
+          }
           batchOut = null;
           return finishSrvAll(env, now3, { settings: early, servers: rowsS.results || [] });
         }
@@ -641,24 +883,106 @@ async function adminApi(env, b) {
         return finishSrvAll(env, now3, { settings: merged, servers: batchOut[1].results || [], total: cntRow ? Number(cntRow.c) : 0 });
       }
       case "devices.list": {
+        const DEVQ = "SELECT id, model, app_ver, first_seen, last_seen, ip, connected, info FROM devices ORDER BY last_seen DESC LIMIT 200";
         let rows;
         try {
-          rows = await env.DB.prepare(
-            "SELECT id, model, app_ver, first_seen, last_seen, ip, connected, info FROM devices ORDER BY last_seen DESC LIMIT 200",
-          ).all();
+          rows = await env.DB.prepare(DEVQ).all();
         } catch (e) {
           try { await ensureSchema(env); } catch (e2) {}
-          rows = await env.DB.prepare(
-            "SELECT id, model, app_ver, first_seen, last_seen, ip, connected, info FROM devices ORDER BY last_seen DESC LIMIT 200",
-          ).all();
+          rows = await env.DB.prepare(DEVQ).all();
         }
+        // one batch for the badges (traps / auth mode / key rotations) - a per-row crawl is what
+        // made this tab crawl on a phone browser
+        let traps = {}, modes = {}, keys = {};
+        try {
+          const b3 = await env.DB.batch([
+            env.DB.prepare("SELECT owner, COUNT(*) c FROM servers WHERE COALESCE(owner,'')<>'' AND active=1 GROUP BY owner LIMIT 2000"),
+            env.DB.prepare("SELECT device, mode FROM blob_sessions LIMIT 2000"),
+            env.DB.prepare("SELECT device, rot, updated FROM dev_keys LIMIT 2000"),
+          ]);
+          for (const r of b3[0].results || []) traps[String(r.owner)] = Number(r.c);
+          for (const r of b3[1].results || []) modes[String(r.device)] = String(r.mode || "legacy");
+          for (const r of b3[2].results || []) keys[String(r.device)] = { rot: Number(r.rot || 0), updated: Number(r.updated || 0) };
+        } catch (e) {}
         const bl = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models"]);
         return new Response(JSON.stringify({ ok: true, cut: Date.now() - 150000, devices: rows.results,
+          traps, modes, keys,
           blocked: {
             devices: String(bl.blocked_devices || "").split(",").filter(Boolean),
             ips: String(bl.blocked_ips || "").split(",").filter(Boolean),
             models: String(bl.blocked_models || "").split(",").filter(Boolean),
           } }), { headers: jsonHeaders() });
+      }
+      case "canary.state": {
+        const c = await getSettings(env, ["canary_on", "canary_count", "canary_hosts", "legacy_auth"]);
+        let tot = 0;
+        try {
+          tot = Number((await env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE COALESCE(owner,'')<>'' AND active=1").first()).c);
+        } catch (e) {}
+        let legacyC = 0;
+        try {
+          legacyC = Number((await env.DB.prepare("SELECT COUNT(*) c FROM blob_sessions WHERE COALESCE(mode,'legacy')<>'ec'").first()).c);
+        } catch (e) {}
+        return okJson({
+          canary: { on: c.canary_on === "1" ? "1" : "0", count: c.canary_count || "3", hosts: c.canary_hosts || "" },
+          legacy: c.legacy_auth === "0" ? "0" : "1",
+          trapTotal: tot,
+          legacyClients: legacyC,
+        });
+      }
+      case "canary.set": {
+        await setSetting(env, "canary_on", b.on ? "1" : "0");
+        await setSetting(env, "canary_count", String(Math.max(0, Math.min(12, Number(b.count || 0)))));
+        await setSetting(env, "canary_hosts", String(b.hosts || "").slice(0, 500));
+        await setSetting(env, "legacy_auth", b.legacy === false ? "0" : "1");
+        return okJson();
+      }
+      case "canary.drop": {
+        if (b.all) {
+          await env.DB.prepare("DELETE FROM servers WHERE COALESCE(owner,'')<>''").run();
+        } else {
+          const ids = idList(b);
+          if (!ids.length) return okJson({ ok: false, error: "empty ids" });
+          await env.DB.prepare("DELETE FROM servers WHERE owner IN (" + ids.map((_, i) => "?" + (i + 1)).join(",") + ")").bind(...ids).run();
+        }
+        srvAllInvalidate();
+        return okJson();
+      }
+      case "leak.check": {
+        return await leakCheck(env, String(b.text || "").slice(0, 400000));
+      }
+      case "dev.detail": {
+        const ids = idList(b);
+        if (!ids.length) return okJson({ ok: false, error: "empty ids" });
+        const ph = ids.map((_, i) => "?" + (i + 1)).join(",");
+        const QD = [
+          ["hist", "SELECT COUNT(*) c, MIN(ts) f, MAX(ts) l FROM events WHERE device IN (" + ph + ")"],
+          ["events", "SELECT device, type, ts, ip FROM events WHERE device IN (" + ph + ") ORDER BY ts DESC LIMIT 120"],
+          ["ips", "SELECT ip, COUNT(*) c, MAX(ts) l FROM events WHERE device IN (" + ph + ") AND COALESCE(ip,'')<>'' GROUP BY ip ORDER BY c DESC LIMIT 40"],
+          ["traps", "SELECT id, name, address, port, link, category FROM servers WHERE owner IN (" + ph + ") AND active=1 ORDER BY id LIMIT 60"],
+          ["keys", "SELECT device, pub, rot, created, updated FROM dev_keys WHERE device IN (" + ph + ")"],
+          ["keylog", "SELECT device, pub, ts, ip FROM dev_key_log WHERE device IN (" + ph + ") ORDER BY ts DESC LIMIT 40"],
+          ["sessions", "SELECT device, mode, exp FROM blob_sessions WHERE device IN (" + ph + ")"],
+          ["devs", "SELECT id, model, app_ver, first_seen, last_seen, connected, info FROM devices WHERE id IN (" + ph + ") ORDER BY last_seen DESC"],
+        ];
+        let out2 = {};
+        try {
+          const B = await env.DB.batch(QD.map((q) => env.DB.prepare(q[1]).bind(...ids)));
+          B.forEach((r, i) => { out2[QD[i][0]] = r.results || []; });
+        } catch (e) {
+          // database from before events.ip / dev_keys - take what still answers
+          for (const q of QD) out2[q[0]] = (await qAll(env, q[1], ids)) || [];
+        }
+        return okJson({
+          hist: (out2.hist || [])[0] || null,
+          events: out2.events || [],
+          ips: out2.ips || [],
+          traps: out2.traps || [],
+          keys: out2.keys || [],
+          keylog: out2.keylog || [],
+          sessions: out2.sessions || [],
+          devs: out2.devs || [],
+        });
       }
       default:
         return okJson({ ok: false, error: "unknown action: " + act });
@@ -1052,6 +1376,25 @@ function panelPage(env) {
 <div><div class=lbl>مدل‌ها مسدود (با کاما)</div><textarea id=blk_m rows=2></textarea></div>
 </div>
 <button onclick=saveBlockLists() style=margin-top:10px>ذخیره لیست‌های مسدود</button></div>
+
+<div class=card><h2>🕵 سرورهای تله و بررسی نشتی <span class=cnt id=cy_cnt></span></h2>
+<div class=grid style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr))">
+<div><div class=lbl>ارسال سرور تله</div><label class=switch><input type=checkbox id=cy_on><span></span></label> <span class=note>روشن باشد</span></div>
+<div><div class=lbl>تعداد برای هر دستگاه (۰ تا ۱۲)</div><input id=cy_count type=number min=0 max=12 value=3></div>
+<div><div class=lbl>میزبان مخصوص تله‌ها (اختیاری، با کاما)</div><input id=cy_hosts placeholder="خالی = همان میزبان‌های واقعی"></div>
+</div>
+<div style="margin-top:12px"><label class=switch><input type=checkbox id=lg_on checked><span></span></label>
+<span class=note>&nbsp;اجازهٔ ورود به اپ‌های قدیمی (رمز مشترک BLOB_ROOT). وقتی همه اپ‌ها آپدیت شدند خاموشش کن — اپ‌های جدید هیچ رمز مشترکی در فایل نصب ندارند.</span></div>
+<div class=toolbar style="margin-top:12px">
+<button onclick=saveCanary()>ذخیره</button>
+<button class="gray sm" onclick=loadCanary()>🔄 تازه‌سازی</button>
+<button class="red sm" onclick=cyDropAll()>پاک کردن همهٔ سرورهای تله</button>
+</div>
+<p class=note>سرور تله از روی یک کانفیگ واقعی ساخته میشود و فقط یک چیزش عوض میشود (کلید عبور، پورت یا میزبان) — اسمش از همان استخر اسم‌های واقعی برمی‌دارد، پس در لیست قابل تشخیص نیست. این سرورها <b>فقط به همان دستگاه</b> فرستاده میشوند و کار نمیکنند؛ هر کس لیستش را لو بدهد، با چسباندن لیست پایین اینجا همان شخص پیدا میشود.</p>
+<div class=lbl>متن لو رفته (لینک‌ها، سابسکریپشن، پیام چت) را اینجا بچسبان</div>
+<textarea id=lk_text rows=5 placeholder="vless://...."></textarea>
+<button onclick=runLeak() style=margin-top:8px>🔎 بررسی نشتی</button>
+<div id=lk_out class=note style="margin-top:8px"></div></div>
 </div>
 
 </main>
@@ -1059,7 +1402,7 @@ function panelPage(env) {
 
 <div class=toast id=toast>انجام شد</div>
 <div id=info_modal style="position:fixed;inset:0;background:rgba(11,15,20,.8);z-index:210;display:none;align-items:center;justify-content:center">
-<div class=card style="width:min(420px,92vw)">
+<div class=card id=info_card style="width:min(420px,92vw)">
 <h2>ℹ مشخصات دستگاه</h2>
 <div id=info_body class=note style="max-height:60vh;overflow:auto"></div>
 <button class="gray sm" style=margin-top:12px onclick=infoClose()>بستن</button></div></div>
@@ -1293,7 +1636,9 @@ $('stats').innerHTML=
  '<div class="stat"><b class="a">'+s.connectsToday+'</b><span>اتصال امروز</span></div>'+
  '<div class="stat"><b>'+s.syncsToday+'</b><span>همگام‌سازی امروز</span></div>'+
  '<div class="stat"><b>'+s.activeServers+'</b><span>سرور فعال</span></div>'+
- '<div class="stat"><b class="r">'+(s.offServers||0)+'</b><span>سرور خاموش</span></div>'}
+ '<div class="stat"><b class="r">'+(s.offServers||0)+'</b><span>سرور خاموش</span></div>'+
+ '<div class="stat"><b class="a">'+(s.traps||0)+'</b><span title="سرورهایی که فقط به یک دستگاه خاص فرستاده میشوند تا لو رفتن لیست را بشناسیم">سرور تله</span></div>'+
+ '<div class="stat"><b class="'+(s.legacyClients?'r':'')+'">'+(s.legacyClients||0)+'</b><span title="دستگاه‌هایی که هنوز با رمز مشترک قدیمی وارد میشوند؛ با اپدیت اپ صفر میشوند">اپ قدیمی</span></div>'}
 /** The device info column is a JSON string in D1 - parse it once so the panel shows fields, not escaped text. */
 function infoOf(v){if(!v)return{};if(typeof v==='object')return v;try{const p=JSON.parse(v);return p&&typeof p==='object'?p:{}}catch(e){return{raw:String(v).slice(0,300)}}}
 /* Real-handset hints. A phone shows a vendor fingerprint, arm abi, a moving battery and a sim;
@@ -1331,6 +1676,7 @@ function devInfoTable(i2){const used={};let h='';
   rest.forEach(function(k){h+='<tr><td class=note style="white-space:nowrap">'+esc(k)+'</td><td style="direction:ltr;text-align:right;word-break:break-all">'+esc(String(i2[k]))+'</td></tr>'})}
  return h}
 async function loadDevices(){const j=await api({action:'devices.list'});DEVS=j.devices||[];CUT=j.cut||0;
+TRAPS=j.traps||{};MODES=j.modes||{};KEYS=j.keys||{};
 window.BLOCKED=j.blocked||{devices:[],ips:[],models:[]};
 if($('blk_d')&&$('blk_d').value==='')$('blk_d').value=(window.BLOCKED.devices||[]).join(',');
 if($('blk_i')&&$('blk_i').value==='')$('blk_i').value=(window.BLOCKED.ips||[]).join(',');
@@ -1339,13 +1685,19 @@ renderDevices()}
 async function saveBlockLists(){await api({action:'dev.blocklists',devices:$('blk_d').value,ips:$('blk_i').value,models:$('blk_m').value});loadDevices()}
 function devBlock(kind,id,on,name){api({action:'dev.block',kind:kind,id:id,on:on}).then(loadDevices)}
 let GMAP={};
+/* per-device trap count / auth mode / key rotations, served with devices.list */
+let TRAPS={},MODES={},KEYS={};
 function groupOf(b){return GMAP[b.dataset.gk]}
 function devBlockMany(kind,ids,on){const v=(ids||[]).filter(Boolean).join(',');if(!v){toast('خالی',1);return}api({action:'dev.blockmany',kind:kind,ids:v,on:on}).then(loadDevices)}
 /** One physical handset is often stored as many install rows - merge them by ANDROID_ID. */
 function groupDevs(){const g={};DEVS.forEach(d=>{const i=infoOf(d.info);const aid=String(i.android_id||'').toLowerCase();
  const key=aid||('id:'+String(d.id||''));let e=g[key];
- if(!e){e={key:key,aid:aid,ids:[],ips:[],model:'',info:i,last:0,first:0,connected:0,vers:{},n:0};g[key]=e}
+ if(!e){e={key:key,aid:aid,ids:[],ips:[],model:'',info:i,last:0,first:0,connected:0,vers:{},n:0,traps:0,mode:'',rot:0};g[key]=e}
  e.n++;e.ids.push(String(d.id||''));
+ const tid=String(d.id||'');
+ e.traps+=Number(TRAPS[tid]||0);
+ const md=String(MODES[tid]||'');if(md==='ec'||!e.mode)e.mode=md||e.mode;
+ const kk=KEYS[tid];if(kk)e.rot=Math.max(e.rot||0,Number(kk.rot||0));
  const ls=Number(d.last_seen||0);if(ls>e.last)e.last=ls;
  const fs=Number(d.first_seen||0);if(fs&&(!e.first||fs<e.first))e.first=fs;
  if(d.connected)e.connected=1;
@@ -1377,7 +1729,10 @@ list.forEach((e,gi)=>{
  (e.n>1?' · '+e.n+' رکورد':'')+(ver?' · v'+esc(ver):'')+(devHw(e.info)?' · '+esc(devHw(e.info)):'')+'</span>'+
  '<div style="margin-top:4px">'+devVerdict(e.info)+'</div></td>'+
  '<td><span class="badge '+(e.connected&&online?'b-on':online?'b-y':'b-off')+'">'+(e.connected&&online?'متصل':online?'آنلاین':'آفلاین')+'</span>'+
- (blkDev||mBlk?'<br><span class="badge b-off">مسدود '+(blkDev?'دستگاه ':'')+(mBlk?'مدل':'')+'</span>':'')+'</td>'+
+ (blkDev||mBlk?'<br><span class="badge b-off">مسدود '+(blkDev?'دستگاه ':'')+(mBlk?'مدل':'')+'</span>':'')+
+ (e.traps?'<br><span class="badge b-y">🕵 '+e.traps+' سرور تله</span>':'')+
+ (e.mode&&e.mode!=='ec'?'<br><span class="badge b-off">اپ قدیمی (رمز مشترک)</span>':'')+
+ (e.rot>0?'<br><span class="badge b-y">تعویض کلید '+e.rot+' بار</span>':'')+'</td>'+
  '<td style="direction:ltr;text-align:right">'+(e.ips.length?e.ips.map(ip=>{
    const ib=(B.ips||[]).includes(ip);
    return '<button class="'+(ib?'red':'gray')+' sm" data-k=ip data-id="'+esc(ip)+'" data-on='+(ib?'0':'1')+' style="margin:2px 0;direction:ltr">'+esc(ip)+(ib?' (مسدود)':'')+'</button>'}).join('<br>'):'-')+'</td>'+
@@ -1385,7 +1740,8 @@ list.forEach((e,gi)=>{
  '<td><button class="gray sm" data-g=device data-gk='+gi+' data-on='+(blkDev?'0':'1')+'>'+(blkDev?'آزاد':'مسدود')+' دستگاه'+(e.n>1?' ('+e.n+')':'')+'</button> '+
  '<button class="gray sm" data-g=ip data-gk='+gi+' data-on='+(allIpd?'0':'1')+'>'+(e.ips.length?(allIpd?'آزاد همه IP':'مسدود همه IP ('+e.ips.length+')'):'بدون IP')+'</button> '+
  '<button class="gray sm" data-k=model data-id="'+esc(e.model||'')+'" data-on='+(mBlk?'0':'1')+'>'+(mBlk?'آزاد':'مسدود')+' مدل</button></td>'+
- '<td><button class="red sm" data-delg data-gk='+gi+'>حذف ('+e.n+')</button> '+
+ '<td><button class="gray sm" data-det data-gk='+gi+'>👁 جزئیات</button> '+
+ '<button class="red sm" data-delg data-gk='+gi+'>حذف ('+e.n+')</button> '+
  '<button class="gray sm" data-info="'+esc(JSON.stringify(e.info))+'">ℹ</button></td></tr>';
 });
 html+='</table>';
@@ -1395,6 +1751,7 @@ box.querySelectorAll('button[data-g=device]').forEach(b=>b.onclick=()=>{const g=
 box.querySelectorAll('button[data-g=ip]').forEach(b=>b.onclick=()=>{const g=groupOf(b);if(!g||!g.ips.length)return;devBlockMany('ip',g.ips,b.dataset.on==='1')});
 box.querySelectorAll('button[data-delg]').forEach(b=>b.onclick=()=>{const g=groupOf(b);if(!g)return;
  if(!confirm((g.n)+' رکورد این دستگاه حذف شود؟'))return;api({action:'dev.delmany',ids:g.ids.join(',')}).then(loadDevices)});
+box.querySelectorAll('button[data-det]').forEach(b=>b.onclick=()=>{const g=groupOf(b);if(g)devDetail(g)});
 box.querySelectorAll('button[data-info]').forEach(b=>b.onclick=()=>{
  const d2=b.getAttribute('data-info')||'{}';let i2={};try{i2=JSON.parse(d2)}catch(e){}
  i2=infoOf(i2);
@@ -1404,6 +1761,90 @@ box.querySelectorAll('button[data-info]').forEach(b=>b.onclick=()=>{
 
 /* ---- boot ---- */
 /* password on EVERY visit - nothing persisted; all panels load in parallel for speed */
+/* ---- trap servers + leak hunting ---- */
+function fmtTs(t){if(!t)return '-';try{return new Date(Number(t)).toLocaleString('fa-IR')}catch(e){return String(t)}}
+function kv(k,v){return '<tr><td class=note style="white-space:nowrap">'+esc(k)+'</td><td style="direction:ltr;text-align:right;word-break:break-all">'+esc(String(v))+'</td></tr>'}
+const EVID={sync:'همگام‌سازی',connect:'اتصال',disconnect:'قطع',ping:'پینگ',app_open:'باز کردن اپ',
+'key-rotated':'کلید دستگاه عوض شد','key-rejected':'کلید نامعتبر - درخواست رد شد','legacy-refused':'اپ قدیمی رد شد'};
+function evLbl(t){return EVID[String(t)]||String(t||'?')}
+async function loadCanary(){const j=await api({action:'canary.state'});const c=j.canary||{};
+ if($('cy_on'))$('cy_on').checked=String(c.on)==='1';
+ if($('cy_count'))$('cy_count').value=String(c.count||3);
+ if($('cy_hosts'))$('cy_hosts').value=String(c.hosts||'');
+ if($('lg_on'))$('lg_on').checked=String(j.legacy)!=='0';
+ if($('cy_cnt'))$('cy_cnt').textContent=(Number(j.trapTotal)||0)+' سرور تله فعال · '+((j.legacyClients==null)?'?':j.legacyClients)+' دستگاه با اپ قدیمی';
+ if($('lk_out')&&!$('lk_out').innerHTML)$('lk_out').innerHTML='<span class=note>هنوز بررسی نشده</span>'}
+async function saveCanary(){await api({action:'canary.set',on:$('cy_on').checked,count:Number($('cy_count').value||0),
+ hosts:$('cy_hosts').value,legacy:$('lg_on').checked});
+ toast('ذخیره شد - سرورهای تله در همگام‌سازی بعدی هر دستگاه ساخته میشوند');loadCanary()}
+async function cyDropAll(){if(!confirm('همهٔ سرورهای تله حذف شوند؟ هر دستگاه در همگام‌سازی بعدی مجموعهٔ تازه‌ای می‌گیرد.'))return;
+ await api({action:'canary.drop',all:true});toast('پاک شد');loadCanary();loadDevices()}
+/** Paste whatever leaked and find the handset it came from. */
+async function runLeak(){const t=$('lk_text').value||'';
+ if(t.trim().length<8){toast('اول متن لو رفته را اینجا بچسبان',1);return}
+ const box=$('lk_out');box.innerHTML='<span class=note>در حال بررسی...</span>';
+ const j=await api({action:'leak.check',text:t});
+ if(!j||j.ok===false){box.innerHTML='<span style="color:var(--red)">'+esc((j&&j.error)||'خطا')+'</span>';return}
+ const h=j.hits||[];
+ if(!h.length){box.innerHTML='هیچ سرور تله‌ای در این متن پیدا نشد ('+(Number(j.traps)||0)+' سرور تله بررسی شد). '+
+  'یا این لیست از دستگاه تو لو نشده، یا قبل از روشن کردن سرورهای تله گرفته شده است.';return}
+ const bd=j.byDevice||{};const who=Object.keys(bd);
+ let s='<div style="color:var(--red);font-weight:800">لو رفته: '+h.length+' سرور تله در این متن هست و متعلق به '+who.length+' دستگاه است</div>'+
+ '<table><tr><th>دستگاه</th><th>از کجا فهمیدیم</th><th>سرور</th><th></th></tr>'+h.slice(0,40).map(function(x){
+  return '<tr><td style="direction:ltr;font-size:11px">'+esc(String(x.device).slice(0,20))+'</td><td>'+esc(x.how)+'</td>'+
+  '<td style="direction:ltr;font-size:11px;word-break:break-all">'+esc(x.name||'')+'</td>'+
+  '<td><button class="red sm" data-bdev="'+esc(x.device)+'">مسدود این دستگاه</button></td></tr>'}).join('')+'</table>';
+ box.innerHTML=s;
+ box.querySelectorAll('button[data-bdev]').forEach(function(b){b.onclick=function(){
+   devBlock('device',b.getAttribute('data-bdev'),true);b.textContent='مسدود شد'}})}
+/** One handset, everything about it: identity, keys, its own trap servers, request history. */
+async function devDetail(e){toast('در حال دریافت جزئیات...');
+ const j=await api({action:'dev.detail',ids:(e.ids||[]).join(',')});
+ if(!j||j.ok===false){toast((j&&j.error)||'خطا',1);return}
+ const info=e.info||{};const ks=j.keys||[];const ss=j.sessions||[];
+ const md=String((ss[0]&&ss[0].mode)||'');
+ let h='<div style="margin-bottom:8px">'+devVerdict(info)+'</div>';
+ h+='<div class=lbl>هویت و کلید</div><table>';
+ h+=kv('مدل',e.model||'-');
+ h+=kv('شناسه اندروید',info.android_id||'(ندارد)');
+ h+=kv('اثر کلید سخت‌افزار',info.key_id||'(اپ قدیمی کلید نمی‌فرستد)');
+ h+=kv('نوع ورود',md==='ec'?'کلید اختصاصی همین دستگاه - بدون رمز مشترک':(md==='legacy'?'اپ قدیمی با رمز مشترک BLOB_ROOT':'هنوز نشست نگرفته'));
+ h+=kv('تعویض کلید',String(Number((ks[0]&&ks[0].rot)||0))+' بار (نصب مجدد با امضای دیگر هم همین را بالا می‌برد)');
+ h+=kv('ساخت کلید',fmtTs(ks[0]&&ks[0].created));
+ h+=kv('آخرین استفاده از کلید',fmtTs(ks[0]&&ks[0].updated));
+ h+='</table>';
+ h+='<div class=lbl style="margin-top:10px">تاریخچهٔ درخواست‌ها</div><table>';
+ h+=kv('تعداد درخواست‌ها',String(Number((j.hist&&j.hist.c)||0)));
+ h+=kv('اولین دیده',fmtTs(j.hist&&j.hist.f));
+ h+=kv('آخرین دیده',fmtTs(j.hist&&j.hist.l));
+ h+=kv('رکوردهای این handset',(e.ids||[]).length+' رکورد');
+ h+=kv('ایپی‌های متفاوت',(j.ips||[]).length);
+ h+='</table>';
+ const ips=j.ips||[];
+ h+='<div class=lbl style="margin-top:10px">ایپی‌ها با تعداد</div>';
+ h+=ips.length?('<div style="direction:ltr;text-align:right">'+ips.map(function(r){
+   return '<button class="gray sm" data-xip="'+esc(r.ip)+'" style="margin:2px">'+esc(r.ip)+' × '+Number(r.c||0)+' · '+fmtTs(r.l)+'</button>'}).join('')+'</div>'):
+   '<span class=note>برای رکوردهای قدیمی ستون ip پر نشده - بعد از همگام‌سازی‌های بعدی اینجا می‌آید</span>';
+ const tr=j.traps||[];
+ h+='<div class=lbl style="margin-top:10px">🕵 سرورهای تلهٔ این دستگاه ('+tr.length+')</div>';
+ h+=tr.length?('<table><tr><th>نام</th><th>آدرس</th><th>لینک (کار نمی‌کند)</th></tr>'+tr.map(function(t){
+   return '<tr><td>'+esc(t.name||'')+'</td><td style="direction:ltr">'+esc((t.address||'')+':'+(t.port||443))+'</td>'+
+   '<td style="direction:ltr;text-align:right;word-break:break-all;font-size:11px">'+esc(t.link||'')+'</td></tr>'}).join('')+'</table>'):
+   '<span class=note>سرور تله‌ای برایش ساخته نشده (ارسال خاموش است یا هنوز همگام‌سازی نکرده)</span>';
+ const kl=j.keylog||[];
+ if(kl.length){h+='<div class=lbl style="margin-top:10px">کلیدهایی که این شناسه با آنها آمده</div><table><tr><th>زمان</th><th>ایپی</th><th>کلید</th></tr>'+
+  kl.map(function(k){return '<tr><td>'+fmtTs(k.ts)+'</td><td style="direction:ltr">'+esc(k.ip||'-')+'</td>'+
+  '<td style="direction:ltr;font-size:11px">'+esc(String(k.pub||'').slice(0,18))+'...</td></tr>'}).join('')+'</table>'}
+ const ev=j.events||[];
+ h+='<div class=lbl style="margin-top:10px">آخرین '+ev.length+' رویداد</div>';
+ h+=ev.length?('<table><tr><th>زمان</th><th>نوع</th><th>IP</th></tr>'+ev.map(function(r){
+   return '<tr><td>'+fmtTs(r.ts)+'</td><td>'+esc(evLbl(r.type))+'</td><td style="direction:ltr">'+esc(r.ip||'-')+'</td></tr>'}).join('')+'</table>'):
+   '<span class=note>چیزی ثبت نشده</span>';
+ h+='<div class=lbl style="margin-top:10px">فول اطلاعات دستگاه</div><table>'+devInfoTable(info)+'</table>';
+ supportModal(h,780);
+ document.querySelectorAll('#info_body button[data-xip]').forEach(function(b){b.onclick=function(){
+  const ip=b.getAttribute('data-xip');const on=!(((window.BLOCKED||{}).ips)||[]).includes(ip);
+  devBlock('ip',ip,on);b.className=on?'red sm':'gray sm'}})}
 async function loadAll(){
  await Promise.allSettled([
    loadServers(),
@@ -1414,11 +1855,12 @@ async function loadAll(){
    loadPopup(),
    loadUpdate(),
    loadDevices(),
+   loadCanary(),
    loadRoute(),
   ])}
 (()=>{logout()})();
-supportModal=((h)=>{const bd2=$('info_body');bd2.innerHTML=h;$('info_modal').style.display='flex'});
-function infoClose(){$('info_modal').style.display='none'}
+supportModal=((h,w)=>{const c=$('info_card');if(c)c.style.width='min('+(w||420)+'px,94vw)';
+ const bd2=$('info_body');bd2.innerHTML=h;$('info_modal').style.display='flex'});
 /* no auto-refresh - admin uses the 🔄 buttons */
 function manualRefresh(){if(!PW){logout();return}toast('در حال بروزرسانی...');loadAll()}
 </script>
@@ -1430,12 +1872,14 @@ function manualRefresh(){if(!PW){logout();return}toast('در حال بروزرس
 }
 
 /* ============================ blob secure layer (v2) ============================
- * Design (server-issued rotating session keys - the app never owns a crypto key):
- *   1) POST /api/key: worker derives kc (payload key) + kt (token key) fresh per
- *      60-minute bucket: HMAC(BLOB_ROOT, "blobk1"+device+bucket+"K"/"T") and hands
- *      them over the TLS channel; rows live in blob_sessions. When the bucket
- *      rolls, /api/sync answers enc:"h" and the app re-issues keys on its next
- *      request - rotation is seamless.
+ * Design (server-issued rotating session keys - the app owns no crypto secret at all):
+ *   1) POST /api/key: the handset signs a one-shot message with a NON-EXPORTABLE AndroidKeyStore
+ *      EC P-256 key. The worker memorised that public key on first sight (dev_keys) and answers
+ *      with two fresh random 32-byte keys - kc (payload) and kt (token) - stored in blob_sessions
+ *      until the end of the current 60-minute bucket. When the bucket rolls, /api/sync answers
+ *      enc:"h" and the app re-issues keys on its next request - rotation is seamless.
+ *      Builds from before this change still authenticate with HMAC(BLOB_ROOT) while
+ *      legacy_auth stays on; every such device is marked in the panel.
  *   2) One-shot token on every request: ts|nonce|HMAC(kt, msg) matched against a
  *      strictly-monotonic per-device timestamp (D1) => replay-proof, single-use.
  *   3) /api/sync is the ONLY data channel and is ALWAYS encrypted: the app sends
@@ -1444,8 +1888,10 @@ function manualRefresh(){if(!PW){logout();return}toast('در حال بروزرس
  *      JSON -> zlib -> AES-256-GCM(Kc, AAD BLBv1) -> homoglyph stego carrier
  *      (same bit engine as StegaText). No /api/beat, /api/ack or /api/handshake
  *      anymore, and NO plaintext fallback anywhere.
- * Worker secret (console):
- *   wrangler secret put BLOB_ROOT  (64 hex chars, equals the app root)
+ * Worker secrets (console):
+ *   wrangler secret put ADMIN_PASSWORD    (admin password)
+ *   wrangler secret put BLOB_ROOT   (64 hex chars - OPTIONAL, only to keep old app builds
+ *                                   working; turn it off with legacy_auth once everyone updated)
  */
 const M64 = (1n << 64n) - 1n;
 /** stego header magic (16-bit) - MUST equal the app's BlobStego.MAGIC16 (0xB10B). */
@@ -1757,37 +2203,121 @@ function bl_makeCarrier(charsWanted) {
   return out;
 }
 
-/* --- one-shot token:  ts(4BE) | nonce(8) | hmac(32)   msg = "blb"|device|0x00|ts4BE|nonce --- */
+/* --- one-shot token:  ts(4BE) | nonce(8) | proof   msg = "blb"|device|0x00|ts4BE|nonce
+   proof is HMAC-SHA256(kt) inside a session, or a DER ECDSA signature made by the handset's
+   non-exportable keystore key when it asks for session keys. --- */
+function bl_tokSplit(device, raw) {
+  const ts = ((raw[0] & 0xff) << 24) | ((raw[1] & 0xff) << 16) | ((raw[2] & 0xff) << 8) | (raw[3] & 0xff);
+  const now = Math.floor(Date.now() / 1000);
+  if (ts > now + BL_SKEW || ts < now - BL_SKEW) return null;
+  return { ts, nonce: raw.slice(4, 12), proof: raw.slice(12), msg: bl_tokMsg(device, ts, raw.slice(4, 12)) };
+}
+
+/** strictly monotonic ts per device => single-use & anti-replay */
+async function bl_tokAdvance(env, device, ts) {
+  try {
+    const upd = await env.DB.prepare("UPDATE blob_tok SET ts=?2 WHERE device=?1 AND ts < ?2").bind(device, ts).run();
+    if ((upd.meta && upd.meta.changes || 0) === 1) return true;
+  } catch (e) {}
+  let cur = null;
+  try {
+    cur = await env.DB.prepare("SELECT ts FROM blob_tok WHERE device=?1").bind(device).first();
+  } catch (e) { cur = null; }
+  if (cur == null) {
+    try {
+      await env.DB.prepare("INSERT INTO blob_tok (device, ts) VALUES (?1,?2)").bind(device, ts).run();
+      return true;
+    } catch (e2) {
+      return false;
+    }
+  }
+  return false;
+}
+
 async function bl_tokenCheck(env, device, tok, hmacKey) {
   try {
     const raw = bl_b64uDecode(tok);
     if (raw.length !== 44) return { ok: false };
-    const ts = ((raw[0] & 0xff) << 24) | ((raw[1] & 0xff) << 16) | ((raw[2] & 0xff) << 8) | (raw[3] & 0xff);
-    const nonce = raw.slice(4, 12);
-    const sig = raw.slice(12, 44);
-    const now = Math.floor(Date.now() / 1000);
-    if (ts > now + BL_SKEW || ts < now - BL_SKEW) return { ok: false };
-    const sig2 = await bl_hmac(hmacKey, bl_tokMsg(device, ts, nonce));
-    if (!bl_eq(sig, sig2)) return { ok: false };
-    // strictly monotonic per device => single-use & anti-replay
-    const upd = await env.DB.prepare("UPDATE blob_tok SET ts=?2 WHERE device=?1 AND ts < ?2").bind(device, ts).run();
-    if ((upd.meta && upd.meta.changes || 0) === 1) return { ok: true, ts };
-    let cur = null;
-    try {
-      cur = await env.DB.prepare("SELECT ts FROM blob_tok WHERE device=?1").bind(device).first();
-    } catch (e) { cur = null; }
-    if (cur == null) {
-      try {
-        await env.DB.prepare("INSERT INTO blob_tok (device, ts) VALUES (?1,?2)").bind(device, ts).run();
-        return { ok: true, ts };
-      } catch (e2) {
-        return { ok: false };
-      }
-    }
-    return { ok: false };
+    const p = bl_tokSplit(device, raw);
+    if (!p) return { ok: false };
+    if (!bl_eq(p.proof, await bl_hmac(hmacKey, p.msg))) return { ok: false };
+    if (!(await bl_tokAdvance(env, device, p.ts))) return { ok: false };
+    return { ok: true, ts: p.ts };
   } catch (e) {
     return { ok: false };
   }
+}
+
+/** The handset signed the one-shot message with the private half of `pubB64` (P-256, spki). */
+async function bl_ecTokCheck(env, device, tok, pubB64) {
+  try {
+    const raw = bl_b64uDecode(tok);
+    if (raw.length < 60 || raw.length > 170) return { ok: false, why: "proof length " + raw.length };
+    const p = bl_tokSplit(device, raw);
+    if (!p) return { ok: false, why: "timestamp outside skew" };
+    const der = bl_b64uDecode(String(pubB64 || ""));
+    if (!der || der.length < 40 || der.length > 200) return { ok: false, why: "bad public key" };
+    let key;
+    try {
+      key = await crypto.subtle.importKey("spki", der, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+    } catch (e) {
+      return { ok: false, why: "public key is not P-256 spki" };
+    }
+    let good = false;
+    try {
+      good = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, p.proof, p.msg);
+    } catch (e) {
+      return { ok: false, why: "signature rejected by the platform" };
+    }
+    if (!good) return { ok: false, why: "signature does not match this device key" };
+    if (!(await bl_tokAdvance(env, device, p.ts))) return { ok: false, why: "replayed token" };
+    return { ok: true, ts: p.ts };
+  } catch (e) {
+    return { ok: false, why: String((e && e.message) || e).slice(0, 60) };
+  }
+}
+
+/** Trust-on-first-use device keys. The worker remembers one public key per device id; a request
+ *  is served only when its signature matches. A device id copied off another phone therefore
+ *  buys nothing - the signing key never leaves the handset it was born on.
+ *  A changed key IS accepted (reinstalling with a different signing certificate really does
+ *  destroy the old one) but it is counted, logged with the IP and shown in the panel, because an
+ *  attacker replaying a stolen id looks identical at this point and has to stay visible. */
+async function bl_enrollCheck(env, device, pubB64, tok, ip) {
+  let row = null;
+  try {
+    row = await env.DB.prepare("SELECT pub, rot FROM dev_keys WHERE device=?1").bind(device).first();
+  } catch (e) {
+    try { await ensureSchema(env, true); } catch (e2) {}
+    try { row = await env.DB.prepare("SELECT pub, rot FROM dev_keys WHERE device=?1").bind(device).first(); } catch (e3) { row = null; }
+  }
+  const now = Date.now();
+  const stored = row ? String(row.pub || "") : "";
+  if (stored && stored === String(pubB64 || "")) {
+    const same = await bl_ecTokCheck(env, device, tok, stored);
+    if (!same.ok) return { ok: false, why: same.why };
+    try { await env.DB.prepare("UPDATE dev_keys SET updated=?2 WHERE device=?1").bind(device, now).run(); } catch (e) {}
+    return { ok: true, mode: "ec", rotated: false };
+  }
+  const fresh = await bl_ecTokCheck(env, device, tok, String(pubB64 || ""));
+  if (!fresh.ok) return { ok: false, why: stored ? "stored key refused and " + fresh.why : fresh.why };
+  const pub = String(pubB64).slice(0, 200);
+  if (!stored) {
+    try {
+      await env.DB.prepare("INSERT INTO dev_keys (device, pub, created, updated, rot) VALUES (?1,?2,?3,?3,0)")
+        .bind(device, pub, now).run();
+    } catch (e) {}
+  } else {
+    try {
+      await env.DB.prepare("UPDATE dev_keys SET pub=?2, updated=?3, rot=?4 WHERE device=?1")
+        .bind(device, pub, now, Number(row.rot || 0) + 1).run();
+    } catch (e) {}
+  }
+  try {
+    await env.DB.prepare("INSERT INTO dev_key_log (device, pub, ts, ip) VALUES (?1,?2,?3,?4)")
+      .bind(device, pub, now, String(ip || "").slice(0, 64)).run();
+  } catch (e) {}
+  return { ok: true, mode: "ec", rotated: !!stored };
 }
 
 function bl_tokMsg(device, ts, nonce) {
@@ -1850,33 +2380,60 @@ async function blobSyncProtected(env, request, b) {
   return new Response(JSON.stringify({ ...base, ...sealed }), { headers: jsonHeaders() });
 }
 
-/** /api/key - the app NEVER owns a crypto key: the worker issues kc/kt freshly for
- *  every 60-minute bucket derived from device-id + wall time (HMAC of BLOB_ROOT).
- *  Same keys live in blob_sessions, so /api/sync (x-blob v1) just works. */
+/** /api/key - the app owns NO shared secret any more. It signs the one-shot message with a
+ *  non-exportable AndroidKeyStore key and the worker answers with fresh RANDOM session keys, so
+ *  decompiling the APK yields nothing usable. Builds from before this change (no alg field) are
+ *  still served through the old BLOB_ROOT HMAC until the admin turns legacy auth off. */
 async function blobKeyIssue(env, request) {
   const b = await request.json().catch(() => null);
-  if (!b || !b.device || !b.tok) {
+  if (!b || !b.device) {
     return new Response(JSON.stringify({ ok: false, error: "issuance" }), { status: 400, headers: jsonHeaders() });
   }
   if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
-  if (!env.BLOB_ROOT) {
-    return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { headers: jsonHeaders() });
+  const device = String(b.device).slice(0, 128);
+  const ip = clientIp(request);
+  let mode = "ec";
+  let rotated = false;
+  if (b.alg === "ec") {
+    const r = await bl_enrollCheck(env, device, String(b.pub || ""), String(b.sig || ""), ip);
+    if (!r.ok) {
+      await insEvent(env, device, "key-rejected", Date.now(), ip);
+      return new Response(JSON.stringify({ ok: true, v: 2, enc: "x", why: r.why }), { status: 403, headers: jsonHeaders() });
+    }
+    mode = r.mode;
+    rotated = r.rotated;
+  } else {
+    const cfgL = await getSettings(env, ["legacy_auth"]);
+    if (String(cfgL.legacy_auth || "1") === "0" || !env.BLOB_ROOT) {
+      await insEvent(env, device, "legacy-refused", Date.now(), ip);
+      return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { status: 403, headers: jsonHeaders() });
+    }
+    const tok = await bl_tokenCheck(env, device, String(b.tok || ""), bl_hexToB(String(env.BLOB_ROOT)));
+    if (!tok.ok) {
+      await insEvent(env, device, "key-rejected", Date.now(), ip);
+      return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { status: 403, headers: jsonHeaders() });
+    }
+    mode = "legacy";
   }
-  const tok = await bl_tokenCheck(env, String(b.device), String(b.tok), bl_hexToB(String(env.BLOB_ROOT)));
-  if (!tok.ok) return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { status: 403, headers: jsonHeaders() });
-  const device = String(b.device);
-  const bucket = Math.floor(Date.now() / 3600000);
-  const msgK = new TextEncoder().encode("blobk1" + device + bucket + "K");
-  const msgT = new TextEncoder().encode("blobk1" + device + bucket + "T");
-  const rootB = bl_hexToB(String(env.BLOB_ROOT));
-  const kc = new Uint8Array(await bl_hmac(rootB, msgK));
-  const kt = new Uint8Array(await bl_hmac(rootB, msgT));
-  const expSec = (bucket + 1) * 3600; // hard expiry at the bucket boundary (<= 60 min)
+  const kc = new Uint8Array(crypto.getRandomValues(new Uint8Array(32)));
+  const kt = new Uint8Array(crypto.getRandomValues(new Uint8Array(32)));
+  const expSec = (Math.floor(Date.now() / 3600000) + 1) * 3600; // hard expiry at the bucket boundary
+  const keyHex = bl_hex(kc) + bl_hex(kt);
   try {
     await env.DB.prepare(
-      "INSERT INTO blob_sessions (device, key, exp, rot) VALUES (?1,?2,?3,0) ON CONFLICT(device) DO UPDATE SET key=?2, exp=?3, rot=0, last_payload=''",
-    ).bind(device, bl_hex(kc) + bl_hex(kt), expSec * 1000).run();
-  } catch (e) {}
+      "INSERT INTO blob_sessions (device, key, exp, rot, last_payload, mode) VALUES (?1,?2,?3,0,'',?4) " +
+        "ON CONFLICT(device) DO UPDATE SET key=?2, exp=?3, rot=0, last_payload='', mode=?4",
+    ).bind(device, keyHex, expSec * 1000, mode).run();
+  } catch (e) {
+    // database from before the mode column
+    try {
+      await env.DB.prepare(
+        "INSERT INTO blob_sessions (device, key, exp, rot) VALUES (?1,?2,?3,0) " +
+          "ON CONFLICT(device) DO UPDATE SET key=?2, exp=?3, rot=0, last_payload=''",
+      ).bind(device, keyHex, expSec * 1000).run();
+    } catch (e2) {}
+  }
+  if (rotated) await insEvent(env, device, "key-rotated", Date.now(), ip);
   return new Response(JSON.stringify({
     ok: true,
     v: 2,
@@ -1885,6 +2442,7 @@ async function blobKeyIssue(env, request) {
     kt: bl_b64uEncode(kt),
     exp: expSec,
     tv: Date.now(),
+    mode,
   }), { headers: jsonHeaders() });
 }
 /** Was read as a module variable without ever being declared, so ensureSchema threw
@@ -1899,10 +2457,11 @@ async function ensureSchema(env, force) {
     env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, model TEXT DEFAULT '', app_ver TEXT DEFAULT '', first_seen INTEGER, last_seen INTEGER, ip TEXT DEFAULT '', connected INTEGER DEFAULT 0)",
     ),
-    env.DB.prepare("CREATE TABLE IF NOT EXISTS events (device TEXT, type TEXT, ts INTEGER)"),
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS events (device TEXT, type TEXT, ts INTEGER, ip TEXT DEFAULT '')"),
     env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts)"),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_events_dev ON events (device, ts)"),
     env.DB.prepare(
-      "CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, address TEXT, port INTEGER DEFAULT 443, link TEXT DEFAULT '', category TEXT DEFAULT '', ord INTEGER DEFAULT 99, active INTEGER DEFAULT 1, msg TEXT DEFAULT '')",
+      "CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, address TEXT, port INTEGER DEFAULT 443, link TEXT DEFAULT '', category TEXT DEFAULT '', ord INTEGER DEFAULT 99, active INTEGER DEFAULT 1, msg TEXT DEFAULT '', owner TEXT DEFAULT '')",
     ),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS popup_seen (device TEXT, popup INTEGER, PRIMARY KEY (device, popup))"),
     env.DB.prepare("INSERT OR IGNORE INTO popup_seen (device, popup) VALUES ('__init__', 1)"),
@@ -1913,9 +2472,16 @@ async function ensureSchema(env, force) {
       "CREATE TABLE IF NOT EXISTS acks (device TEXT, popup TEXT, kind TEXT, ts INTEGER, PRIMARY KEY (device, popup, kind))",
     ),
     env.DB.prepare(
-      "CREATE TABLE IF NOT EXISTS blob_sessions (device TEXT PRIMARY KEY, key TEXT, exp INTEGER, rot INTEGER DEFAULT 0, last_payload TEXT DEFAULT '')",
+      "CREATE TABLE IF NOT EXISTS blob_sessions (device TEXT PRIMARY KEY, key TEXT, exp INTEGER, rot INTEGER DEFAULT 0, last_payload TEXT DEFAULT '', mode TEXT DEFAULT 'legacy')",
     ),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS blob_tok (device TEXT PRIMARY KEY, ts INTEGER DEFAULT 0)"),
+    env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS dev_keys (device TEXT PRIMARY KEY, pub TEXT, created INTEGER, updated INTEGER, rot INTEGER DEFAULT 0)",
+    ),
+    env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS dev_key_log (device TEXT, pub TEXT, ts INTEGER, ip TEXT DEFAULT '')",
+    ),
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_keylog_dev ON dev_key_log (device, ts)"),
     env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS payload_files (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, mime TEXT DEFAULT '', size INTEGER DEFAULT 0, title TEXT DEFAULT '', b64 TEXT, active INTEGER DEFAULT 1, ts INTEGER)",
     ),
@@ -1937,6 +2503,16 @@ async function ensureSchema(env, force) {
   } catch (e) {}
   try {
     await env.DB.prepare("ALTER TABLE devices ADD COLUMN info TEXT DEFAULT ''").run();
+  } catch (e) {}
+  // trap servers, per-request ip and the auth mode the session was issued under
+  try {
+    await env.DB.prepare("ALTER TABLE servers ADD COLUMN owner TEXT DEFAULT ''").run();
+  } catch (e) {}
+  try {
+    await env.DB.prepare("ALTER TABLE events ADD COLUMN ip TEXT DEFAULT ''").run();
+  } catch (e) {}
+  try {
+    await env.DB.prepare("ALTER TABLE blob_sessions ADD COLUMN mode TEXT DEFAULT 'legacy'").run();
   } catch (e) {}
   schemaReady = failed === 0;
 }

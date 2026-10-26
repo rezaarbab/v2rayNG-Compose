@@ -2,6 +2,7 @@ package ir.v2rayng.compose.core
 
 import android.os.Build
 import ir.v2rayng.compose.AppCtx
+import ir.v2rayng.compose.core.sec.BlobIdentity
 import ir.v2rayng.compose.core.sec.BlobSecure
 import ir.v2rayng.compose.core.sec.SecurePrefs
 import org.json.JSONObject
@@ -96,13 +97,19 @@ object Remote {
             val v = if (!hardware.isNullOrBlank() && hardware != "9774d56d682e549c") {
                 hardware.lowercase()
             } else {
-                // no usable platform id (emulator image, rooted ROM): fall back to a stored uuid
-                var s = SecurePrefs.get("deviceId", context)
-                if (s.isNullOrBlank()) {
-                    s = java.util.UUID.randomUUID().toString()
-                    SecurePrefs.set("deviceId", s, context)
+                // no usable platform id (emulator image, rooted ROM) - bind the id to the
+                // non-exportable hardware key instead of a string anybody could copy
+                val kid = BlobIdentity.idSeed()
+                if (kid.isNotBlank()) {
+                    "kd" + kid
+                } else {
+                    var s = SecurePrefs.get("deviceId", context)
+                    if (s.isNullOrBlank()) {
+                        s = java.util.UUID.randomUUID().toString()
+                        SecurePrefs.set("deviceId", s, context)
+                    }
+                    s
                 }
-                s
             }
             cachedDevice = v
             return v
@@ -149,6 +156,9 @@ object Remote {
         } catch (_: Exception) {
             null
         })
+        // short handle of the non-exportable key this install signs its key requests with; the
+        // worker stores the public key, so this is what proves the device is really this device
+        add("key_id", BlobIdentity.fingerprint())
         val pi = try {
             AppCtx.app.packageManager.getPackageInfo(AppCtx.app.packageName, 0)
         } catch (_: Exception) {
