@@ -60,7 +60,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
-    private val _settings = MutableStateFlow(Settings())
+    private val _settings = MutableStateFlow(store.themeSeed())
 
     /** Set by the first IO load, and by any user edit that happens before it finishes. */
     @Volatile
@@ -113,17 +113,20 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         } catch (_: Exception) {
         }
         // every stored value is behind a StrongBox unseal, so none of it may run while the first
-        // frame is being composed - the UI paints from defaults and the data lands milliseconds later
+        // frame is being composed - the UI paints from the plaintext theme mirror and the rest
+        // lands as soon as the unseals are done
         viewModelScope.launch(Dispatchers.IO) {
             val tLoad0 = android.os.SystemClock.elapsedRealtime()
             val s = store.load()
+            // settings first: palette, stickers and wallpaper are what the eye notices, and the
+            // server list is the biggest and slowest stored value
+            if (!userEdited) _settings.value = s
             val saved = store.loadServers()
             val sel = store.loadSelectedId()
             val base = store.loadRemoteBase()
             if (userEdited) {
                 log("WARN", "Stored data arrived after an edit - keeping what is on screen")
             } else {
-                _settings.value = s
                 if (saved != null) {
                     _state.update { st ->
                         st.copy(

@@ -129,7 +129,7 @@ class SettingsStore(context: Context) {
         fun peek(): Settings? = cache
     }
 
-    fun load(): Settings = cache ?: readBlob().also { cache = it }
+    fun load(): Settings = cache ?: readBlob().also { cache = it; mirror(it) }
 
     /** The one value needed before the first frame. Reading it through SecurePrefs would cost a
      *  StrongBox unseal inside onCreate, which is exactly what made the app start slowly. */
@@ -137,6 +137,20 @@ class SettingsStore(context: Context) {
         ctx.getSharedPreferences(UI_PREFS, android.content.Context.MODE_PRIVATE).getBoolean("dark", true)
     } catch (_: Exception) {
         dark()
+    }
+
+    /** The palette the very first frame must paint with. These three values are mirrored in
+     *  plaintext for exactly this reason - waiting for the sealed blob is what showed the default
+     *  theme for a second or two on every cold start. */
+    fun themeSeed(): Settings = try {
+        val p = ctx.getSharedPreferences(UI_PREFS, android.content.Context.MODE_PRIVATE)
+        Settings(
+            dark = p.getBoolean("dark", true),
+            accent = p.getInt("accent", 0),
+            customAccent = p.getLong("customAccent", -1L),
+        )
+    } catch (_: Exception) {
+        Settings(dark = darkFast())
     }
 
     fun dark(): Boolean {
@@ -309,14 +323,23 @@ class SettingsStore(context: Context) {
         SecurePrefs.set("selectedId", id, ctx)
     }
 
+    /** Plaintext copy of the three values the first frame's palette needs, so a cold start never
+     *  has to unseal the blob to look right. */
+    private fun mirror(s: Settings) {
+        try {
+            ctx.getSharedPreferences(UI_PREFS, android.content.Context.MODE_PRIVATE).edit()
+                .putBoolean("dark", s.dark)
+                .putInt("accent", s.accent)
+                .putLong("customAccent", s.customAccent)
+                .apply()
+        } catch (_: Exception) {
+        }
+    }
+
     /** One seal for the whole object instead of 58 - that per-key write is what froze the UI. */
     fun save(s: Settings) {
         cache = s
-        try {
-            ctx.getSharedPreferences(UI_PREFS, android.content.Context.MODE_PRIVATE).edit()
-                .putBoolean("dark", s.dark).apply()
-        } catch (_: Exception) {
-        }
+        mirror(s)
         val j = JSONObject()
         fun p(k: String, v: Any) { j.put(k, v.toString()) }
         p("dark", s.dark)

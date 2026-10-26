@@ -337,11 +337,11 @@ private fun ServerRow(
                 // the download counter only got the leftover width and was clipped away
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text(
                         text = "↑ " + ir.v2rayng.compose.data.TimeKit.human(profile.up),
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f, fill = false),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -350,7 +350,7 @@ private fun ServerRow(
                     )
                     Text(
                         text = "↓ " + ir.v2rayng.compose.data.TimeKit.human(profile.down),
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f, fill = false),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
