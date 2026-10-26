@@ -35,13 +35,18 @@ object SecurePrefs {
     fun set(key: String, value: String?, context: Context? = null) {
         memo.remove(key)
         try {
+            val ed = sp(context).edit()
             if (value == null) {
-                sp(context).edit().remove(key).apply()
+                ed.remove(key)
             } else {
                 val sealed = BlobVault.seal(value.toByteArray(Charsets.UTF_8)) ?: return
-                sp(context).edit().putString(key, sealed).apply()
+                ed.putString(key, sealed)
                 memo[key] = value
             }
+            // apply() only hands the write to a background thread, and MIUI kills the process when
+            // the app is swiped away - on a worker thread the write is committed instead, so a
+            // setting saved a second ago is still there when the app opens again
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) ed.apply() else ed.commit()
         } catch (_: Exception) {
         }
     }

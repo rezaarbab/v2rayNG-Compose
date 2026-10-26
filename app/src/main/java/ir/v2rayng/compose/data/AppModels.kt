@@ -49,11 +49,6 @@ data class AppState(
     val vpnState: VpnState = VpnState.IDLE,
     val traffic: TrafficStat = TrafficStat(),
     val logs: List<LogLine> = emptyList(),
-    val routes: Map<String, Boolean> = mapOf(
-        "bypass_ir" to true,
-        "block_ads" to true,
-        "udp443" to false,
-    ),
     val ipCountry: String = "",
     val myIp: String = "",
     val altIp: String = "",

@@ -154,7 +154,7 @@ async function syncPayloadObj(env, request, b) {
     "app_enabled", "min_version", "latest_version", "latest_url",
     "popup_active", "popup_id", "popup_title", "popup_body", "popup_btn_text",
     "popup_btn_url", "popup_btn_enabled", "popup_cancel_enabled", "popup_max_shows", "popup_shows",
-    "route_title", "route_desc", "route_btn", "route_url", "route_priv_title", "route_privacy", "route_ads",
+    "route_html",
   ]);
 
   const appEnabled = cfg.app_enabled !== "0";
@@ -211,22 +211,9 @@ async function syncPayloadObj(env, request, b) {
       };
     }
   }
-  // routing page: every string on it is written by the admin, the app only renders it
-  const ads = String(cfg.route_ads || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 12).map((line) => {
-    const i = line.indexOf("|");
-    return i < 0 ? { text: line.slice(0, 160), url: "" } : { text: line.slice(0, i).trim(), url: line.slice(i + 1).trim().slice(0, 512) };
-  });
-  if (cfg.route_title || cfg.route_desc || cfg.route_privacy || ads.length) {
-    out.routing = {
-      title: cfg.route_title || "",
-      desc: cfg.route_desc || "",
-      btnText: cfg.route_btn || "",
-      btnUrl: cfg.route_url || "",
-      privacyTitle: cfg.route_priv_title || "",
-      privacy: cfg.route_privacy || "",
-      ads,
-    };
-  }
+  // routing page: the admin writes HTML, the app renders it as-is and shows nothing when empty
+  const routeHtml = String(cfg.route_html || "").trim();
+  if (routeHtml !== "") out.routing = { html: routeHtml };
   const nots = await env.DB.prepare("SELECT id, title, body, ts FROM notifs WHERE active=1 ORDER BY id DESC LIMIT 10").all();
   out.notifications = (nots.results || []).map((r) => ({ id: r.id, title: r.title, body: r.body, ts: r.ts }));
   const ackSeen = await env.DB.prepare("SELECT popup, kind FROM acks WHERE device=?1").bind(String(b.device)).all();
@@ -472,17 +459,12 @@ async function adminApi(env, b) {
         srvAllInvalidate();
         return okJson();
       case "set.route": {
-        await setSetting(env, "route_title", String(b.title || "").slice(0, 120));
-        await setSetting(env, "route_desc", String(b.desc || "").slice(0, 900));
-        await setSetting(env, "route_btn", String(b.btnText || "").slice(0, 64));
-        await setSetting(env, "route_url", String(b.btnUrl || "").slice(0, 512));
-        await setSetting(env, "route_priv_title", String(b.privacyTitle || "").slice(0, 120));
-        await setSetting(env, "route_privacy", String(b.privacy || "").slice(0, 2000));
-        await setSetting(env, "route_ads", String(b.ads || "").slice(0, 4000));
+        // one blob of HTML, sent to every device inside the encrypted sync payload
+        await setSetting(env, "route_html", String(b.html || "").slice(0, 40000));
         return okJson();
       }
       case "route.get": {
-        const c = await getSettings(env, ["route_title", "route_desc", "route_btn", "route_url", "route_priv_title", "route_privacy", "route_ads"]);
+        const c = await getSettings(env, ["route_html"]);
         return okJson({ route: c });
       }
       case "set.popup": {
@@ -1045,16 +1027,15 @@ function panelPage(env) {
 <!-- ================= ROUTING PAGE ================= -->
 <div class=tab id=tab_route>
 <div class=card><h2>🧭 صفحه روتینگ اپ <span class=cnt id=rt_cnt></span></h2>
-<div class=row2><div><div class=lbl>تیتر صفحه</div><input id=rt_title placeholder="روتینگ"></div>
-<div><div class=lbl>دکمه اصلی (خالی = بدون دکمه)</div><input id=rt_btn placeholder="عضویت در کانال"></div></div>
-<div class=lbl>توضیح زیر تیتر</div><textarea id=rt_desc rows=3 placeholder="این اپ چطور ترافیک را مسیردهی می‌کند"></textarea>
-<div class=lbl>لینک دکمه اصلی</div><input id=rt_url placeholder="https://t.me/...">
-<div class=row2><div><div class=lbl>تیتر بخش حریم خصوصی</div><input id=rt_ptitle placeholder="حریم خصوصی"></div>
-<div><div class=lbl>متن حریم خصوصی</div><textarea id=rt_priv rows=3 placeholder="چه لاگی نگه نمی‌داریم"></textarea></div></div>
-<div class=lbl>تبلیغ‌ها / کانال‌ها — هر خط: متن|لینک (لینک اختیاری)</div>
-<textarea id=rt_ads rows=5 placeholder="کانال اخبار|https://t.me/mychannel&#10;پشتیبانی|https://t.me/mysupport"></textarea>
-<button onclick=saveRoute() style=margin-top:10px>ذخیره</button>
-<p class=note>همهٔ این متن‌ها داخل همان بلوب رمزنگاری‌شده به اپ می‌روند و در تب «روتینگ» نمایش داده می‌شوند. مقادیر قبلی روی دستگاه می‌مانند تا وقتی آفلاین است هم صفحه خالی نباشد.</p></div>
+<div class=toolbar>
+<button class="gray sm" onclick=rtSample()>نمونه HTML</button>
+<button class="gray sm" onclick=rtClear()>پاک کردن</button>
+<span class=note id=rt_size></span>
+</div>
+<div class=lbl>HTML صفحه — هر چه بنویسی عیناً در اپ نمایش داده میشود (بدون جاوااسکریپت)</div>
+<textarea id=rt_html rows=18 style="min-height:340px"></textarea>
+<button onclick=saveRoute() style=margin-top:10px>ذخیره و ارسال</button>
+<p class=note>این HTML داخل همان بلوب رمزنگاری‌شده برای همهٔ دستگاه‌ها می‌رود. مجاز: h1 h2 h3 p b i u ul ol li a hr div span table tr td img، و استایل inline یا تگ style. لینک‌ها با مرورگر گوشی باز میشوند. اگر این کادر خالی باشد صفحه روتینگ در اپ <b>کاملاً خالی</b> است — هیچ متنی از طرف اپ نمایش داده نمیشود.</p></div>
 </div>
 
 <!-- ================= DEVICES ================= -->
@@ -1240,12 +1221,29 @@ $('p_max').value=Number(p.popup_max_shows||100);popupState(p)}
 function popupState(p){p=p||{};const on=$('p_active').checked;
 $('popup_state').innerHTML=on?'<span class="badge b-on">در حال ارسال — '+Number(p.popup_shows||0)+' نمایش از سقف '+Number(p.popup_max_shows||0)+'</span>':'<span class="badge b-off">متوقف</span>'}
 async function loadRoute(){const j=await api({action:'route.get'});const r=j.route||{};
- const map={rt_title:'route_title',rt_desc:'route_desc',rt_btn:'route_btn',rt_url:'route_url',rt_ptitle:'route_priv_title',rt_priv:'route_privacy',rt_ads:'route_ads'};
- Object.keys(map).forEach(id=>{const el=$(id);if(el)el.value=r[map[id]]||''});
- const n=String(r.route_ads||'').split(String.fromCharCode(10)).filter(x=>x.trim()).length;
- const c=$('rt_cnt');if(c)c.textContent=n?n+' تبلیغ':''}
-async function saveRoute(){await api({action:'set.route',title:$('rt_title').value,desc:$('rt_desc').value,btnText:$('rt_btn').value,
- btnUrl:$('rt_url').value,privacyTitle:$('rt_ptitle').value,privacy:$('rt_priv').value,ads:$('rt_ads').value});
+ const el=$('rt_html');if(el)el.value=r.route_html||'';rtSize()}
+function rtSize(){const v=($('rt_html').value||'');const c=$('rt_size');
+ if(c)c.textContent=v.length+' کاراکتر · '+Math.round(v.length/1024*10)/10+'KB'}
+function rtClear(){$('rt_html').value='';rtSize();toast('پاک شد - با ذخیره، صفحه در اپ خالی میشود')}
+function rtSample(){const L=String.fromCharCode(10);
+ $('rt_html').value=[
+  '<div style="font-family:sans-serif;direction:rtl;padding:6px;line-height:1.9">',
+  '<h1 style="font-size:22px;margin:6px 0">روتینگ هوشمند</h1>',
+  '<p style="opacity:.8;margin:0 0 14px">ترافیک ایران مستقیم و بقیه از تونل عبور می‌کند.</p>',
+  '<h2 style="font-size:17px;margin:16px 0 6px">حریم خصوصی</h2>',
+  '<p style="margin:0 0 14px">هیچ لاگی از سایت‌ها، زمان اتصال یا حجم شما نگه نداشته نمی‌شود.</p>',
+  '<h2 style="font-size:17px;margin:16px 0 6px">کانال‌ها</h2>',
+  '<ul style="margin:0;padding-inline-start:20px">',
+  '<li><a href="https://t.me/mychannel" style="color:#7c5cff">کانال اخبار</a></li>',
+  '<li><a href="https://t.me/mysupport" style="color:#7c5cff">پشتیبانی</a></li>',
+  '</ul>',
+  '<hr style="border:none;border-top:1px solid #222c4e;margin:18px 0">',
+  '<p style="opacity:.6;font-size:13px">این متن را می‌توانید کامل تغییر بدهید یا خالی کنید.</p>',
+  '</div>'].join(L);
+ rtSize();toast('نمونه درج شد - بعد از ذخیره برای همه ارسال میشود')}
+async function saveRoute(){const html=$('rt_html').value;
+ if(html.length>40000){toast('زیاد بزرگ است (حداکثر 40000 کاراکتر)',1);return}
+ await api({action:'set.route',html:html});
  toast('ذخیره شد - در همگام‌سازی بعدی به اپ می‌رسد');loadRoute()}
 async function savePopup(){await api({action:'set.popup',active:$('p_active').checked,title:$('p_title').value,body:$('p_body').value,btnText:$('p_btn').value,btnUrl:$('p_url').value,btnEnabled:$('p_onbtn').checked,cancelEnabled:$('p_oncancel').checked,maxShows:Number($('p_max').value||100)});loadPopup()}
 async function resetShows(){await savePopup();toast('شمارنده رست شد و پاپ‌اپ دوباره به همه ارسال میشود');loadPopup()}

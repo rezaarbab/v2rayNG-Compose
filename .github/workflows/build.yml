@@ -20,13 +20,17 @@ jobs:
         with:
           gradle-version: "8.11.1"
 
-      - name: Generate signing keystore
+      - name: Restore or create the signing keystore
+        env:
+          KS_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
         run: |
-          keytool -genkeypair -v \
-            -keystore ci-release.jks -alias blob \
-            -keyalg RSA -keysize 2048 -validity 7300 \
-            -storepass blob-tmp-2026 -keypass blob-tmp-2026 \
-            -dname "CN=Blob, O=Blob, C=IR"
+          if [ -n "$KS_B64" ]; then
+            printf %s "$KS_B64" | base64 -d > ci-release.jks
+            echo "keystore restored from the repository secret - same certificate as the last build"
+          else
+            keytool -genkeypair -v -keystore ci-release.jks -alias blob -keyalg RSA -keysize 2048 -validity 7300 -storepass blob-tmp-2026 -keypass blob-tmp-2026 -dname "CN=Blob, O=Blob, C=IR"
+            echo "::warning::RELEASE_KEYSTORE_B64 is not set, so this APK is signed with a throwaway certificate. Installing over the previous one forces an uninstall, and Android then deletes the keystore key plus all app data: settings, server list and traffic look wiped on every build."
+          fi
 
       - name: Fetch Xray core library
         run: |
@@ -35,6 +39,9 @@ jobs:
           ls -la app/libs || dir app/libs || true
 
       - name: Build release APK
+        env:
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: gradle :app:assembleRelease --no-daemon --stacktrace
 
       - uses: actions/upload-artifact@v4

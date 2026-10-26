@@ -19,7 +19,13 @@ class MainActivity : ComponentActivity() {
         ir.v2rayng.compose.core.CrashNote.install(this)
         lockHighRefreshRate()
         ir.v2rayng.compose.core.Persist.write { ir.v2rayng.compose.data.SettingsStore(this).load() }
-        applySystemBars(SettingsStore(this).darkFast())
+        val seed = SettingsStore(this).themeSeed()
+        // the window background comes from XML and is always the dark navy, so a light-theme user
+        // used to see one frame of the wrong theme before Compose drew the first screen
+        window.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(if (seed.dark) 0xFF0B0F16.toInt() else 0xFFF7F5F1.toInt())
+        )
+        applySystemBars(seed.dark)
         setContent {
             AppRoot()
         }

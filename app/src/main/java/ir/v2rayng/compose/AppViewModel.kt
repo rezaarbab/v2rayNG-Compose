@@ -157,10 +157,15 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             // server state (flag, traffic) while this read is still in flight, and treating that as
             // an edit is what made the whole app look reset when it was reopened.
             if (saved != null && !serversTouched) {
+                // the home counter is the sum of what the servers have carried, so reopening the app
+                // does not start the total from zero again
+                appUp = saved.sumOf { it.up }
+                appDown = saved.sumOf { it.down }
                 _state.update { st ->
                     st.copy(
                         servers = saved,
                         selectedId = if (saved.any { it.id == sel }) sel else saved.first().id,
+                        traffic = st.traffic.copy(up = appUp, down = appDown),
                     )
                 }
             }
@@ -404,20 +409,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             updateDismiss = o.optLong("ud", 0L)
             notifSeen = o.optLong("ns", 0L)
             o.optJSONObject("rt")?.let { rt ->
-                val ads = ArrayList<ir.v2rayng.compose.core.Remote.RoutingAd>()
-                val arr = rt.optJSONArray("ads") ?: org.json.JSONArray()
-                for (i in 0 until arr.length()) {
-                    val o2 = arr.optJSONObject(i) ?: continue
-                    val t = o2.optString("text", "").trim()
-                    if (t.isNotBlank()) ads.add(ir.v2rayng.compose.core.Remote.RoutingAd(t, o2.optString("url", "")))
-                }
-                val cfg = ir.v2rayng.compose.core.Remote.RoutingCfg(
-                    rt.optString("title"), rt.optString("desc"), rt.optString("btnText"), rt.optString("btnUrl"),
-                    rt.optString("privacyTitle"), rt.optString("privacy"), ads,
-                )
-                if (cfg.title.isNotBlank() || cfg.desc.isNotBlank() || cfg.privacy.isNotBlank() || cfg.ads.isNotEmpty()) {
-                    put { s -> s.copy(routing = cfg) }
-                }
+                val html = rt.optString("html", "")
+                if (html.isNotBlank()) put { s -> s.copy(routing = ir.v2rayng.compose.core.Remote.RoutingCfg(html)) }
             }
         } catch (_: Exception) {
         }
@@ -439,11 +432,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     /** Routing text, so the page still has content the next time the app opens offline. */
     private fun routingJson(): org.json.JSONObject {
         val r = _state.value.routing ?: return JSONObject()
-        return JSONObject()
-            .put("title", r.title).put("desc", r.desc)
-            .put("btnText", r.btnText).put("btnUrl", r.btnUrl)
-            .put("privacyTitle", r.privacyTitle).put("privacy", r.privacy)
-            .put("ads", org.json.JSONArray(r.ads.map { JSONObject().put("text", it.text).put("url", it.url) }))
+        return JSONObject().put("html", r.html)
     }
 
     fun setRemoteBase(url: String) {
@@ -1462,11 +1451,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             )
         }
         log("INFO", S.LOG_ADDED.format(name))
-    }
-
-    fun setRoute(key: String, value: Boolean) {
-        put { s -> s.copy(routes = s.routes + (key to value)) }
-        log("INFO", if (value) S.LOG_ROUTE_ON.format(key) else S.LOG_ROUTE_OFF.format(key))
     }
 
     fun clearLogs() {
