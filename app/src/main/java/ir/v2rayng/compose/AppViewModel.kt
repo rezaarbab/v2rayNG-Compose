@@ -77,6 +77,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private var lastTrafficPersist = 0L
 
+    @Volatile
+    private var settingsLoaded = false
+
+    @Volatile
+    private var saveWanted = false
+
     /** Lifetime totals of the selected server before this tunnel session started: the core
      *  counters begin at zero again, but the row must show what the server has really carried. */
     private var trafficBaseUp = 0L
@@ -150,6 +156,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             val tLoad0 = android.os.SystemClock.elapsedRealtime()
             val s = store.load()
+            settingsLoaded = true
+            if (saveWanted) queueSave()
             // settings first: palette, stickers and wallpaper are what the eye notices, and the
             // server list is the biggest and slowest stored value
             if (!userEdited) _settings.value = s
@@ -352,6 +360,17 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private fun setSettings(f: (Settings) -> Settings) {
         userEdited = true
+        writeSettings(f)
+    }
+
+    /** A change the app made itself (a detected country flag, a wallpaper that follows it). This
+     *  must not raise userEdited - doing so made the loader drop the stored settings, and the next
+     *  save then sealed the defaults over them, which is why the sticker style never came back. */
+    private fun setSettingsAuto(f: (Settings) -> Settings) {
+        writeSettings(f)
+    }
+
+    private fun writeSettings(f: (Settings) -> Settings) {
         val s = f(_settings.value)
         _settings.value = s
         queueSave()
@@ -363,6 +382,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      * toggles also collapses into a single write instead of queueing dozens of full saves.
      */
     private fun queueSave() {
+        saveWanted = true
+        // nothing may be sealed before the stored settings were read: the in-memory
+        // object is still a default-filled placeholder at that point, and saving it would
+        // overwrite the user settings with defaults
+        if (!settingsLoaded) return
         saveJob?.cancel()
         saveJob = viewModelScope.launch(Dispatchers.IO) {
             delay(120)
@@ -1070,7 +1094,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun applyFlag(code: String): Boolean {
         val idx = CountryFlags.byCode(code)
         if (idx < 0) return false
-        setSettings { it.copy(wallpaperStyle = 2, wallpaperIndex = idx) }
+        setSettingsAuto { it.copy(wallpaperStyle = 2, wallpaperIndex = idx) }
         return true
     }
 

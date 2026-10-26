@@ -149,15 +149,16 @@ class SettingsStore(context: Context) {
         dark()
     }
 
-    /** The palette the very first frame must paint with. These three values are mirrored in
-     *  plaintext for exactly this reason - waiting for the sealed blob is what showed the default
-     *  theme for a second or two on every cold start. */
+    /** The palette and sticker style the very first frame must paint with. These values are
+     *  mirrored in plaintext for exactly this reason - waiting for the sealed blob is what showed
+     *  the default theme, and then the default stickers, for a second or two on every cold start. */
     fun themeSeed(): Settings = try {
         val p = ctx.getSharedPreferences(UI_PREFS, android.content.Context.MODE_PRIVATE)
         Settings(
             dark = p.getBoolean("dark", true),
             accent = p.getInt("accent", 0),
             customAccent = p.getLong("customAccent", -1L),
+            stickerStyle = p.getInt("style", 0),
         )
     } catch (_: Exception) {
         Settings(dark = darkFast())
@@ -358,6 +359,7 @@ class SettingsStore(context: Context) {
                 .putBoolean("dark", s.dark)
                 .putInt("accent", s.accent)
                 .putLong("customAccent", s.customAccent)
+                .putInt("style", s.stickerStyle)
                 .apply()
         } catch (_: Exception) {
         }

@@ -3,7 +3,7 @@ package ir.v2rayng.compose.ui
 object S {
     const val APP = "Blob"
 
-    val TABS = listOf("Connect", "Servers", "Routing", "Logs", "Settings")
+    val TABS = listOf("Connect", "Servers", "More", "Logs", "Settings")
 
     const val STATUS_IDLE = "Disconnected"
     const val STATUS_CONNECTING = "Connecting..."
