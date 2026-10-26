@@ -1242,7 +1242,7 @@ $('popup_state').innerHTML=on?'<span class="badge b-on">در حال ارسال �
 async function loadRoute(){const j=await api({action:'route.get'});const r=j.route||{};
  const map={rt_title:'route_title',rt_desc:'route_desc',rt_btn:'route_btn',rt_url:'route_url',rt_ptitle:'route_priv_title',rt_priv:'route_privacy',rt_ads:'route_ads'};
  Object.keys(map).forEach(id=>{const el=$(id);if(el)el.value=r[map[id]]||''});
- const n=String(r.route_ads||'').split('\n').filter(x=>x.trim()).length;
+ const n=String(r.route_ads||'').split(String.fromCharCode(10)).filter(x=>x.trim()).length;
  const c=$('rt_cnt');if(c)c.textContent=n?n+' تبلیغ':''}
 async function saveRoute(){await api({action:'set.route',title:$('rt_title').value,desc:$('rt_desc').value,btnText:$('rt_btn').value,
  btnUrl:$('rt_url').value,privacyTitle:$('rt_ptitle').value,privacy:$('rt_priv').value,ads:$('rt_ads').value});
@@ -1307,7 +1307,7 @@ function devVerdict(i){const out=[];
  if(String(i.android_id||'').toLowerCase()==='9774d56d682e549c')out.push(['b-off','شناسه پیش‌فرض امولاتور']);
  if(/x86/i.test(String(i.abi||'')))out.push(['b-y','معماری x86']);
  if(String(i.tags||'')==='test-keys')out.push(['b-y','امضای کلید تستی']);
- if(/^100%\+chg$/.test(String(i.battery||'')))out.push(['b-y','باتری ۱۰۰٪ همیشه روی شارژ']);
+ if(String(i.battery||'').slice(0,8)==='100%+chg')out.push(['b-y','باتری ۱۰۰٪ همیشه روی شارژ']);
  if(String(i.sim||'')==='absent')out.push(['b-y','بدون سیم‌کارت']);
  if(String(i.adb||'')==='1')out.push(['b-y','ADB روشن']);
  if(String(i.dev_opts||'')==='1')out.push(['b-y','گزینه توسعه‌دهنده فعال']);
