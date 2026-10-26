@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.dp
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.core.Remote
 
-private fun openUrl(ctx: android.content.Context, url: String) {
+internal fun openUrl(ctx: android.content.Context, url: String) {
     try {
         ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     } catch (_: Exception) {

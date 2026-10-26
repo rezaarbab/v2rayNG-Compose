@@ -56,7 +56,7 @@ import ir.v2rayng.compose.stickers.tinted
 @Composable
 fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offset? = null, onGoServers: () -> Unit = {}) {
     val sel = state.selected
-    val mood = if (settings.stateMotion) {
+    val mood = if (settings.stateMotion && settings.motionGlobal) {
         when (state.vpnState) {
             VpnState.IDLE -> StickerMood.NORMAL
             VpnState.CONNECTING -> StickerMood.WOBBLE
@@ -177,7 +177,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                             } else {
                                 V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
                             }
-                            StickerCharacter(tinted(selAvatar, settings.mainColor), mood = if (connected && settings.stateMotion) StickerMood.HAPPY else StickerMood.NORMAL, sizeDp = 34.dp)
+                            StickerCharacter(tinted(selAvatar, settings.mainColor), mood = if (connected && settings.stateMotion && settings.motionGlobal) StickerMood.HAPPY else StickerMood.NORMAL, sizeDp = 34.dp)
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(

@@ -372,6 +372,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setFollowFinger(v: Boolean) = setSettings { it.copy(followFinger = v) }
     fun setAnimate(v: Boolean) = setSettings { it.copy(animate = v) }
     fun setStateMotion(v: Boolean) = setSettings { it.copy(stateMotion = v) }
+
+    /** Master switch: with it off nothing animates and the per-frame ticker stops entirely. */
+    fun setMotionGlobal(v: Boolean) = setSettings { it.copy(motionGlobal = v) }
     fun setShowNotification(v: Boolean) = setSettings { it.copy(showNotification = v) }
     fun setNotifSticker(v: Boolean) = setSettings { it.copy(notifSticker = v) }
     fun setNotifColor(v: Long) = setSettings { it.copy(notifColor = v) }
@@ -400,6 +403,22 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             popupDismissed = o.optLong("pd", 0L)
             updateDismiss = o.optLong("ud", 0L)
             notifSeen = o.optLong("ns", 0L)
+            o.optJSONObject("rt")?.let { rt ->
+                val ads = ArrayList<ir.v2rayng.compose.core.Remote.RoutingAd>()
+                val arr = rt.optJSONArray("ads") ?: org.json.JSONArray()
+                for (i in 0 until arr.length()) {
+                    val o2 = arr.optJSONObject(i) ?: continue
+                    val t = o2.optString("text", "").trim()
+                    if (t.isNotBlank()) ads.add(ir.v2rayng.compose.core.Remote.RoutingAd(t, o2.optString("url", "")))
+                }
+                val cfg = ir.v2rayng.compose.core.Remote.RoutingCfg(
+                    rt.optString("title"), rt.optString("desc"), rt.optString("btnText"), rt.optString("btnUrl"),
+                    rt.optString("privacyTitle"), rt.optString("privacy"), ads,
+                )
+                if (cfg.title.isNotBlank() || cfg.desc.isNotBlank() || cfg.privacy.isNotBlank() || cfg.ads.isNotEmpty()) {
+                    put { s -> s.copy(routing = cfg) }
+                }
+            }
         } catch (_: Exception) {
         }
     }
@@ -411,9 +430,20 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     .put("pd", popupDismissed)
                     .put("ud", updateDismiss)
                     .put("ns", notifSeen)
+                    .put("rt", routingJson())
                     .toString(),
             )
         }
+    }
+
+    /** Routing text, so the page still has content the next time the app opens offline. */
+    private fun routingJson(): org.json.JSONObject {
+        val r = _state.value.routing ?: return JSONObject()
+        return JSONObject()
+            .put("title", r.title).put("desc", r.desc)
+            .put("btnText", r.btnText).put("btnUrl", r.btnUrl)
+            .put("privacyTitle", r.privacyTitle).put("privacy", r.privacy)
+            .put("ads", org.json.JSONArray(r.ads.map { JSONObject().put("text", it.text).put("url", it.url) }))
     }
 
     fun setRemoteBase(url: String) {
@@ -634,9 +664,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 remotePopup = r.popup?.takeIf { it.id != popupDismissed },
                 remoteUpdate = upd,
                 remoteNotif = r.notifications.firstOrNull()?.takeIf { it.id > notifSeen },
+                routing = r.routing ?: s.routing,
             )
         }
         mergeRemoteServers(r.servers)
+        if (r.routing != null) saveRemoteState()
     }
 
     /**

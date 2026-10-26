@@ -36,6 +36,7 @@ data class Settings(
     val mainIndex: Int = -1,
     val followFinger: Boolean = true,
     val animate: Boolean = true,
+    val motionGlobal: Boolean = true,
     val stateMotion: Boolean = true,
     val showNotification: Boolean = true,
     val notifSticker: Boolean = true,
@@ -213,6 +214,7 @@ class SettingsStore(context: Context) {
             mainIndex = i("mainIndex", -1),
             followFinger = b("followFinger", true),
             animate = b("animate", true),
+            motionGlobal = b("motionGlobal", true),
             stateMotion = b("stateMotion", true),
             showNotification = b("showNotification", true),
             notifSticker = b("notifSticker", true),
@@ -383,6 +385,7 @@ class SettingsStore(context: Context) {
         p("mainIndex", s.mainIndex)
         p("followFinger", s.followFinger)
         p("animate", s.animate)
+        p("motionGlobal", s.motionGlobal)
         p("stateMotion", s.stateMotion)
         p("showNotification", s.showNotification)
         p("notifSticker", s.notifSticker)

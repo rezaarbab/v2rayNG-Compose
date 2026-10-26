@@ -63,6 +63,7 @@ data class AppState(
     val remotePopup: ir.v2rayng.compose.core.Remote.PopupCfg? = null,
     val remoteUpdate: ir.v2rayng.compose.core.Remote.UpdateCfg? = null,
     val remoteNotif: ir.v2rayng.compose.core.Remote.NotifLine? = null,
+    val routing: ir.v2rayng.compose.core.Remote.RoutingCfg? = null,
 ) {
     val selected: ServerProfile
         get() = servers.firstOrNull { it.id == selectedId }

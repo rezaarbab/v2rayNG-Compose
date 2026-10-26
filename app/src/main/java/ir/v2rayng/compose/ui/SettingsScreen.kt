@@ -130,7 +130,9 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     SelectChip(S.CREATOR_TITLE, false, { showCreator = true })
                 }
 
-                ToggleRow(S.ANIMATION, S.ANIMATION_SUB, settings.animate) { vm.setAnimate(it) }
+                ToggleRow(S.MOTION_ALL, S.MOTION_ALL_SUB, settings.motionGlobal) { vm.setMotionGlobal(it) }
+
+                ToggleRow(S.ANIMATION, S.ANIMATION_SUB, settings.animate && settings.motionGlobal) { vm.setAnimate(it) }
 
                 Text(S.SPEED_STICKERS.format(settings.speed), style = MaterialTheme.typography.bodyMedium)
                 Slider(value = settings.speed, onValueChange = { vm.setSpeed(it) }, valueRange = 0.25f..2f)

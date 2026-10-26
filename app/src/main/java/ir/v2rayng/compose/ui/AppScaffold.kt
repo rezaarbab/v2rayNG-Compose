@@ -88,7 +88,10 @@ fun AppRoot() {
     androidx.compose.runtime.LaunchedEffect(settings.dark) {
         (context as? ir.v2rayng.compose.MainActivity)?.applySystemBars(settings.dark)
     }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(settings.motionGlobal, settings.animate) {
+        // the loop used to run at display refresh rate for as long as any screen was composed,
+        // even with animations switched off - that is the single biggest battery cost in the app
+        if (!settings.motionGlobal || !settings.animate) return@LaunchedEffect
         var prev = 0L
         var animMs = 0L
         var waveMs = 0L
@@ -115,8 +118,8 @@ fun AppRoot() {
             }
         }
     }
-    LaunchedEffect(settings.animate, settings.speed, settings.bgSpeed, settings.flagStretch, settings.flagRound) {
-        env.enabled.value = settings.animate
+    LaunchedEffect(settings.animate, settings.motionGlobal, settings.speed, settings.bgSpeed, settings.flagStretch, settings.flagRound) {
+        env.enabled.value = settings.animate && settings.motionGlobal
         env.speed.floatValue = settings.speed
         env.bgSpeed.floatValue = settings.bgSpeed
         env.flagStretch.floatValue = settings.flagStretch

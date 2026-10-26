@@ -138,6 +138,10 @@ fun StickerCharacter(
         if (mood == StickerMood.SLEEP || decorative || !env.enabled.value) {
             translationX = 0f; translationY = 0f
             scaleX = 1f; scaleY = 1f; rotationZ = 0f
+            // the blink is normally driven from this block; when it is skipped the value used to
+            // freeze wherever it happened to be, and mid-blink is exactly where an eye is round
+            val rest = if (mood == StickerMood.SLEEP) 0.14f else 1f
+            if (kotlin.math.abs(blinkCur.floatValue - rest) > 0.001f) blinkCur.floatValue = rest
             return@graphicsLayer
         }
         val tiny = sizeDp.value <= 48f

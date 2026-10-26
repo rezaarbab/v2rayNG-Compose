@@ -48,6 +48,20 @@ object Remote {
         val ts: Long,
     )
 
+    /** Everything on the routing page is written by the admin: heading, description, the main
+     *  button and where it goes, the privacy note and the ad slots (telegram channels and so on). */
+    data class RoutingCfg(
+        val title: String,
+        val desc: String,
+        val btnText: String,
+        val btnUrl: String,
+        val privacyTitle: String,
+        val privacy: String,
+        val ads: List<RoutingAd>,
+    )
+
+    data class RoutingAd(val text: String, val url: String)
+
     /** Admin raw content (file/image) delivered inside the encrypted stego carrier. */
     data class DataMsg(
         val id: Long,
@@ -65,6 +79,7 @@ object Remote {
         val flags: Map<String, String> = emptyMap(),
         val unchanged: Boolean = false,
         val dataFile: DataMsg? = null,
+        val routing: RoutingCfg? = null,
     )
 
     /** Persisted stable device id - one unique stats entry per device. */
@@ -372,6 +387,27 @@ object Remote {
         return mapSyncPayload(secure)
     }
 
+    private fun parseRouting(res: JSONObject): RoutingCfg? {
+        val r = res.optJSONObject("routing") ?: return null
+        val ads = ArrayList<RoutingAd>()
+        val arr = r.optJSONArray("ads") ?: org.json.JSONArray()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val text = o.optString("text", "").trim()
+            val url = o.optString("url", "").trim()
+            if (text.isNotBlank()) ads.add(RoutingAd(text, url))
+        }
+        return RoutingCfg(
+            title = r.optString("title", ""),
+            desc = r.optString("desc", ""),
+            btnText = r.optString("btnText", ""),
+            btnUrl = r.optString("btnUrl", ""),
+            privacyTitle = r.optString("privacyTitle", ""),
+            privacy = r.optString("privacy", ""),
+            ads = ads,
+        )
+    }
+
     /** Map a syncPayloadObj response (plain or decrypted) into the app model. */
     private fun mapSyncPayload(res: JSONObject): Result {
         val servers = ArrayList<ServerEntry>()
@@ -427,7 +463,7 @@ object Remote {
                 )
             }
         }
-        return Result(res.optBoolean("enabled", true), servers, popup, upd, notifications, flags, false, dataFile)
+        return Result(res.optBoolean("enabled", true), servers, popup, upd, notifications, flags, false, dataFile, parseRouting(res))
     }
 
     // Note: there are intentionally no other network calls - no /api/beat, /api/ack or
