@@ -1071,10 +1071,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     }
 
     /** Dumps the keystore journal - timings and failures - into the on-screen log. */
-    private fun drainJournal(when: String) {
+    private fun drainJournal(phase: String) {
         val lines = ir.v2rayng.compose.core.sec.SecJournal.drain()
         if (lines.isEmpty()) return
-        log("DEBUG", "keystore journal @ " + when + " (" + lines.size + ")")
+        log("DEBUG", "keystore journal @ " + phase + " (" + lines.size + ")")
         for (l in lines) log("DEBUG", "  " + l)
     }
 
