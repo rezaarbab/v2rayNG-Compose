@@ -45,8 +45,11 @@ export default {
       try {
         return await adminApi(env, body);
       } catch (e) {
-        // very first hit right after deploy - create missing tables then retry once
-        try { await ensureSchema(env); } catch (e2) {}
+        // very first hit right after deploy - create missing tables AND missing columns, then
+        // retry once. force=true matters: ensureSchema() short-circuits when it already believes
+        // the schema is ready, and that is how "no such column: owner" came back twice in a row
+        // instead of healing itself.
+        try { await ensureSchema(env, true); } catch (e2) {}
         try {
           return await adminApi(env, body);
         } catch (e3) {
@@ -70,12 +73,13 @@ export default {
   },
 };
 
-/** Run a DB-backed handler; on a table error, create the schema once and retry. */
+/** Run a DB-backed handler; on a table error, create/patch the schema and retry once. Forced,
+ *  because a retry that skips the column ALTERs reproduces the very error it is meant to heal. */
 async function withDb(env, f) {
   try {
     return await f();
   } catch (e) {
-    try { await ensureSchema(env); } catch (e2) {}
+    try { await ensureSchema(env, true); } catch (e2) {}
     return await f();
   }
 }
@@ -242,9 +246,17 @@ async function syncPayloadObj(env, request, b) {
 }
 
 async function listServers(env) {
-  const rows = await env.DB.prepare(
-    "SELECT id, name, address, port, link, category, msg FROM servers WHERE active=1 AND COALESCE(owner,'')='' ORDER BY ord ASC, id ASC LIMIT 1000",
-  ).all();
+  const SEL = "SELECT id, name, address, port, link, category, msg FROM servers WHERE active=1";
+  let rows = null;
+  try {
+    rows = await env.DB.prepare(SEL + " AND COALESCE(owner,'')='' ORDER BY ord ASC, id ASC LIMIT 1000").all();
+  } catch (e) {
+    // a database that has no owner column yet cannot have any trap rows either, so the plain
+    // query is the same answer - and this path is what every app sync goes through
+    try {
+      rows = await env.DB.prepare(SEL + " ORDER BY ord ASC, id ASC LIMIT 1000").all();
+    } catch (e2) { return []; }
+  }
   return (rows.results || []).map((r) => ({
     id: String(r.id),
     name: r.name,          //admin-assigned - never from the config (#NAME tag)
@@ -506,6 +518,23 @@ async function leakCheck(env, text) {
   return okJson({ hits: hits.slice(0, 200), byDevice, traps: rows.length, scanned: String(text || "").length });
 }
 
+/** COUNT over servers with the trap filter, degrading to the plain table when that column is not
+ *  in the database yet - the dashboard must answer, not 500 with "no such column: owner". */
+async function countSrv(env, base, wantTraps) {
+  const filtered = base + (wantTraps ? " AND COALESCE(owner,'')<>''" : " AND COALESCE(owner,'')=''");
+  try {
+    return Number((await env.DB.prepare(filtered).first()).c);
+  } catch (e) {
+    // no owner column at all can only mean no trap rows
+    if (wantTraps) return 0;
+    try {
+      return Number((await env.DB.prepare(base).first()).c);
+    } catch (e2) {
+      return 0;
+    }
+  }
+}
+
 async function adminApi(env, b) {
   const act = b.action;
   try {
@@ -743,12 +772,9 @@ async function adminApi(env, b) {
         const onlineConn = await env.DB.prepare("SELECT COUNT(*) c FROM devices WHERE last_seen>?1 AND connected=1").bind(onlineCut).first();
         const connectsToday = await env.DB.prepare("SELECT COUNT(*) c FROM events WHERE ts>?1 AND type='connect'").bind(dayStart).first();
         const syncsToday = await env.DB.prepare("SELECT COUNT(*) c FROM events WHERE ts>?1").bind(dayStart).first();
-        const act1 = await env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE active=1 AND COALESCE(owner,'')=''").first();
-        const deact = await env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE active=0 AND COALESCE(owner,'')=''").first();
-        let trapC = 0;
-        try {
-          trapC = Number((await env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE active=1 AND COALESCE(owner,'')<>''").first()).c);
-        } catch (e) {}
+        const act1 = await countSrv(env, "SELECT COUNT(*) c FROM servers WHERE active=1", false);
+        const deact = await countSrv(env, "SELECT COUNT(*) c FROM servers WHERE active=0", false);
+        const trapC = await countSrv(env, "SELECT COUNT(*) c FROM servers WHERE active=1", true);
         let legacyC = 0;
         try {
           legacyC = Number((await env.DB.prepare("SELECT COUNT(*) c FROM blob_sessions WHERE COALESCE(mode,'legacy')<>'ec'").first()).c);
@@ -760,8 +786,8 @@ async function adminApi(env, b) {
           offline: total.c - online.c,
           connectsToday: connectsToday ? connectsToday.c : 0,
           syncsToday: syncsToday ? syncsToday.c : 0,
-          activeServers: act1.c,
-          offServers: deact.c,
+          activeServers: act1,
+          offServers: deact,
           traps: trapC,
           legacyClients: legacyC,
         } }), { headers: jsonHeaders() });
@@ -840,9 +866,18 @@ async function adminApi(env, b) {
         try {
           tables = ((await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()).results || []).map((r) => r.name);
         } catch (e) { err = String((e && e.message) || e).slice(0, 160); }
+        // the columns this deploy needs, read back from the database instead of assumed
+        let serverCols = [], eventCols = [], sessCols = [];
+        try { serverCols = ((await env.DB.prepare("PRAGMA table_info(servers)").all()).results || []).map((c) => c.name); } catch (e) {}
+        try { eventCols = ((await env.DB.prepare("PRAGMA table_info(events)").all()).results || []).map((c) => c.name); } catch (e) {}
+        try { sessCols = ((await env.DB.prepare("PRAGMA table_info(blob_sessions)").all()).results || []).map((c) => c.name); } catch (e) {}
         return new Response(JSON.stringify({
           ok: true, build: WORKER_BUILD, tables, err,
           havePayloadFiles: tables.indexOf("payload_files") >= 0,
+          serverCols, hasOwner: serverCols.indexOf("owner") >= 0,
+          eventCols, hasIp: eventCols.indexOf("ip") >= 0,
+          hasMode: sessCols.indexOf("mode") >= 0,
+          hasDevKeys: tables.indexOf("dev_keys") >= 0,
         }), { headers: jsonHeaders() });
       }
       case "srv.all": {
@@ -2445,9 +2480,13 @@ async function blobKeyIssue(env, request) {
 /** Was read as a module variable without ever being declared, so ensureSchema threw
  *  ReferenceError on its very first line and no table was ever created automatically. */
 let schemaReady = false;
+/** The column ALTERs are a separate gate: a database whose TABLES already exist (every panel
+ *  older than this change) must still get the NEW columns once per isolate, otherwise a query
+ *  that filters on them - "no such column: owner" - never heals itself. */
+let columnsHealed = false;
 
 async function ensureSchema(env, force) {
-  if (schemaReady && !force) return;
+  if (schemaReady && columnsHealed && !force) return;
   let failed = 0;
   const stmts = [
     env.DB.prepare("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER)"),
@@ -2502,14 +2541,17 @@ async function ensureSchema(env, force) {
     await env.DB.prepare("ALTER TABLE devices ADD COLUMN info TEXT DEFAULT ''").run();
   } catch (e) {}
   // trap servers, per-request ip and the auth mode the session was issued under
-  try {
-    await env.DB.prepare("ALTER TABLE servers ADD COLUMN owner TEXT DEFAULT ''").run();
-  } catch (e) {}
-  try {
-    await env.DB.prepare("ALTER TABLE events ADD COLUMN ip TEXT DEFAULT ''").run();
-  } catch (e) {}
-  try {
-    await env.DB.prepare("ALTER TABLE blob_sessions ADD COLUMN mode TEXT DEFAULT 'legacy'").run();
-  } catch (e) {}
+  if (!columnsHealed || force) {
+    try {
+      await env.DB.prepare("ALTER TABLE servers ADD COLUMN owner TEXT DEFAULT ''").run();
+    } catch (e) {}
+    try {
+      await env.DB.prepare("ALTER TABLE events ADD COLUMN ip TEXT DEFAULT ''").run();
+    } catch (e) {}
+    try {
+      await env.DB.prepare("ALTER TABLE blob_sessions ADD COLUMN mode TEXT DEFAULT 'legacy'").run();
+    } catch (e) {}
+    columnsHealed = true;
+  }
   schemaReady = failed === 0;
 }

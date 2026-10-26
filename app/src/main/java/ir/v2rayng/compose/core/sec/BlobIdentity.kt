@@ -134,7 +134,8 @@ object BlobIdentity {
     }
 
     /** DER ECDSA-SHA256 signature over msg, base64url - null when this device cannot sign. */
-    fun sign(msg: ByteArray): String? {
+    /** DER ECDSA-SHA256 signature over msg, raw bytes - null when this device cannot sign. */
+    fun sign(msg: ByteArray): ByteArray? {
         val t0 = android.os.SystemClock.elapsedRealtime()
         var k = privateKey() ?: return null
         for (attempt in 0 until 2) {
