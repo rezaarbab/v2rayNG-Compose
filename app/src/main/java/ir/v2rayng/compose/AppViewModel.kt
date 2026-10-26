@@ -1061,7 +1061,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         val tail = store.loadLogTail()
         if (tail.isBlank()) return
         val lines = tail.split('\n').filter { it.isNotBlank() }.takeLast(80)
-        put { s -> s.copy(logs = (s.logs + LogLine("--", "INFO", "---- previous run (" + lines.size + " lines) ----")) }
+        put { s -> s.copy(logs = (s.logs + LogLine("--", "INFO", "---- previous run (" + lines.size + " lines) ----")).takeLast(400)) }
         for (l in lines) {
             val a = l.indexOf('|'); val b = l.indexOf('|', a + 1)
             if (a < 0 || b < 0) continue
