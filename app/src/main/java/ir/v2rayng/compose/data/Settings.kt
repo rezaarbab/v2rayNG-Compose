@@ -127,6 +127,8 @@ class SettingsStore(context: Context) {
         @Volatile
         private var blobJson: String? = null
 
+        private val loadLock = Any()
+
         /** True when the last save was read back and matched: proof the write really landed. */
         @Volatile
         var lastSaveVerified: Boolean? = null
@@ -136,7 +138,16 @@ class SettingsStore(context: Context) {
         fun peek(): Settings? = cache
     }
 
-    fun load(): Settings = cache ?: readBlob().also { cache = it; mirror(it) }
+    fun load(): Settings {
+        cache?.let { return it }
+        // one unseal per process: two callers used to race past the null check and pay seconds each
+        // for the same bytes (the log showed the same 1094B blob opened twice, 3.8s then 4.3s),
+        // which is most of what "the app opens slowly" is on this phone
+        synchronized(loadLock) {
+            cache?.let { return it }
+            return readBlob().also { cache = it; mirror(it) }
+        }
+    }
 
     /** The one value needed before the first frame. Reading it through SecurePrefs would cost a
      *  StrongBox unseal inside onCreate, which is exactly what made the app start slowly. */
@@ -389,6 +400,9 @@ class SettingsStore(context: Context) {
 
     /** Plaintext copy of the three values the first frame's palette needs, so a cold start never
      *  has to unseal the blob to look right. */
+    /** Exposed for the instant a toggle happens: plaintext, microseconds, survives a swipe-kill. */
+    fun mirrorNow(s: Settings) = mirror(s)
+
     private fun mirror(s: Settings) {
         try {
             ctx.getSharedPreferences(UI_PREFS, android.content.Context.MODE_PRIVATE).edit()

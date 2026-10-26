@@ -397,6 +397,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun writeSettings(f: (Settings) -> Settings) {
         val s = f(_settings.value)
         _settings.value = s
+        store.mirrorNow(s)
         queueSave()
     }
 
@@ -424,9 +425,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             val cur = _settings.value
             store.save(cur)
             val ok = SettingsStore.lastSaveVerified
+            val verdict = when (ok) {
+                true -> "VERIFIED"
+                false -> "NOT VERIFIED"
+                else -> "skipped, nothing changed"
+            }
             log(
                 if (ok == false) "ERROR" else "INFO",
-                "settings save " + (if (ok == true) "VERIFIED" else "NOT VERIFIED (" + ok + ")") +
+                "settings save " + verdict +
                     " in " + (android.os.SystemClock.elapsedRealtime() - t0) + "ms: " + describe(cur)
             )
             drainJournal("after save")
@@ -1053,7 +1059,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private fun flushLogTail() {
         val text = _state.value.logs.joinToString("\n") { it.time + "|" + it.level + "|" + it.msg }
-        Persist.write { store.saveLogTail(text) }
+        // plaintext and cheap, so it goes straight through: this write must not sit in the daemon
+        // queue, because the exact thing being diagnosed is the process being swiped away
+        store.saveLogTail(text)
     }
 
     /** Shows what the previous run left behind, then clears the journal into the visible log. */
