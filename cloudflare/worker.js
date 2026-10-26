@@ -2400,10 +2400,10 @@ async function blobSyncProtected(env, request, b) {
   }
   const keyHex = row && row.key ? String(row.key) : "";
   if (keyHex.length !== 128 || (row.exp || 0) < Date.now()) {
-    return new Response(JSON.stringify({ ok: true, v: 2, enc: "h" }), { headers: jsonHeaders() });
+    return new Response(JSON.stringify({ ok: true, v: 2, enc: "h", why: keyHex.length === 128 ? "session expired at the bucket boundary" : "this device has no session yet" }), { headers: jsonHeaders() });
   }
   const tok = await bl_tokenCheck(env, String(b.device), String(request.headers.get("x-btok") || ""), bl_hexToB(keyHex.slice(64, 128)));
-  if (!tok.ok) return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { status: 403, headers: jsonHeaders() });
+  if (!tok.ok) return new Response(JSON.stringify({ ok: true, v: 2, enc: "x", why: "one-shot token did not verify (replayed, clock skew, or keys rotated)" }), { status: 403, headers: jsonHeaders() });
   const payload = await syncPayloadObj(env, request, b);
   const kc = bl_hexToB(keyHex.slice(0, 64));
   const sealed = await blobSealResponse(env, String(b.device), payload, kc);
@@ -2438,12 +2438,17 @@ async function blobKeyIssue(env, request) {
     const cfgL = await getSettings(env, ["legacy_auth"]);
     if (String(cfgL.legacy_auth || "1") === "0" || !env.BLOB_ROOT) {
       await insEvent(env, device, "legacy-refused", Date.now(), ip);
-      return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { status: 403, headers: jsonHeaders() });
+      return new Response(JSON.stringify({
+        ok: true,
+        v: 2,
+        enc: "x",
+        why: String(cfgL.legacy_auth || "1") === "0" ? "legacy app auth is switched off in the panel" : "this worker has no BLOB_ROOT secret set",
+      }), { status: 403, headers: jsonHeaders() });
     }
     const tok = await bl_tokenCheck(env, device, String(b.tok || ""), bl_hexToB(String(env.BLOB_ROOT)));
     if (!tok.ok) {
       await insEvent(env, device, "key-rejected", Date.now(), ip);
-      return new Response(JSON.stringify({ ok: true, v: 2, enc: "x" }), { status: 403, headers: jsonHeaders() });
+      return new Response(JSON.stringify({ ok: true, v: 2, enc: "x", why: "old-style token did not verify" }), { status: 403, headers: jsonHeaders() });
     }
     mode = "legacy";
   }

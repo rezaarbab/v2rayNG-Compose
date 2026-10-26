@@ -154,11 +154,22 @@ object BlobSecure {
                 .put("alg", "ec")
                 .put("pub", pub)
                 .put("sig", proof)
-            val text = httpPost(base, "/api/key", req) ?: run { blog("issueKeys: /api/key transport failed"); fail("key request: server unreachable (network)"); return null }
-            val resp = JSONObject(text)
+            val r = httpPost(base, "/api/key", req)
+            if (r.body == null) {
+                blog("issueKeys: /api/key got nothing (status " + r.status + ")")
+                fail(if (r.status == 0) "key request: no answer from the server (network)" else "key request: HTTP " + r.status + " with no body")
+                return null
+            }
+            val resp = try {
+                JSONObject(r.body)
+            } catch (_: Exception) {
+                blog("issueKeys: /api/key replied HTTP " + r.status + " as: " + r.body.take(60))
+                fail("key request: server replied HTTP " + r.status + " and not json")
+                return null
+            }
             if (resp.optInt("v", 0) < 2 || resp.optString("enc") != "k") {
-                blog("issueKeys: refused enc=" + resp.optString("enc", "?") + " v=" + resp.optInt("v", 0) + " -> worker has no device-key auth (deploy the newest worker?)")
-                fail("session keys rejected - worker does not accept device-key auth")
+                blog("issueKeys: " + refused("session keys", r, resp))
+                fail(refused("session keys", r, resp))
                 return null
             }
             val kc = BlobB64.decode(resp.getString("kc")) ?: run { blog("issueKeys: bad b64 kc"); fail("session keys: invalid response (protocol)"); return null }
@@ -192,26 +203,33 @@ object BlobSecure {
                 session = issueKeys(base, body) ?: return null
                 continue
             }
-            val text = httpPost(
+            val r = httpPost(
                 base,
                 "/api/sync",
                 JSONObject(body.toString()),
                 "v1",
                 token(body.getString("device"), sNow.kt),
             )
-            if (text == null) {
-                blog("sync: transport failed")
+            if (r.body == null) {
+                blog("sync: no answer (status " + r.status + ")")
                 // transport failed - keep the session, let the caller retry on the next sync
-                fail("server unreachable (network or timeout)")
+                fail(if (r.status == 0) "server unreachable (network or timeout)" else "server answered HTTP " + r.status + " with no body")
                 return null
             }
-            val resp = JSONObject(text)
+            val wire = r.body ?: return null
+            val resp = try {
+                JSONObject(wire)
+            } catch (_: Exception) {
+                blog("sync: HTTP " + r.status + " body is not json: " + wire.take(60))
+                fail(if (r.status in 200..299) "unexpected server response (protocol)" else "server answered HTTP " + r.status + " and not json - old worker?")
+                return null
+            }
             when (val enc = resp.optString("enc")) {
                 "s", "c" -> {
-                    val r = if (enc == "s") revealPayload(resp.getString("st"), sNow.kc) else openCy(resp.getString("cy"), sNow.kc)
-                    if (r != null) {
+                    val opened = if (enc == "s") revealPayload(resp.getString("st"), sNow.kc) else openCy(resp.getString("cy"), sNow.kc)
+                    if (opened != null) {
                         lastPayloadSecure = true
-                        return r
+                        return opened
                     }
                     val why = BlobStego.lastWhy ?: "payload unreadable"
                     blog("enc=" + enc + " open failed: " + why)
@@ -241,13 +259,13 @@ object BlobSecure {
                 }
                 "x" -> {
                     blog("enc=x (auth rejected) -> clearing")
-                    fail("request rejected (auth)")
+                    fail(refused("request", r, resp))
                     clear()
                     return null
                 }
                 else -> {
                     blog("unexpected enc=" + enc + " -> clearing (worker has no blob layer?)")
-                    fail("unexpected server response (protocol)")
+                    fail(refused("server reply", r, resp))
                     clear()
                     return null
                 }
@@ -302,7 +320,12 @@ object BlobSecure {
         return null
     }
 
-    private fun httpPost(base: String, path: String, body: JSONObject, blobHeader: String? = null, btok: String? = null): String? {
+    /** A POST and whatever came back. An HTTP error still carries an answer, and reading that
+     *  answer is the difference between "this phone has no network" and "the worker in the cloud
+     *  is an old one" - which both used to be reported as "server unreachable". */
+    data class Http(val status: Int, val body: String?)
+
+    private fun httpPost(base: String, path: String, body: JSONObject, blobHeader: String? = null, btok: String? = null): Http {
         return try {
             val url = java.net.URL(base.trimEnd('/') + path)
             val conn = url.openConnection() as java.net.HttpURLConnection
@@ -316,13 +339,28 @@ object BlobSecure {
             if (blobHeader != null) conn.setRequestProperty("x-blob", blobHeader)
             if (btok != null) conn.setRequestProperty("x-btok", btok)
             conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            if (conn.responseCode !in 200..299) {
-                blog("http " + path + " -> status " + conn.responseCode + " (deploy the new worker? route missing?)")
-                return null
-            }
-            conn.inputStream.bufferedReader().use { it.readText() }
-        } catch (_: Exception) {
-            null
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() }
+            if (code !in 200..299) blog("http " + path + " -> " + code + " " + (text?.take(90) ?: "no body"))
+            Http(code, text)
+        } catch (e: Exception) {
+            blog("http " + path + " -> " + e.javaClass.simpleName)
+            Http(0, null)
         }
+    }
+
+    /** Turn a refused response into one readable sentence: status, the enc code the worker chose
+     *  and the reason the worker itself gave (which is protocol text, never server config). */
+    private fun refused(what: String, r: Http, resp: JSONObject): String {
+        val enc = resp.optString("enc", "")
+        val why = resp.optString("why", "")
+        val tail = when {
+            why.isNotBlank() -> ": " + why
+            enc == "x" -> " (auth refused - worker has a different key for this device?)"
+            resp.optInt("v", 0) < 2 -> " - the worker in the cloud is an old build (deploy it)"
+            else -> ""
+        }
+        return what + " refused (HTTP " + r.status + (if (enc.isNotBlank()) ", enc " + enc else "") + ")" + tail
     }
 }
