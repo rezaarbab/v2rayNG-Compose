@@ -133,7 +133,6 @@ object BlobIdentity {
         }
     }
 
-    /** DER ECDSA-SHA256 signature over msg, base64url - null when this device cannot sign. */
     /** DER ECDSA-SHA256 signature over msg, raw bytes - null when this device cannot sign. */
     fun sign(msg: ByteArray): ByteArray? {
         val t0 = android.os.SystemClock.elapsedRealtime()
@@ -148,7 +147,7 @@ object BlobIdentity {
                     s.sign()
                 }
                 SecJournal.note("identity sign ${sig.size}B ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-                return BlobB64.encode(sig)
+                return sig
             } catch (e: Exception) {
                 keyRef = null
                 pubRef = null
