@@ -2304,7 +2304,28 @@ async function bl_ecTokCheck(env, device, tok, pubB64) {
     // the msg digest and the byte lengths are what separates "the two sides signed different
     // bytes" from "the encoding is read differently" - compare them with the app's own log line
     if (!good) {
-      return { ok: false, why: "signature does not match this device key (msg " + bl_hex((await bl_sha(p.msg))).slice(0, 6) + "/" + p.msg.length + "B, sig " + p.proof.length + "B head " + bl_hex(p.proof.slice(0, 2)) + ", pub " + der.length + "B head " + bl_hex(der.slice(0, 4)) + ")" };
+      // digest of what this side received, plus a self-test with a key the platform generated
+      // itself: self-test ok  -> Cloudflare's ECDSA works, so the bytes or the device pair differ;
+      // self-test FAILS -> this worker cannot verify ECDSA at all and the scheme must change
+      let st = "?";
+      let reexport = "?";
+      try {
+        reexport = bl_hex((await bl_sha(new Uint8Array(await crypto.subtle.exportKey("spki", key))))).slice(0, 6);
+      } catch (e) {}
+      try {
+        const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
+        const data = new TextEncoder().encode("selftest");
+        const s2 = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, kp.privateKey, data);
+        const k2 = await crypto.subtle.importKey("spki", await crypto.subtle.exportKey("spki", kp.publicKey), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+        st = (await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, k2, s2, data)) ? "ok" : "FAILS";
+      } catch (e) {
+        st = "error " + String((e && e.message) || e).slice(0, 24);
+      }
+      return {
+        ok: false,
+        why: "signature does not match (msg " + bl_hex((await bl_sha(p.msg))).slice(0, 6) + "/" + p.msg.length + "B, sig " + p.proof.length + "B#" + bl_hex((await bl_sha(p.proof))).slice(0, 6) +
+          ", pub " + der.length + "B#" + bl_hex((await bl_sha(der))).slice(0, 6) + "->reexport#" + reexport + ", worker-ecdsa-selftest " + st + ")",
+      };
     }
     if (!(await bl_tokAdvance(env, device, p.ts))) return { ok: false, why: "replayed token" };
     return { ok: true, ts: p.ts };

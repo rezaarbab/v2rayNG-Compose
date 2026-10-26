@@ -148,15 +148,20 @@ object BlobSecure {
         } catch (e: Exception) {
             "self-verify error " + e.javaClass.simpleName
         }
-        val md = try {
-            java.security.MessageDigest.getInstance("SHA-256").digest(msg).take(3).joinToString("") { String.format("%02x", it) }
-        } catch (_: Exception) {
-            "?"
-        }
-        lastProofNote = self + ", fp " + BlobIdentity.fingerprint() + ", msg " + md + " (" + msg.size + "B), pub " + pubDer.size + "B[" +
-            pubDer.take(4).joinToString("") { String.format("%02x", it) } + "], sig " + sig.size + "B"
+        val md = hex3(msg)
+        lastProofNote = self + ", fp " + BlobIdentity.fingerprint() + ", msg " + md + " (" + msg.size + "B), pub " +
+            pubDer.size + "B#" + hex3(pubDer) + ", sig " + sig.size + "B#" + hex3(sig)
         blog("deviceProof: " + lastProofNote)
         return BlobB64.encode(ts + nonce + sig)
+    }
+
+    /** First three bytes of the SHA-256 of these bytes, hex - enough to prove two blobs are the
+     *  same without putting the key material in a log. */
+    private fun hex3(b: ByteArray): String = try {
+        java.security.MessageDigest.getInstance("SHA-256").digest(b).take(3)
+            .joinToString("") { String.format("%02x", it) }
+    } catch (_: Exception) {
+        "?"
     }
 
     /** /api/key - get fresh 60-minute keys from the worker, persist via BlobVault.
