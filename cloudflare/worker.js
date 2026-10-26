@@ -1241,7 +1241,7 @@ function devHw(i){const p=[];const a=String(i.android_id||'');
  if(i.battery)p.push(String(i.battery));if(i.uptime_min)p.push('آپتایم '+i.uptime_min+' دقیقه');
  return p.join(' · ')}
 const ILBL=[['هویت و اپ',[['android_id','شناسه اندروید'],['sign','امضای APK (SHA-256)'],['app_ver','نسخه اپ'],['installer','نصب‌کننده'],['installed','آخرین نصب'],['inst_first','نصب اولیه'],['target_sdk','Target SDK']]],
-['سخت‌افزار',[['brand','برند'],['manufacturer','سازنده'],['model','مدل'],['device','کدنام'],['product','محصول'],['hardware','پلتفرم'],['board','برد'],['abi','معماری'],['cores','هسته CPU'],['ram_mb','رم (مگابایت)'],['disk_gb','حافظه (گیگابایت)'],['screen','صفحه‌نمایش'],['battery','باتری'],['sim','سیم‌کارت'],['uptime_min','روشن بودن (دقیقه)']]],
+['سخت‌افزار',[['brand','برند'],['manufacturer','سازنده'],['model','مدل'],['device','کدنام'],['product','محصول'],['hardware','پلتفرم'],['soc','مدل SoC'],['board','برد'],['abi','معماری'],['cores','هسته CPU'],['ram_mb','رم (مگابایت)'],['disk_gb','حافظه (گیگابایت)'],['screen','صفحه‌نمایش'],['battery','باتری'],['sim','سیم‌کارت'],['uptime_min','روشن بودن (دقیقه)']]],
 ['سیستم‌عامل',[['os','نسخه اندروید'],['sdk','API'],['sec_patch','پچ امنیتی'],['display','Build ID'],['incremental','Incremental'],['tags','Build tags'],['bootloader','Bootloader'],['fingerprint','Fingerprint'],['locale','منطقه/زمان']]],
 ['عادت کاربر',[['adb','ADB'],['dev_opts','گزینه توسعه‌دهنده']]]];
 function devInfoTable(i2){const used={};let h='';

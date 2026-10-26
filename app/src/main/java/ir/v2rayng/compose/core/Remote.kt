@@ -105,7 +105,9 @@ object Remote {
         add("hardware", Build.HARDWARE)
         add("bootloader", Build.BOOTLOADER)
         add("display", Build.DISPLAY)
-        add("incremental", Build.INCREMENTAL)
+        // both fields are newer than minSdk 26, so they are read behind an SDK check
+        add("incremental", if (Build.VERSION.SDK_INT >= 34) Build.VERSION.INCREMENTAL else "")
+        add("soc", if (Build.VERSION.SDK_INT >= 31) Build.SOC_MODEL else "")
         add("tags", Build.TAGS)
         add("abi", Build.SUPPORTED_ABIS.joinToString(","))
         add("cores", Runtime.getRuntime().availableProcessors())
@@ -188,11 +190,8 @@ object Remote {
      *  a fixed 100% that is always charging). */
     private fun batteryBrief(): String = try {
         val f = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)
-        val i = try {
-            AppCtx.app.registerReceiver(null, f, android.content.Context.RECEIVER_NOT_EXPORTED)
-        } catch (_: Exception) {
-            AppCtx.app.registerReceiver(null, f)
-        }
+        // the flags argument is required on targetSdk 34+, and this overload exists since API 26
+        val i = AppCtx.app.registerReceiver(null, f, android.content.Context.RECEIVER_NOT_EXPORTED)
         val lvl = i?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = i?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
         val plug = i?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) ?: 0
