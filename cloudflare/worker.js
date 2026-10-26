@@ -1220,6 +1220,40 @@ $('stats').innerHTML=
  '<div class="stat"><b class="r">'+(s.offServers||0)+'</b><span>سرور خاموش</span></div>'}
 /** The device info column is a JSON string in D1 - parse it once so the panel shows fields, not escaped text. */
 function infoOf(v){if(!v)return{};if(typeof v==='object')return v;try{const p=JSON.parse(v);return p&&typeof p==='object'?p:{}}catch(e){return{raw:String(v).slice(0,300)}}}
+/* Real-handset hints. A phone shows a vendor fingerprint, arm abi, a moving battery and a sim;
+   an emulator/VM shows generic builds, x86, a pinned 100% battery and the default android_id. */
+const EMURE=/generic|emulator|vbox|goldfish|ranchu|qemu|sdk_|google_apis|android-x86|unknown/i;
+function devVerdict(i){const out=[];
+ if(!i.fingerprint&&!i.android_id&&!i.ram_mb)return '<span class="badge b-y">ثبت قدیمی - با اپ جدید همگام‌سازی شود</span>';
+ if(EMURE.test(String(i.fingerprint||''))||EMURE.test(String(i.hardware||''))||EMURE.test(String(i.product||'')))out.push(['b-off','شبیه‌ساز یا VM']);
+ if(String(i.android_id||'').toLowerCase()==='9774d56d682e549c')out.push(['b-off','شناسه پیش‌فرض امولاتور']);
+ if(/x86/i.test(String(i.abi||'')))out.push(['b-y','معماری x86']);
+ if(String(i.tags||'')==='test-keys')out.push(['b-y','امضای کلید تستی']);
+ if(/^100%\+chg$/.test(String(i.battery||'')))out.push(['b-y','باتری ۱۰۰٪ همیشه روی شارژ']);
+ if(String(i.sim||'')==='absent')out.push(['b-y','بدون سیم‌کارت']);
+ if(String(i.adb||'')==='1')out.push(['b-y','ADB روشن']);
+ if(String(i.dev_opts||'')==='1')out.push(['b-y','گزینه توسعه‌دهنده فعال']);
+ if(!String(i.android_id||''))out.push(['b-y','بدون شناسه اندروید']);
+ if(!out.length)return '<span class="badge b-on">مشخصات واقعی</span>';
+ return out.map(function(x){return '<span class="badge '+x[0]+'">'+x[1]+'</span>'}).join(' ')}
+function devHw(i){const p=[];const a=String(i.android_id||'');
+ if(a)p.push('ID:'+a.slice(0,10));if(i.ram_mb)p.push(i.ram_mb+'MB');if(i.screen)p.push(String(i.screen));
+ if(i.battery)p.push(String(i.battery));if(i.uptime_min)p.push('آپتایم '+i.uptime_min+' دقیقه');
+ return p.join(' · ')}
+const ILBL=[['هویت و اپ',[['android_id','شناسه اندروید'],['sign','امضای APK (SHA-256)'],['app_ver','نسخه اپ'],['installer','نصب‌کننده'],['installed','آخرین نصب'],['inst_first','نصب اولیه'],['target_sdk','Target SDK']]],
+['سخت‌افزار',[['brand','برند'],['manufacturer','سازنده'],['model','مدل'],['device','کدنام'],['product','محصول'],['hardware','پلتفرم'],['board','برد'],['abi','معماری'],['cores','هسته CPU'],['ram_mb','رم (مگابایت)'],['disk_gb','حافظه (گیگابایت)'],['screen','صفحه‌نمایش'],['battery','باتری'],['sim','سیم‌کارت'],['uptime_min','روشن بودن (دقیقه)']]],
+['سیستم‌عامل',[['os','نسخه اندروید'],['sdk','API'],['sec_patch','پچ امنیتی'],['display','Build ID'],['incremental','Incremental'],['tags','Build tags'],['bootloader','Bootloader'],['fingerprint','Fingerprint'],['locale','منطقه/زمان']]],
+['عادت کاربر',[['adb','ADB'],['dev_opts','گزینه توسعه‌دهنده']]]];
+function devInfoTable(i2){const used={};let h='';
+ ILBL.forEach(function(sec){let rows='';
+  sec[1].forEach(function(f){const k=f[0];if(i2[k]===''||i2[k]==null)return;used[k]=1;let v=i2[k];
+   if((k==='installed'||k==='inst_first')&&Number(v)>0){try{v=new Date(Number(v)).toLocaleString('fa-IR')}catch(e){v=String(v)}}
+   rows+='<tr><td class=note style="white-space:nowrap">'+esc(f[1])+'</td><td style="direction:ltr;text-align:right;word-break:break-all">'+esc(String(v))+'</td></tr>'});
+  if(rows)h+='<tr><td colspan=2 style="padding-top:9px;color:var(--amber);font-weight:800;font-size:12px">'+esc(sec[0])+'</td></tr>'+rows});
+ const rest=Object.keys(i2).filter(function(k){return !used[k]&&i2[k]!==''&&i2[k]!=null});
+ if(rest.length){h+='<tr><td colspan=2 style="padding-top:9px;color:var(--amber);font-weight:800;font-size:12px">سایر</td></tr>';
+  rest.forEach(function(k){h+='<tr><td class=note style="white-space:nowrap">'+esc(k)+'</td><td style="direction:ltr;text-align:right;word-break:break-all">'+esc(String(i2[k]))+'</td></tr>'})}
+ return h}
 async function loadDevices(){const j=await api({action:'devices.list'});DEVS=j.devices||[];CUT=j.cut||0;
 window.BLOCKED=j.blocked||{devices:[],ips:[],models:[]};
 if($('blk_d')&&$('blk_d').value==='')$('blk_d').value=(window.BLOCKED.devices||[]).join(',');
@@ -1235,13 +1269,16 @@ const box=$('dev_list');
 if(!list.length){box.className='empty';box.textContent='دستگاهی ثبت نشده';return}
 box.className='';
 const B=window.BLOCKED||{devices:[],ips:[],models:[]};
-let html='<table><tr><th>مدل</th><th>وضعیت</th><th>IP</th><th>آخرین دیده</th><th>مسدودسازی</th><th></th></tr>';
+let html='<table><tr><th>دستگاه / اثر سخت‌افزاری</th><th>وضعیت</th><th>IP</th><th>آخرین دیده</th><th>مسدودسازی</th><th></th></tr>';
 list.forEach(d=>{
  const online=(Date.now()-Number(d.last_seen||0))<CUT;
  const last=d.last_seen?new Date(Number(d.last_seen)).toLocaleString('fa-IR'):'-';
  const dBlk=(B.devices||[]).includes(d.id), iBlk=(B.ips||[]).includes(d.ip||''), mBlk=(B.models||[]).includes((d.model||'').toLowerCase());
+ const INF=infoOf(d.info);
  const chip=(on,t)=>'<span class="badge '+(on?'b-off':'b-on')+'">'+t+'</span>';
- html+='<tr><td style="direction:ltr;text-align:right">'+esc(d.model||d.id.slice(0,8))+'</td>'+
+ html+='<tr><td style="direction:ltr;text-align:right">'+esc(d.model||d.id.slice(0,8))+
+ '<br><span class=note style="direction:ltr;display:block">install '+esc(String(d.id||'').slice(0,8))+(devHw(INF)?' · '+esc(devHw(INF)):'')+'</span>'+
+ '<div style="margin-top:4px">'+devVerdict(INF)+'</div></td>'+
  '<td><span class="badge '+(d.connected&&online?'b-on':online?'b-y':'b-off')+'">'+(d.connected&&online?'متصل':online?'آنلاین':'آفلاین')+'</span>'+
  (dBlk||iBlk||mBlk?'<br><span class="badge b-off">مسدود '+(dBlk?'دستگاه ':'')+(iBlk?'آیپی ':'')+(mBlk?'مدل':'')+'</span>':'')+'</td>'+
  '<td style=direction:ltr>'+esc(d.ip||'-')+'</td><td>'+last+'</td>'+
@@ -1258,14 +1295,9 @@ box.querySelectorAll('button[data-del]').forEach(b=>b.onclick=()=>{if(confirm('�
 box.querySelectorAll('button[data-info]').forEach(b=>b.onclick=()=>{
  const d2=b.getAttribute('data-info')||'{}';let i2={};try{i2=JSON.parse(d2)}catch(e){}
  i2=infoOf(i2);
- const LBL={brand:'برند',device:'دستگاه',model:'مدل',sdk:'SDK اندروید',os:'نسخه اندروید',app_ver:'نسخه اپ',installed:'زمان نصب',sign:'امضای APK (SHA-256)'};
  const keys=Object.keys(i2).filter((k)=>i2[k]!==''&&i2[k]!=null);
- let rows2='';
- if(!keys.length){rows2='<tr><td class=note>هیچ اطلاعاتی ارسال نشده</td></tr>'}
- keys.forEach((k)=>{let v=i2[k];
-  if(k==='installed'&&typeof v==='number'&&v>0){try{v=new Date(v).toLocaleString('fa-IR')}catch(e){v=String(v)}}
-  rows2+='<tr><td class=note style="white-space:nowrap">'+esc(LBL[k]||k)+'</td><td style="direction:ltr;text-align:right;word-break:break-all">'+esc(String(v))+'</td></tr>';});
- const m2=supportModal||null;if(m2)m2('<table>'+rows2+'</table>')})}
+ let rows2=keys.length?devInfoTable(i2):'<tr><td class=note>هیچ اطلاعاتی ارسال نشده - اپ نسخه جدید را نصب کنید</td></tr>';
+ const m2=supportModal||null;if(m2)m2('<div style="margin-bottom:8px">'+devVerdict(i2)+'</div><table>'+rows2+'</table>')})}
 
 /* ---- boot ---- */
 /* password on EVERY visit - nothing persisted; all panels load in parallel for speed */

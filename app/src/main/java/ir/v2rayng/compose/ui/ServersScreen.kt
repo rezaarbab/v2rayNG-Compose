@@ -245,10 +245,11 @@ private fun ServerRow(
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                     Box(
                         Modifier.holdFor(1000L, onHold = onIconHold),
                     ) {
@@ -304,28 +305,6 @@ private fun ServerRow(
                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     )
                 }
-                if (profile.up > 0 || profile.down > 0) {
-                    // two real cells with a fixed gap: as one string the counters ran into each other
-                    Row(
-                        modifier = Modifier.padding(top = 3.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    ) {
-                        Text(
-                            text = "↑ " + ir.v2rayng.compose.data.TimeKit.human(profile.up),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                        )
-                        Text(
-                            text = "↓ " + ir.v2rayng.compose.data.TimeKit.human(profile.down),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                        )
-                    }
-                }
             }
             PingChip(profile.ping, profile.pingErr)
             IconButton(onClick = onPingOne, modifier = Modifier.size(36.dp)) {
@@ -351,6 +330,34 @@ private fun ServerRow(
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(start = 4.dp).size(18.dp),
                 )
+            }
+            }
+            if (profile.up > 0 || profile.down > 0) {
+                // under the whole row and at card width: as wrap-content inside the text column
+                // the download counter only got the leftover width and was clipped away
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text(
+                        text = "↑ " + ir.v2rayng.compose.data.TimeKit.human(profile.up),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = "↓ " + ir.v2rayng.compose.data.TimeKit.human(profile.down),
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }

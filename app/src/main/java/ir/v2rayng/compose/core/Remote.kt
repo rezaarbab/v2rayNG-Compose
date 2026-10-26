@@ -91,21 +91,127 @@ object Remote {
     /** Extra fingerprint info the admin sees in the panel (percent-encoded, browser/runtime-safe). */
     fun deviceInfo(): JSONObject {
         val o = JSONObject()
-        o.put("brand", Build.BRAND)
-        o.put("device", Build.DEVICE)
-        o.put("model", Build.MODEL)
-        o.put("sdk", android.os.Build.VERSION.SDK_INT)
-        o.put("os", android.os.Build.VERSION.RELEASE)
+        fun add(k: String, v: Any?) {
+            val s = v?.toString() ?: return
+            if (s.isBlank()) return
+            try { o.put(k, s) } catch (_: Exception) {}
+        }
+        add("brand", Build.BRAND)
+        add("model", Build.MODEL)
+        add("device", Build.DEVICE)
+        add("manufacturer", Build.MANUFACTURER)
+        add("product", Build.PRODUCT)
+        add("board", Build.BOARD)
+        add("hardware", Build.HARDWARE)
+        add("bootloader", Build.BOOTLOADER)
+        add("display", Build.DISPLAY)
+        add("incremental", Build.INCREMENTAL)
+        add("tags", Build.TAGS)
+        add("abi", Build.SUPPORTED_ABIS.joinToString(","))
+        add("cores", Runtime.getRuntime().availableProcessors())
+        add("fingerprint", Build.FINGERPRINT.take(120))
+        add("sec_patch", Build.VERSION.SECURITY_PATCH)
+        add("sdk", Build.VERSION.SDK_INT)
+        add("os", Build.VERSION.RELEASE)
+        // survives a reinstall and is tied to the signing certificate, so it identifies the
+        // handset itself rather than this particular install of the app
+        add("android_id", try {
+            android.provider.Settings.Secure.getString(
+                AppCtx.app.contentResolver,
+                android.provider.Settings.Secure.ANDROID_ID,
+            )
+        } catch (_: Exception) {
+            null
+        })
         val pi = try {
             AppCtx.app.packageManager.getPackageInfo(AppCtx.app.packageName, 0)
         } catch (_: Exception) {
             null
         }
-        o.put("app_ver", pi?.versionName ?: "?")
+        add("app_ver", pi?.versionName ?: "?")
         // lastUpdateTime is when this APK was installed/updated - the closest thing to a build stamp
-        o.put("installed", pi?.lastUpdateTime ?: 0L)
-        o.put("sign", sigHash())
+        add("installed", pi?.lastUpdateTime ?: 0L)
+        add("inst_first", pi?.firstInstallTime ?: 0L)
+        add("target_sdk", AppCtx.app.applicationInfo?.targetSdkVersion)
+        add("installer", installer())
+        add("sign", sigHash())
+        add("ram_mb", try {
+            val am = AppCtx.app.getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+            val mi = android.app.ActivityManager.MemoryInfo()
+            am?.getMemoryInfo(mi)
+            if (mi.totalMem > 0) (mi.totalMem / 1048576L).toString() else null
+        } catch (_: Exception) {
+            null
+        })
+        add("disk_gb", try {
+            val st = android.os.StatFs(android.os.Environment.getDataDirectory().absolutePath)
+            (st.blockCountLong * st.blockSizeLong / 1073741824L).toString()
+        } catch (_: Exception) {
+            null
+        })
+        add("screen", try {
+            val dm = AppCtx.app.resources.displayMetrics
+            dm.widthPixels.toString() + "x" + dm.heightPixels + "@" + dm.densityDpi
+        } catch (_: Exception) {
+            null
+        })
+        add("battery", batteryBrief())
+        add("sim", simBrief())
+        add("adb", globalFlag("adb_enabled"))
+        add("dev_opts", globalFlag("development_settings_enabled"))
+        add("uptime_min", (android.os.SystemClock.elapsedRealtime() / 60000L).toString())
+        add("locale", java.util.Locale.getDefault().toString() + "/" + java.util.TimeZone.getDefault().id)
         return o
+    }
+
+    /** Which store put the APK on the handset - sideload shows as null/third party. */
+    private fun installer(): String? = try {
+        val pm = AppCtx.app.packageManager
+        val pkg = AppCtx.app.packageName
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            pm.getInstallSourceInfo(pkg).installingPackageName
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getInstallerPackageName(pkg)
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun globalFlag(key: String): String = try {
+        android.provider.Settings.Global.getInt(AppCtx.app.contentResolver, key, -1).toString()
+    } catch (_: Exception) {
+        ""
+    }
+
+    /** Sticky battery broadcast: percent plus whether a charger is attached (a VM usually reports
+     *  a fixed 100% that is always charging). */
+    private fun batteryBrief(): String = try {
+        val f = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)
+        val i = try {
+            AppCtx.app.registerReceiver(null, f, android.content.Context.RECEIVER_NOT_EXPORTED)
+        } catch (_: Exception) {
+            AppCtx.app.registerReceiver(null, f)
+        }
+        val lvl = i?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = i?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val plug = i?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        if (lvl < 0 || scale <= 0) "" else (lvl * 100 / scale).toString() + "%" + (if (plug > 0) "+chg" else "")
+    } catch (_: Exception) {
+        ""
+    }
+
+    private fun simBrief(): String = try {
+        val tm = AppCtx.app.getSystemService(android.content.Context.TELEPHONY_SERVICE)
+            as? android.telephony.TelephonyManager
+        when (tm?.simState ?: -1) {
+            android.telephony.TelephonyManager.SIM_STATE_READY -> "ready"
+            android.telephony.TelephonyManager.SIM_STATE_ABSENT -> "absent"
+            -1 -> ""
+            else -> "other"
+        }
+    } catch (_: Exception) {
+        ""
     }
 
     /** First 16 hex of the APK signing certificate - lets the admin see the build is ours. */
