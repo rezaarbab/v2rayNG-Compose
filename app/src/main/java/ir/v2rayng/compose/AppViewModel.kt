@@ -63,9 +63,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private val _settings = MutableStateFlow(store.themeSeed())
 
-    /** Set by the first IO load, and by any user edit that happens before it finishes. */
-    @Volatile
-    private var userEdited = false
+    /**
+     * Every settings change, kept as a transform. Once the stored settings arrive they are applied
+     * on top of it, so a tap made in the first half second is merged instead of either throwing the
+     * stored settings away or being thrown away itself.
+     */
+    private val pendingEdits = java.util.concurrent.ConcurrentLinkedQueue<(Settings) -> Settings>()
 
     /** Set only by a deliberate list change (import / delete / pin), so a background write from
      *  the tunnel never makes the loader throw away the stored servers. */
@@ -80,9 +83,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     @Volatile
     private var settingsLoaded = false
-
-    @Volatile
-    private var saveWanted = false
 
     /** Lifetime totals of the selected server before this tunnel session started: the core
      *  counters begin at zero again, but the row must show what the server has really carried. */
@@ -158,16 +158,22 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             val tLoad0 = android.os.SystemClock.elapsedRealtime()
             val s = store.load()
             settingsLoaded = true
-            if (saveWanted) queueSave()
-            // settings first: palette, stickers and wallpaper are what the eye notices, and the
-            // server list is the biggest and slowest stored value
-            if (!userEdited) _settings.value = s
+            // palette, stickers and wallpaper are what the eye notices, so they are applied before
+            // the server list is unsealed; anything the user changed in the meantime is replayed on
+            // top of the stored values instead of replacing them
+            var merged = s
+            var replayed = 0
+            while (true) {
+                val edit = pendingEdits.poll() ?: break
+                merged = edit(merged)
+                replayed++
+            }
+            _settings.value = merged
+            if (replayed > 0) log("INFO", "Merged " + replayed + " change(s) made while settings were loading")
+            queueSave()
             val saved = store.loadServers()
             val sel = store.loadSelectedId()
             val base = store.loadRemoteBase()
-            if (userEdited) {
-                log("WARN", "Settings changed before the stored ones arrived - keeping what is on screen")
-            }
             // A stored server list and the admin URL are data, not an edit. A running tunnel writes
             // server state (flag, traffic) while this read is still in flight, and treating that as
             // an edit is what made the whole app look reset when it was reopened.
@@ -195,6 +201,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             )
             SecurePrefs.unreadableReport()?.let { log("ERROR", "Stored values this device cannot decrypt (keystore key changed): " + it) }
             SecurePrefs.sealFailureReport()?.let { log("ERROR", "Keystore refused to write: " + it) }
+            ir.v2rayng.compose.core.sec.BlobVault.recoveryNote?.let { log("ERROR", "Keystore recovery: " + it) }
             loadRemoteState()
             log("INFO", "startup: stored data in " + (android.os.SystemClock.elapsedRealtime() - tLoad0) + "ms")
             if (_state.value.servers.isNotEmpty() && effPingStart()) {
@@ -368,14 +375,15 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun put(f: (AppState) -> AppState) = _state.update(f)
 
     private fun setSettings(f: (Settings) -> Settings) {
-        userEdited = true
+        pendingEdits.add(f)
         writeSettings(f)
     }
 
-    /** A change the app made itself (a detected country flag, a wallpaper that follows it). This
-     *  must not raise userEdited - doing so made the loader drop the stored settings, and the next
-     *  save then sealed the defaults over them, which is why the sticker style never came back. */
+    /** A change the app makes itself (a detected country flag and the wallpaper that follows it).
+     *  It is replayed like any other, but it is not a user edit, so it never marks the settings as
+     *  owned by the screen. */
     private fun setSettingsAuto(f: (Settings) -> Settings) {
+        pendingEdits.add(f)
         writeSettings(f)
     }
 
@@ -391,10 +399,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      * toggles also collapses into a single write instead of queueing dozens of full saves.
      */
     private fun queueSave() {
-        saveWanted = true
-        // nothing may be sealed before the stored settings were read: the in-memory
-        // object is still a default-filled placeholder at that point, and saving it would
-        // overwrite the user settings with defaults
+        // nothing may be sealed before the stored settings were read: the in-memory object is still
+        // a default-filled placeholder at that point. The load itself calls this once it is done,
+        // so a change made in that window is still written - with the stored values behind it.
         if (!settingsLoaded) return
         saveJob?.cancel()
         saveJob = viewModelScope.launch(Dispatchers.IO) {

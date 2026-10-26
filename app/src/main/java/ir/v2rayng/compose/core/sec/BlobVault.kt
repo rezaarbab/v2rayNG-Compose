@@ -38,31 +38,56 @@ object BlobVault {
         false
     }
 
+    /** What happened to the key, for the app log - "cannot read" and "no key at all" are very
+     *  different states and the user sees only "nothing saves" without this. */
+    @Volatile
+    var recoveryNote: String? = null
+        private set
+
     /**
-     * The key is created only when the alias is really absent. An earlier version generated a new
-     * key whenever a read failed, and a single transient keystore error (StrongBox busy, binder
-     * hiccup) then replaced the key and made every sealed value unreadable forever - which is what
-     * looked like "the app forgot all my settings after a restart".
+     * A live but unreadable key entry must not be left in place: seal() then returns null, every
+     * write is dropped, every read yields defaults, and the app can never store anything again -
+     * which is exactly the "nothing saves anymore" state. StrongBox does refuse for a moment under
+     * load, so the entry is re-read a few times first; only when it stays unreadable is it
+     * replaced, and the replacement is reported instead of happening silently.
      */
     private fun key(): SecretKey? {
         keyRef?.let { return it }
         synchronized(this) {
             if (keyRef != null) return keyRef
             var k = readKey()
-            if (k == null && aliasExists()) return null // present but not readable right now: never overwrite
+            if (k == null && aliasExists()) {
+                for (i in 1..3) {
+                    try {
+                        Thread.sleep(70L)
+                    } catch (_: Exception) {
+                    }
+                    k = readKey()
+                    if (k != null) break
+                }
+            }
             if (k == null) {
+                val hadKey = aliasExists()
+                if (hadKey) {
+                    recoveryNote = "keystore key exists but this device cannot read it - it was replaced, so values stored earlier are gone"
+                    try {
+                        keystore().deleteEntry(ALIAS)
+                    } catch (_: Exception) {
+                    }
+                }
                 try {
-                    createKey()
+                    generateKey()
                 } catch (_: Exception) {
                 }
                 k = readKey()
+                if (k == null) recoveryNote = "the keystore gives no key at all on this device - saving cannot work"
             }
             keyRef = k
             return k
         }
     }
 
-    private fun createKey() {
+    private fun generateKey() {
         val kg = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
         val builder = {
             KeyGenParameterSpec.Builder(
@@ -74,7 +99,6 @@ object BlobVault {
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setRandomizedEncryptionRequired(true)
         }
-        if (aliasExists()) return
         var okBox = false
         if (Build.VERSION.SDK_INT >= 28) {
             try {
