@@ -20,16 +20,46 @@ object BlobVault {
     private const val ALIAS = "blob-kv-v1"
     private const val AAD = "BLKV1"
 
+    /** Keystore handle for this process - fetching it is itself a binder round trip. */
     @Volatile
-    private var cached: Boolean = false
+    private var keyRef: SecretKey? = null
 
-    private fun secretKey(): SecretKey? = try {
-        val ks = KeyStore.getInstance("AndroidKeyStore")
-        ks.load(null)
-        val e = ks.getEntry(ALIAS, null)
-        (e as? KeyStore.SecretKeyEntry)?.secretKey
+    private fun keystore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+
+    private fun readKey(): SecretKey? = try {
+        (keystore().getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey
     } catch (_: Exception) {
         null
+    }
+
+    private fun aliasExists(): Boolean = try {
+        keystore().containsAlias(ALIAS)
+    } catch (_: Exception) {
+        false
+    }
+
+    /**
+     * The key is created only when the alias is really absent. An earlier version generated a new
+     * key whenever a read failed, and a single transient keystore error (StrongBox busy, binder
+     * hiccup) then replaced the key and made every sealed value unreadable forever - which is what
+     * looked like "the app forgot all my settings after a restart".
+     */
+    private fun key(): SecretKey? {
+        keyRef?.let { return it }
+        synchronized(this) {
+            if (keyRef != null) return keyRef
+            var k = readKey()
+            if (k == null && aliasExists()) return null // present but not readable right now: never overwrite
+            if (k == null) {
+                try {
+                    createKey()
+                } catch (_: Exception) {
+                }
+                k = readKey()
+            }
+            keyRef = k
+            return k
+        }
     }
 
     private fun createKey() {
@@ -44,6 +74,7 @@ object BlobVault {
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setRandomizedEncryptionRequired(true)
         }
+        if (aliasExists()) return
         var okBox = false
         if (Build.VERSION.SDK_INT >= 28) {
             try {
@@ -60,27 +91,20 @@ object BlobVault {
         }
     }
 
-    private fun ensureKey() {
-        if (secretKey() == null) {
-            try {
-                createKey()
-            } catch (_: Exception) {
-            }
-        }
-        cached = true
-    }
-
     /** returns base64url(iv || ct) or null when the keystore refuses */
     fun seal(plain: ByteArray): String? {
-        if (!cached) ensureKey()
-        val k = secretKey() ?: return null
+        val k = key() ?: return null
         return try {
-            val c = Cipher.getInstance("AES/GCM/NoPadding")
-            c.init(Cipher.ENCRYPT_MODE, k)
-            c.updateAAD(AAD.toByteArray(Charsets.UTF_8))
-            val ct = c.doFinal(plain)
-            BlobB64.encode(c.iv + ct)
+            // one StrongBox operation at a time: concurrent Cipher use fails on some devices
+            synchronized(this) {
+                val c = Cipher.getInstance("AES/GCM/NoPadding")
+                c.init(Cipher.ENCRYPT_MODE, k)
+                c.updateAAD(AAD.toByteArray(Charsets.UTF_8))
+                val ct = c.doFinal(plain)
+                BlobB64.encode(c.iv + ct)
+            }
         } catch (_: Exception) {
+            keyRef = null
             null
         }
     }
@@ -88,13 +112,16 @@ object BlobVault {
     fun unseal(raw: String): ByteArray? {
         val blob = BlobB64.decode(raw) ?: return null
         if (blob.size < 13) return null
-        val k = secretKey() ?: return null
+        val k = key() ?: return null
         return try {
-            val c = Cipher.getInstance("AES/GCM/NoPadding")
-            c.init(Cipher.DECRYPT_MODE, k, GCMParameterSpec(128, blob.copyOfRange(0, 12)))
-            c.updateAAD(AAD.toByteArray(Charsets.UTF_8))
-            c.doFinal(blob.copyOfRange(12, blob.size))
+            synchronized(this) {
+                val c = Cipher.getInstance("AES/GCM/NoPadding")
+                c.init(Cipher.DECRYPT_MODE, k, GCMParameterSpec(128, blob.copyOfRange(0, 12)))
+                c.updateAAD(AAD.toByteArray(Charsets.UTF_8))
+                c.doFinal(blob.copyOfRange(12, blob.size))
+            }
         } catch (_: Exception) {
+            keyRef = null
             null
         }
     }

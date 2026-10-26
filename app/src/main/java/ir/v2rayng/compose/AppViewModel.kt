@@ -111,10 +111,26 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun effFlagStart(): Boolean = effFlag("flag_start", _settings.value.flagOnStart)
 
     private var connectJob: Job? = null
-    private var trafficJob: Job? = null
     private var saveJob: Job? = null
 
+    /** Probes the tunnel after CONNECTED; cancelled the moment the tunnel is gone, otherwise a
+     *  slow probe can mark the idle app as "connection failed" minutes later. */
+    private var watchdogJob: Job? = null
+
+    /** True only while this session's tunnel is still up and believed connected. */
+    private fun stillUp(): Boolean =
+        _state.value.vpnState == VpnState.CONNECTED &&
+            ir.v2rayng.compose.core.XrayVpnService.tunnelUp &&
+            ir.v2rayng.compose.core.XrayBridge.status.value.state == ir.v2rayng.compose.core.RealState.CONNECTED
+
     init {
+        // a bridge state outlives the tunnel that set it: with no tunnel held by this process the
+        // app must open idle, not red from the last failed attempt
+        if (!ir.v2rayng.compose.core.XrayVpnService.tunnelUp &&
+            ir.v2rayng.compose.core.XrayBridge.status.value.state != ir.v2rayng.compose.core.RealState.IDLE
+        ) {
+            ir.v2rayng.compose.core.XrayBridge.setState(ir.v2rayng.compose.core.RealState.IDLE)
+        }
         try {
             val pkg = AppCtx.app.packageManager.getPackageInfo(AppCtx.app.packageName, 0)
             log("INFO", "build " + (pkg.versionName ?: "?"))
@@ -188,7 +204,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                 log("INFO", S.LOG_CONNECTED)
                                 Remote.queueAck("event", name = "connect")
                                 // tunnel watchdog: only trust CONNECTED when real internet passes through it
-                                viewModelScope.launch {
+                                watchdogJob?.cancel()
+                                watchdogJob = viewModelScope.launch {
                                     delay(2500L)
                                     var ok = false
                                     var attempt = 0
@@ -200,9 +217,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                     if (!ok) {
                                         // second, independent anchor avoids false alarms on a slow handshake
                                         val ok2 = probeViaTunnel("https://cp.cloudflare.com/generate_204")
-                                        if (!ok2) {
+                                        if (!ok2 && stillUp()) {
                                             ir.v2rayng.compose.core.XrayBridge.setState(ir.v2rayng.compose.core.RealState.BROKEN, "Tunnel probe failed")
                                             log("ERROR", "Failed to connect to server")
+                                        } else if (!ok2) {
+                                            log("INFO", S.LOG_DISCONNECTED)
                                         } else {
                                             log("WARN", "Tunnel slow but OK")
                                         }
@@ -210,11 +229,15 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                 }
                             }
                             ir.v2rayng.compose.core.RealState.BROKEN -> {
+                                watchdogJob?.cancel()
                                 Remote.queueAck("event", name = "disconnect")
                                 persistServers()
                                 log("ERROR", "${S.LOG_FAILED}${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
                             }
                             ir.v2rayng.compose.core.RealState.IDLE -> {
+                                // a probe from a session that already ended must not paint the
+                                // idle app red
+                                watchdogJob?.cancel()
                                 if (lastRealState == ir.v2rayng.compose.core.RealState.CONNECTED) {
                                     Remote.queueAck("event", name = "disconnect")
                                 }
@@ -921,25 +944,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed.copy(name = target.name.ifBlank { parsed.name }), target.link)
             return
         }
-        put { s -> s.copy(vpnState = VpnState.CONNECTING) }
-        log("INFO", S.LOG_CONNECTING.format(target.name))
-        connectJob?.cancel()
-        connectJob = viewModelScope.launch {
-            delay(800L + Random.nextLong(900))
-            if (_state.value.vpnState == VpnState.CONNECTING) {
-                if (Random.nextInt(7) == 0) {
-                    put { s -> s.copy(vpnState = VpnState.BROKEN) }
-                    log("ERROR", S.LOG_FAILED)
-                } else {
-                    put { s -> s.copy(vpnState = VpnState.CONNECTED) }
-                    log("INFO", S.LOG_CONNECTED)
-                    startTraffic()
-                    if (_settings.value.autoFlag && target.country.isNotBlank()) {
-                        applyFlag(target.country)
-                    }
-                }
-            }
-        }
+        // No config on this row: there is nothing to connect to, so say that instead of pretending.
+        // The old simulation failed roughly one attempt in seven and the user saw "connection
+        // failed" red status without ever having been connected.
+        log("ERROR", "No config for " + target.name)
+        infoToast("این ردیف لینک کانفیگ ندارد")
     }
 
     private fun appCtx(): android.content.Context = AppCtx.app
@@ -948,31 +957,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         ir.v2rayng.compose.core.XrayVpnService.stop(appCtx())
     }
 
-    private fun startTraffic() {
-        trafficJob?.cancel()
-        trafficJob = viewModelScope.launch {
-            while (true) {
-                delay(700)
-                val up = Random.nextInt(2, 81) * 1024.0
-                val down = up * (1.2 + Random.nextDouble(0.0, 4.8))
-                put { s ->
-                    s.copy(
-                        traffic = s.traffic.copy(
-                            up = s.traffic.up + (up * 0.7).toLong(),
-                            down = s.traffic.down + (down * 0.7).toLong(),
-                            upSpeed = up,
-                            downSpeed = down,
-                        )
-                    )
-                }
-            }
-        }
-    }
-
     private fun disconnect() {
         val target = _state.value.selected
         connectJob?.cancel()
-        trafficJob?.cancel()
+        watchdogJob?.cancel()
         if (target.link != null) {
             ir.v2rayng.compose.core.XrayVpnService.stop(appCtx())
         }
@@ -1399,7 +1387,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 }
             } else {
                 connectJob?.cancel()
-                trafficJob?.cancel()
                 XrayVpnServiceStop()
                 put { s -> s.copy(vpnState = VpnState.IDLE) }
                 if (_settings.value.autoFlag) {

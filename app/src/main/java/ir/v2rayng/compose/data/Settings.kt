@@ -125,11 +125,20 @@ class SettingsStore(context: Context) {
         @Volatile
         private var blobJson: String? = null
 
+        /** Set when a stored blob exists but cannot be opened this session - nothing may be
+         *  written over it, or the real settings would be lost permanently. */
+        @Volatile
+        private var blobUnreadable = false
+
+        /** Same rule for the server list: a stored value that will not open must not be replaced. */
+        @Volatile
+        private var serversUnreadable = false
+
         /** Never blocks: null until someone has actually loaded the settings once. */
         fun peek(): Settings? = cache
     }
 
-    fun load(): Settings = cache ?: readBlob().also { cache = it; mirror(it) }
+    fun load(): Settings = cache ?: readBlob().also { cache = it; if (!blobUnreadable) mirror(it) }
 
     /** The one value needed before the first frame. Reading it through SecurePrefs would cost a
      *  StrongBox unseal inside onCreate, which is exactly what made the app start slowly. */
@@ -164,11 +173,17 @@ class SettingsStore(context: Context) {
     private fun blobRaw(): String? = blobJson ?: SecurePrefs.get(BLOB_KEY, ctx).also { blobJson = it }
 
     private fun readBlob(): Settings {
-        blobRaw()?.takeIf { it.isNotBlank() }?.let { raw ->
+        val sealed = blobRaw()?.takeIf { it.isNotBlank() }
+        if (sealed != null) {
             try {
-                val j = JSONObject(raw)
+                val j = JSONObject(sealed)
                 return fieldsFrom { k -> j.optString(k, "").takeIf { v -> v.isNotEmpty() } }
             } catch (_: Exception) {
+                // The sealed value is there but this session cannot open it. Handing back defaults
+                // is survivable; writing those defaults over the blob would erase the user's
+                // settings for good, which is exactly the "everything reset" report.
+                blobUnreadable = true
+                return Settings(dark = darkFast())
             }
         }
         // first start after the per-key layout: read the old keys once, then fold them into the blob
@@ -248,6 +263,11 @@ class SettingsStore(context: Context) {
             if (!SecurePrefs.contains("servers", ctx)) return null
             val raw = SecurePrefs.getStringOrNull("servers", ctx) ?: return null
             if (raw.isBlank()) return null
+            if (!raw.trimStart().startsWith("[")) {
+                // sealed value this session cannot open - mark it so saveServers never writes over it
+                serversUnreadable = true
+                return null
+            }
             val out = ArrayList<ServerProfile>()
             val arr = JSONArray(raw)
             for (i in 0 until arr.length()) {
@@ -278,6 +298,7 @@ class SettingsStore(context: Context) {
     }
 
     fun saveServers(list: List<ServerProfile>, selectedId: String) {
+        if (serversUnreadable) return
         try {
             val arr = JSONArray()
             for (s in list) {
@@ -405,6 +426,7 @@ class SettingsStore(context: Context) {
         p("bubbleOn", s.bubbleOn)
         p("bubbleColor", s.bubbleColor)
         val raw = j.toString()
+        if (blobUnreadable) return // never overwrite a blob we could not open
         if (raw == blobJson) return
         blobJson = raw
         SecurePrefs.set(BLOB_KEY, raw, ctx)

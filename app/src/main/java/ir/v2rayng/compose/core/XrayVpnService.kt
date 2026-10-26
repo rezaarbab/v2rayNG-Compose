@@ -24,6 +24,11 @@ class XrayVpnService : VpnService() {
         private const val EXTRA_NAME = "name"
         var pendingLink: ProxyLink? = null
 
+        /** Whether a tunnel is actually held by this process. The bridge state can outlive the
+         *  service's last transition, so the UI needs this to refuse stale "connected"/"failed". */
+        @Volatile
+        var tunnelUp = false
+
         fun start(context: android.content.Context, link: ProxyLink, raw: String) {
             pendingLink = link
             context.startForegroundService(
@@ -266,6 +271,7 @@ class XrayVpnService : VpnService() {
             zeroStreak = 0
             controller = Libv2ray.newCoreController(callback)
             controller?.startLoop(buildXrayConfig(link), tunFd)
+            tunnelUp = true
             XrayBridge.addLog("INFO", "Core loop entered")
             mainHandler.removeCallbacks(statsRunnable)
             mainHandler.postDelayed(statsRunnable, 1200L)
@@ -276,6 +282,7 @@ class XrayVpnService : VpnService() {
     }
 
     private fun stopCore() {
+        tunnelUp = false
         mainHandler.removeCallbacks(statsRunnable)
         mainHandler.removeCallbacks(stateSetter)
         try {
