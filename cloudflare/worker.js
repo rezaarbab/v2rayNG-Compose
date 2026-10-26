@@ -415,6 +415,29 @@ async function adminApi(env, b) {
         await setSetting(env, skey, [...set].join(","));
         return okJson();
       }
+      case "dev.blockmany": {
+        // kind: device | ip | model — toggle a whole group in one read and one write, because one
+        // physical handset can be behind dozens of install rows
+        const kind = String(b.kind || "device");
+        const keyMap = { device: "blocked_devices", ip: "blocked_ips", model: "blocked_models" };
+        const skey = keyMap[kind];
+        if (!skey) return okJson({ ok: false, error: "bad kind" });
+        const vals = [...new Set(String(b.ids || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean))].slice(0, 400);
+        if (!vals.length) return okJson({ ok: false, error: "empty ids" });
+        const c2 = await getSettings(env, [skey]);
+        const set2 = new Set(String(c2[skey] || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean));
+        for (const v of vals) { if (b.on) set2.add(v); else set2.delete(v); }
+        await setSetting(env, skey, [...set2].join(","));
+        return okJson({ count: vals.length });
+      }
+      case "dev.delmany": {
+        const ids = [...new Set(String(b.ids || "").split(",").map((x) => x.trim()).filter(Boolean))].slice(0, 400);
+        if (!ids.length) return okJson({ ok: false, error: "empty ids" });
+        const ph = ids.map((_, i) => "?" + (i + 1)).join(",");
+        const q = env.DB.prepare("DELETE FROM devices WHERE id IN (" + ph + ")");
+        await q.bind(...ids).run();
+        return okJson({ deleted: ids.length });
+      }
       case "dev.blocklists": {
         const clean = (t) => [...new Set(String(t || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean))].slice(0, 500).join(",");
         await setSetting(env, "blocked_devices", clean(b.devices));
@@ -1246,7 +1269,7 @@ const ILBL=[['هویت و اپ',[['android_id','شناسه اندروید'],['si
 ['عادت کاربر',[['adb','ADB'],['dev_opts','گزینه توسعه‌دهنده']]]];
 function devInfoTable(i2){const used={};let h='';
  ILBL.forEach(function(sec){let rows='';
-  sec[1].forEach(function(f){const k=f[0];if(i2[k]===''||i2[k]==null)return;used[k]=1;let v=i2[k];
+  sec[1].forEach(function(f){const k=f[0];if(i2[k]===''||i2[k]==null||used[k])return;used[k]=1;let v=i2[k];
    if((k==='installed'||k==='inst_first')&&Number(v)>0){try{v=new Date(Number(v)).toLocaleString('fa-IR')}catch(e){v=String(v)}}
    rows+='<tr><td class=note style="white-space:nowrap">'+esc(f[1])+'</td><td style="direction:ltr;text-align:right;word-break:break-all">'+esc(String(v))+'</td></tr>'});
   if(rows)h+='<tr><td colspan=2 style="padding-top:9px;color:var(--amber);font-weight:800;font-size:12px">'+esc(sec[0])+'</td></tr>'+rows});
@@ -1262,36 +1285,63 @@ if($('blk_m')&&$('blk_m').value==='')$('blk_m').value=(window.BLOCKED.models||[]
 renderDevices()}
 async function saveBlockLists(){await api({action:'dev.blocklists',devices:$('blk_d').value,ips:$('blk_i').value,models:$('blk_m').value});loadDevices()}
 function devBlock(kind,id,on,name){api({action:'dev.block',kind:kind,id:id,on:on}).then(loadDevices)}
+let GMAP={};
+function groupOf(b){return GMAP[b.dataset.gk]}
+function devBlockMany(kind,ids,on){const v=(ids||[]).filter(Boolean).join(',');if(!v){toast('خالی',1);return}api({action:'dev.blockmany',kind:kind,ids:v,on:on}).then(loadDevices)}
+/** One physical handset is often stored as many install rows - merge them by ANDROID_ID. */
+function groupDevs(){const g={};DEVS.forEach(d=>{const i=infoOf(d.info);const aid=String(i.android_id||'').toLowerCase();
+ const key=aid||('id:'+String(d.id||''));let e=g[key];
+ if(!e){e={key:key,aid:aid,ids:[],ips:[],model:'',info:i,last:0,first:0,connected:0,vers:{},n:0};g[key]=e}
+ e.n++;e.ids.push(String(d.id||''));
+ const ls=Number(d.last_seen||0);if(ls>e.last)e.last=ls;
+ const fs=Number(d.first_seen||0);if(fs&&(!e.first||fs<e.first))e.first=fs;
+ if(d.connected)e.connected=1;
+ const ip=String(d.ip||'');if(ip&&e.ips.indexOf(ip)<0)e.ips.push(ip);
+ if(d.model&&!e.model)e.model=String(d.model);
+ if(d.app_ver)e.vers[String(d.app_ver)]=1;
+ if(Object.keys(i).length>Object.keys(e.info).length)e.info=i;});
+ return Object.values(g).sort((a,b)=>b.last-a.last)}
 function renderDevices(){const q=($('dev_q').value||'').toLowerCase();
-const list=DEVS.filter(d=>!q||((d.id||'')+' '+(d.model||'')).toLowerCase().includes(q));
-$('dev_cnt').textContent=list.length+' دستگاه';
+const all=groupDevs();
+const list=all.filter(e=>!q||((e.model||'')+' '+e.ids.join(' ')+' '+e.aid+' '+e.ips.join(' ')).toLowerCase().includes(q));
+$('dev_cnt').textContent=list.length+' دستگاه ('+DEVS.length+' رکورد)';
 const box=$('dev_list');
 if(!list.length){box.className='empty';box.textContent='دستگاهی ثبت نشده';return}
 box.className='';
 const B=window.BLOCKED||{devices:[],ips:[],models:[]};
-let html='<table><tr><th>دستگاه / اثر سخت‌افزاری</th><th>وضعیت</th><th>IP</th><th>آخرین دیده</th><th>مسدودسازی</th><th></th></tr>';
-list.forEach(d=>{
- const online=(Date.now()-Number(d.last_seen||0))<CUT;
- const last=d.last_seen?new Date(Number(d.last_seen)).toLocaleString('fa-IR'):'-';
- const dBlk=(B.devices||[]).includes(d.id), iBlk=(B.ips||[]).includes(d.ip||''), mBlk=(B.models||[]).includes((d.model||'').toLowerCase());
- const INF=infoOf(d.info);
- const chip=(on,t)=>'<span class="badge '+(on?'b-off':'b-on')+'">'+t+'</span>';
- html+='<tr><td style="direction:ltr;text-align:right">'+esc(d.model||d.id.slice(0,8))+
- '<br><span class=note style="direction:ltr;display:block">install '+esc(String(d.id||'').slice(0,8))+(devHw(INF)?' · '+esc(devHw(INF)):'')+'</span>'+
- '<div style="margin-top:4px">'+devVerdict(INF)+'</div></td>'+
- '<td><span class="badge '+(d.connected&&online?'b-on':online?'b-y':'b-off')+'">'+(d.connected&&online?'متصل':online?'آنلاین':'آفلاین')+'</span>'+
- (dBlk||iBlk||mBlk?'<br><span class="badge b-off">مسدود '+(dBlk?'دستگاه ':'')+(iBlk?'آیپی ':'')+(mBlk?'مدل':'')+'</span>':'')+'</td>'+
- '<td style=direction:ltr>'+esc(d.ip||'-')+'</td><td>'+last+'</td>'+
- '<td><button class="gray sm" data-k=device data-id="'+esc(d.id)+'" data-on='+(dBlk?'0':'1')+'>'+(dBlk?'آزاد':'مسدود')+' دستگاه</button> '+
- '<button class="gray sm" data-k=ip data-id="'+esc(d.ip||'')+'" data-on='+(iBlk?'0':'1')+'>'+(iBlk?'آزاد':'مسدود')+' آیپی</button> '+
- '<button class="gray sm" data-k=model data-id="'+esc(d.model||'')+'" data-on='+(mBlk?'0':'1')+'>'+(mBlk?'آزاد':'مسدود')+' مدل</button></td>'+
- '<td><button class="red sm" data-del="'+esc(d.id)+'">حذف</button> '+
- '<button class="gray sm" data-info="'+esc(JSON.stringify(infoOf(d.info)))+'">ℹ</button></td></tr>';
+GMAP={};
+let html='<table><tr><th>دستگاه / اثر سخت‌افزاری</th><th>وضعیت</th><th>IP ها</th><th>آخرین دیده</th><th>مسدودسازی</th><th></th></tr>';
+list.forEach((e,gi)=>{
+ GMAP[gi]=e;
+ const online=(Date.now()-e.last)<CUT;
+ const last=e.last?new Date(e.last).toLocaleString('fa-IR'):'-';
+ const blkDev=e.ids.some((id)=>(B.devices||[]).includes(id))||!!(e.aid&&(B.devices||[]).includes(e.aid));
+ const allIpd=e.ips.length>0&&e.ips.every((ip)=>(B.ips||[]).includes(ip));
+ const mBlk=(B.models||[]).includes((e.model||'').toLowerCase());
+ const ver=Object.keys(e.vers).join('/');
+ html+='<tr><td style="direction:ltr;text-align:right">'+esc(e.model||e.ids[0].slice(0,8))+
+ '<br><span class=note style="direction:ltr;display:block">'+(e.aid?'aid '+esc(e.aid.slice(0,12)):'install '+esc(e.ids[0].slice(0,10)))+
+ (e.n>1?' · '+e.n+' رکورد':'')+(ver?' · v'+esc(ver):'')+(devHw(e.info)?' · '+esc(devHw(e.info)):'')+'</span>'+
+ '<div style="margin-top:4px">'+devVerdict(e.info)+'</div></td>'+
+ '<td><span class="badge '+(e.connected&&online?'b-on':online?'b-y':'b-off')+'">'+(e.connected&&online?'متصل':online?'آنلاین':'آفلاین')+'</span>'+
+ (blkDev||mBlk?'<br><span class="badge b-off">مسدود '+(blkDev?'دستگاه ':'')+(mBlk?'مدل':'')+'</span>':'')+'</td>'+
+ '<td style="direction:ltr;text-align:right">'+(e.ips.length?e.ips.map(ip=>{
+   const ib=(B.ips||[]).includes(ip);
+   return '<button class="'+(ib?'red':'gray')+' sm" data-k=ip data-id="'+esc(ip)+'" data-on='+(ib?'0':'1')+' style="margin:2px 0;direction:ltr">'+esc(ip)+(ib?' (مسدود)':'')+'</button>'}).join('<br>'):'-')+'</td>'+
+ '<td>'+last+'</td>'+
+ '<td><button class="gray sm" data-g=device data-gk='+gi+' data-on='+(blkDev?'0':'1')+'>'+(blkDev?'آزاد':'مسدود')+' دستگاه'+(e.n>1?' ('+e.n+')':'')+'</button> '+
+ '<button class="gray sm" data-g=ip data-gk='+gi+' data-on='+(allIpd?'0':'1')+'>'+(e.ips.length?(allIpd?'آزاد همه IP':'مسدود همه IP ('+e.ips.length+')'):'بدون IP')+'</button> '+
+ '<button class="gray sm" data-k=model data-id="'+esc(e.model||'')+'" data-on='+(mBlk?'0':'1')+'>'+(mBlk?'آزاد':'مسدود')+' مدل</button></td>'+
+ '<td><button class="red sm" data-delg data-gk='+gi+'>حذف ('+e.n+')</button> '+
+ '<button class="gray sm" data-info="'+esc(JSON.stringify(e.info))+'">ℹ</button></td></tr>';
 });
 html+='</table>';
 box.innerHTML=html;
 box.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>{if(!b.dataset.id){toast('خالی',1);return}devBlock(b.dataset.k,b.dataset.id,b.dataset.on==='1')});
-box.querySelectorAll('button[data-del]').forEach(b=>b.onclick=()=>{if(confirm('این دستگاه از لیست حذف شود؟'))api({action:'dev.del',id:b.dataset.del}).then(loadDevices)});
+box.querySelectorAll('button[data-g=device]').forEach(b=>b.onclick=()=>{const g=groupOf(b);if(!g)return;devBlockMany('device',g.ids.concat(g.aid?[g.aid]:[]),b.dataset.on==='1')});
+box.querySelectorAll('button[data-g=ip]').forEach(b=>b.onclick=()=>{const g=groupOf(b);if(!g||!g.ips.length)return;devBlockMany('ip',g.ips,b.dataset.on==='1')});
+box.querySelectorAll('button[data-delg]').forEach(b=>b.onclick=()=>{const g=groupOf(b);if(!g)return;
+ if(!confirm((g.n)+' رکورد این دستگاه حذف شود؟'))return;api({action:'dev.delmany',ids:g.ids.join(',')}).then(loadDevices)});
 box.querySelectorAll('button[data-info]').forEach(b=>b.onclick=()=>{
  const d2=b.getAttribute('data-info')||'{}';let i2={};try{i2=JSON.parse(d2)}catch(e){}
  i2=infoOf(i2);

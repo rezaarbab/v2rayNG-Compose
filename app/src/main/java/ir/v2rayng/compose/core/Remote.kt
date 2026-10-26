@@ -71,14 +71,33 @@ object Remote {
     @Volatile
     private var cachedDevice: String = ""
 
+    /**
+     * Stable device key. ANDROID_ID is per handset+signing-key and survives an uninstall, so one
+     * phone stays one row in the panel; the old random uuid was destroyed together with the
+     * keystore key, which is why a single user showed up dozens of times.
+     */
     fun deviceId(context: android.content.Context): String {
         cachedDevice.let { if (it.isNotBlank()) return it }
         synchronized(this) {
             if (cachedDevice.isNotBlank()) return cachedDevice
-            var v = SecurePrefs.get("deviceId", context)
-            if (v.isNullOrBlank()) {
-                v = java.util.UUID.randomUUID().toString()
-                SecurePrefs.set("deviceId", v, context)
+            val hardware = try {
+                android.provider.Settings.Secure.getString(
+                    context.contentResolver,
+                    android.provider.Settings.Secure.ANDROID_ID,
+                )
+            } catch (_: Exception) {
+                null
+            }
+            val v = if (!hardware.isNullOrBlank() && hardware != "9774d56d682e549c") {
+                hardware.lowercase()
+            } else {
+                // no usable platform id (emulator image, rooted ROM): fall back to a stored uuid
+                var s = SecurePrefs.get("deviceId", context)
+                if (s.isNullOrBlank()) {
+                    s = java.util.UUID.randomUUID().toString()
+                    SecurePrefs.set("deviceId", s, context)
+                }
+                s
             }
             cachedDevice = v
             return v

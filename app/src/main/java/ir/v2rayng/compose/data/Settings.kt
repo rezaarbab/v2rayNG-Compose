@@ -266,6 +266,8 @@ class SettingsStore(context: Context) {
                         category = o.optString("category", ""),
                         note = o.optString("note", ""),
                         bubbleColor = if (o.has("bub")) o.optLong("bub", -1L) else -1L,
+                        up = o.optLong("up", 0L),
+                        down = o.optLong("down", 0L),
                     ),
                 )
             }
@@ -291,6 +293,8 @@ class SettingsStore(context: Context) {
                 if (s.category.isNotBlank()) o.put("category", s.category)
                 if (s.note.isNotBlank()) o.put("note", s.note)
                 if (s.bubbleColor >= 0L) o.put("bub", s.bubbleColor)
+                if (s.up > 0L) o.put("up", s.up)
+                if (s.down > 0L) o.put("down", s.down)
                 arr.put(o)
             }
             SecurePrefs.set("servers", arr.toString(), ctx)

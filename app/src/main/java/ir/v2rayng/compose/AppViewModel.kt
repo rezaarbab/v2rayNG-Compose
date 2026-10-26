@@ -65,6 +65,16 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     /** Set by the first IO load, and by any user edit that happens before it finishes. */
     @Volatile
     private var userEdited = false
+
+    /** Set only by a deliberate list change (import / delete / pin), so a background write from
+     *  the tunnel never makes the loader throw away the stored servers. */
+    @Volatile
+    private var serversTouched = false
+
+    /** Lifetime totals of the selected server before this tunnel session started: the core
+     *  counters begin at zero again, but the row must show what the server has really carried. */
+    private var trafficBaseUp = 0L
+    private var trafficBaseDown = 0L
     val settings: StateFlow<Settings> = _settings.asStateFlow()
 
     /** admin-driven behavior flags - MUST be before init (Kotlin field order) */
@@ -125,18 +135,20 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             val sel = store.loadSelectedId()
             val base = store.loadRemoteBase()
             if (userEdited) {
-                log("WARN", "Stored data arrived after an edit - keeping what is on screen")
-            } else {
-                if (saved != null) {
-                    _state.update { st ->
-                        st.copy(
-                            servers = saved,
-                            selectedId = if (saved.any { it.id == sel }) sel else saved.first().id,
-                        )
-                    }
-                }
-                Remote.BASE = base
+                log("WARN", "Settings changed before the stored ones arrived - keeping what is on screen")
             }
+            // A stored server list and the admin URL are data, not an edit. A running tunnel writes
+            // server state (flag, traffic) while this read is still in flight, and treating that as
+            // an edit is what made the whole app look reset when it was reopened.
+            if (saved != null && !serversTouched) {
+                _state.update { st ->
+                    st.copy(
+                        servers = saved,
+                        selectedId = if (saved.any { it.id == sel }) sel else saved.first().id,
+                    )
+                }
+            }
+            Remote.BASE = base
             loadRemoteState()
             log("INFO", "startup: stored data in " + (android.os.SystemClock.elapsedRealtime() - tLoad0) + "ms")
             if (_state.value.servers.isNotEmpty() && effPingStart()) {
@@ -154,8 +166,24 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 if (real || st.state != ir.v2rayng.compose.core.RealState.IDLE) {
                     if (st.state != lastRealState) {
                         lastRealState = st.state
+                        if (st.state == ir.v2rayng.compose.core.RealState.IDLE ||
+                            st.state == ir.v2rayng.compose.core.RealState.BROKEN
+                        ) {
+                            // stopCore clears the counters, so fold the session that just ended into
+                            // the base instead of letting the row fall back to yesterday's total
+                            val srv = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
+                            if (srv != null && (srv.up > 0L || srv.down > 0L) && st.up == 0L && st.down == 0L) {
+                                trafficBaseUp = srv.up
+                                trafficBaseDown = srv.down
+                            }
+                        }
                         when (st.state) {
-                            ir.v2rayng.compose.core.RealState.CONNECTING -> log("INFO", "Core connecting${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
+                            ir.v2rayng.compose.core.RealState.CONNECTING -> {
+                                val srv = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
+                                trafficBaseUp = srv?.up ?: 0L
+                                trafficBaseDown = srv?.down ?: 0L
+                                log("INFO", "Core connecting${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
+                            }
                             ir.v2rayng.compose.core.RealState.CONNECTED -> {
                                 log("INFO", S.LOG_CONNECTED)
                                 Remote.queueAck("event", name = "connect")
@@ -183,12 +211,16 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             }
                             ir.v2rayng.compose.core.RealState.BROKEN -> {
                                 Remote.queueAck("event", name = "disconnect")
+                                persistServers()
                                 log("ERROR", "${S.LOG_FAILED}${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
                             }
                             ir.v2rayng.compose.core.RealState.IDLE -> {
                                 if (lastRealState == ir.v2rayng.compose.core.RealState.CONNECTED) {
                                     Remote.queueAck("event", name = "disconnect")
                                 }
+                                // the core counters go back to zero with the tunnel: store the
+                                // lifetime totals of this session before that happens
+                                persistServers()
                                 log("INFO", S.LOG_DISCONNECTED)
                             }
                         }
@@ -247,7 +279,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                 s.traffic.copy(upSpeed = 0.0, downSpeed = 0.0)
                             },
                             servers = s.servers.map { srv ->
-                                if (srv.id == targetId) srv.copy(up = st.up, down = st.down) else srv
+                                if (srv.id == targetId) {
+                                    srv.copy(up = trafficBaseUp + st.up, down = trafficBaseDown + st.down)
+                                } else srv
                             },
                         )
                     }
@@ -292,14 +326,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     }
 
     private fun persistServers() {
-        userEdited = true
         Persist.write {
             store.saveServers(_state.value.servers, _state.value.selectedId)
         }
     }
 
     private fun persistSelectedId(id: String) {
-        userEdited = true
         Persist.write { store.saveSelectedId(id) }
     }
 
@@ -508,6 +540,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     /** Merge the admin-managed server list; per-remote-id user data (stats, pin, sticker) is preserved. */
     private fun mergeRemoteServers(list: List<Remote.ServerEntry>) {
+        if (list.isEmpty() && _state.value.servers.any { it.id.startsWith("rem-") }) {
+            // an empty answer must never blank the list the user is looking at
+            log("WARN", "Admin list came back empty - keeping the current servers")
+            return
+        }
         val knownBefore = _state.value.servers.filter { it.id.startsWith("rem-") }.map { it.id }.toSet()
         put { s ->
             val kept = s.servers.filter { !it.id.startsWith("rem-") }
@@ -1262,6 +1299,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             log("ERROR", "Link not recognized (vless / vmess / trojan / ss)")
             return
         }
+        serversTouched = true
         // server names are admin-generated - the name inside the config (#NAME) is never used
         val shownName = "srv-${_state.value.servers.size + 1}"
         val newId = "rv-${_state.value.servers.size}-${Random.nextInt(999)}"
@@ -1281,6 +1319,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     }
 
     fun resetTraffic() {
+        trafficBaseUp = 0L
+        trafficBaseDown = 0L
         put { s ->
             s.copy(
                 traffic = s.traffic.copy(up = 0, down = 0, upSpeed = 0.0, downSpeed = 0.0),
@@ -1288,16 +1328,19 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             )
         }
         ir.v2rayng.compose.core.XrayBridge.requestCounterReset()
+        persistServers()
         log("INFO", "Traffic counters reset")
     }
 
     fun togglePin(id: String) {
+        serversTouched = true
         put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(pinned = !it.pinned) else it }) }
         persistServers()
     }
 
     fun deleteServer(id: String) {
         val gone = _state.value.servers.firstOrNull { it.id == id } ?: return
+        serversTouched = true
         put { s -> s.copy(servers = s.servers.filter { it.id != id }) }
         if (_state.value.selectedId == id) _state.value.servers.firstOrNull()?.let { select(it.id) }
         persistServers()
@@ -1308,6 +1351,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun deleteUnpingable(): Int {
         val dead = _state.value.servers.filter { it.ping == null && !it.pingErr.isNullOrBlank() }
         if (dead.isEmpty()) return 0
+        serversTouched = true
         val ids = dead.map { it.id }.toSet()
         put { s -> s.copy(servers = s.servers.filterNot { it.id in ids }) }
         if (_state.value.selectedId in ids) _state.value.servers.firstOrNull()?.let { select(it.id) }
