@@ -23,10 +23,29 @@ jobs:
       - name: Restore or create the signing keystore
         env:
           KS_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          KS_KEYPASS: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
           if [ -n "$KS_B64" ]; then
-            printf %s "$KS_B64" | base64 -d > ci-release.jks
-            echo "keystore restored from the repository secret - same certificate as the last build"
+            if [ -z "$KS_PASS" ]; then
+              echo "::error::RELEASE_KEYSTORE_B64 is set but RELEASE_STORE_PASSWORD is not, so Gradle tries the fallback password and packaging dies with 'keystore password was incorrect'. Add the password you gave keytool -storepass as a secret."
+              exit 1
+            fi
+            printf %s "$KS_B64" | tr -d '\r\n' | base64 -d > ci-release.jks
+            if [ ! -s ci-release.jks ]; then
+              echo "::error::RELEASE_KEYSTORE_B64 did not decode to anything. Produce it with: base64 -w 0 blob-release.jks (certutil PEM output is not accepted)."
+              exit 1
+            fi
+            if ! keytool -list -keystore ci-release.jks -storepass "$KS_PASS" >/dev/null 2>&1; then
+              echo "::error::the restored keystore cannot be opened with RELEASE_STORE_PASSWORD: wrong password secret, or the secret is not the raw .jks file."
+              ls -l ci-release.jks
+              exit 1
+            fi
+            if [ -n "$KS_KEYPASS" ] && [ "$KS_KEYPASS" != "$KS_PASS" ]; then
+              echo "::warning::RELEASE_KEY_PASSWORD differs from RELEASE_STORE_PASSWORD. keytool writes PKCS12 by default, where the key lives under the store password - set both secrets to the same value."
+            fi
+            echo "keystore opened with the secret password - certificate:"
+            keytool -list -v -keystore ci-release.jks -storepass "$KS_PASS" | sed -n '1,10p'
           else
             keytool -genkeypair -v -keystore ci-release.jks -alias blob -keyalg RSA -keysize 2048 -validity 7300 -storepass blob-tmp-2026 -keypass blob-tmp-2026 -dname "CN=Blob, O=Blob, C=IR"
             echo "::warning::RELEASE_KEYSTORE_B64 is not set, so this APK is signed with a throwaway certificate. Installing over the previous one forces an uninstall, and Android then deletes the keystore key plus all app data: settings, server list and traffic look wiped on every build."
