@@ -96,7 +96,36 @@ object Remote {
         o.put("model", Build.MODEL)
         o.put("sdk", android.os.Build.VERSION.SDK_INT)
         o.put("os", android.os.Build.VERSION.RELEASE)
+        val pi = try {
+            AppCtx.app.packageManager.getPackageInfo(AppCtx.app.packageName, 0)
+        } catch (_: Exception) {
+            null
+        }
+        o.put("app_ver", pi?.versionName ?: "?")
+        // lastUpdateTime is when this APK was installed/updated - the closest thing to a build stamp
+        o.put("installed", pi?.lastUpdateTime ?: 0L)
+        o.put("sign", sigHash())
         return o
+    }
+
+    /** First 16 hex of the APK signing certificate - lets the admin see the build is ours. */
+    private fun sigHash(): String = try {
+        val pm = AppCtx.app.packageManager
+        val pkg = AppCtx.app.packageName
+        val sigs: Array<android.content.pm.Signature>? =
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                val info = pm.getPackageInfo(pkg, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+                val si = info.signingInfo
+                if (si == null) null else if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(pkg, android.content.pm.PackageManager.GET_SIGNATURES).signatures
+            }
+        val raw = sigs?.firstOrNull()?.toByteArray() ?: return ""
+        val d = java.security.MessageDigest.getInstance("SHA-256").digest(raw)
+        StringBuilder().also { sb -> d.take(8).forEach { b -> sb.append(String.format("%02x", b)) } }.toString()
+    } catch (_: Exception) {
+        ""
     }
 
     fun appVersion(): Long = try {
@@ -198,6 +227,12 @@ object Remote {
             return null
         }
         lastFail = null
+        if (!BlobSecure.lastPayloadSecure) {
+            // never apply admin/server data that was not opened with this session's key
+            lastFail = "rejected: payload did not arrive through the encrypted channel"
+            try { android.util.Log.d("BlobSec", "unencrypted payload rejected") } catch (_: Exception) {}
+            return null
+        }
         clearAckQueue() // worker consumed the acks (idempotent, safe to re-send on loss)
         if (secure.optBoolean("__nc", false)) {
             // worker says the payload is unchanged since the last sync; apply nothing

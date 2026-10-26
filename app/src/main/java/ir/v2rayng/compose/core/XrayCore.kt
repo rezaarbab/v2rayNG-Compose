@@ -58,7 +58,8 @@ object XrayBridge {
 
     fun addLog(level: String, msg: String) {
         if (msg.isBlank()) return
-        val line = ir.v2rayng.compose.data.LogLine(ir.v2rayng.compose.data.TimeKit.now(), level, msg.take(400))
+        val clean = LogSanitize.clean(msg)
+        val line = ir.v2rayng.compose.data.LogLine(ir.v2rayng.compose.data.TimeKit.now(), level, clean.take(400))
         _logs.value = (_logs.value + line).takeLast(60)
     }
 

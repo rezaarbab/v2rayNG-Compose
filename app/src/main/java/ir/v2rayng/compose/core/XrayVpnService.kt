@@ -230,7 +230,7 @@ class XrayVpnService : VpnService() {
     private fun startCore(link: ProxyLink) {
         try {
             Libv2ray.initCoreEnv(File(filesDir, "core").apply { mkdirs() }.absolutePath, "")
-                XrayBridge.addLog("INFO", "Starting core: ${link.address}:${link.port} (${link.kind}/${link.type}/${link.security})")
+                XrayBridge.addLog("INFO", "Starting core: " + link.name.ifBlank { "server" })
             XrayBridge.setState(RealState.CONNECTING)
             val builder = Builder()
                 .setSession("Blob")
@@ -290,6 +290,10 @@ class XrayVpnService : VpnService() {
             }
             tunFd = -1
         }
+        // the UI follows this: without it the app keeps showing "connected" after the
+        // notification's Disconnect stopped the tunnel
+        XrayBridge.setTraffic(0L, 0L, 0.0, 0.0)
+        XrayBridge.setState(RealState.IDLE)
     }
 
     override fun onRevoke() {

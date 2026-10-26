@@ -37,6 +37,11 @@ object BlobSecure {
     @Volatile
     var lastReason: String? = null
 
+    /** True only while the payload just returned came out of an AES-GCM/stego envelope that this
+     *  session's key opened. Server data that was not encrypted must never be applied. */
+    @Volatile
+    var lastPayloadSecure: Boolean = false
+
     fun fail(r: String): String {
         lastReason = r
         return r
@@ -139,6 +144,7 @@ object BlobSecure {
 
     fun syncSecure(base: String, body: JSONObject): JSONObject? {
         lastReason = null
+        lastPayloadSecure = false
         var session: Session? = load()
         var issued = false
         for (attempt in 0 until 2) {
@@ -168,7 +174,10 @@ object BlobSecure {
             when (val enc = resp.optString("enc")) {
                 "s", "c" -> {
                     val r = if (enc == "s") revealPayload(resp.getString("st"), sNow.kc) else openCy(resp.getString("cy"), sNow.kc)
-                    if (r != null) return r
+                    if (r != null) {
+                        lastPayloadSecure = true
+                        return r
+                    }
                     val why = BlobStego.lastWhy ?: "payload unreadable"
                     blog("enc=" + enc + " open failed: " + why)
                     // the token was accepted, so the worker holds keys this session cannot open -
@@ -181,7 +190,12 @@ object BlobSecure {
                     clear()
                     session = issueKeys(base, body) ?: return null
                 }
-                "n" -> return JSONObject().put("__nc", true)
+                "n" -> {
+                    // "unchanged" carries no server data, and it only arrives after this session's
+                    // one-shot token was accepted, so it counts as a secure answer
+                    lastPayloadSecure = true
+                    return JSONObject().put("__nc", true)
+                }
                 "h" -> {
                     // keys expired/rotated server-side - clear and issue fresh
                     blog("enc=h (expired/rotated) -> re-issuing")

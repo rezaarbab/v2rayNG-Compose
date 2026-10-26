@@ -305,17 +305,26 @@ private fun ServerRow(
                     )
                 }
                 if (profile.up > 0 || profile.down > 0) {
-                    // its own line with room: sharing a line made the two counters run into each other
-                    Text(
-                        text = "↑ " + ir.v2rayng.compose.data.TimeKit.human(profile.up) + "     ↓ " + ir.v2rayng.compose.data.TimeKit.human(profile.down),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        softWrap = false,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    // two real cells with a fixed gap: as one string the counters ran into each other
+                    Row(
                         modifier = Modifier.padding(top = 3.dp),
-                    )
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Text(
+                            text = "↑ " + ir.v2rayng.compose.data.TimeKit.human(profile.up),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                        Text(
+                            text = "↓ " + ir.v2rayng.compose.data.TimeKit.human(profile.down),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                        )
+                    }
                 }
             }
             PingChip(profile.ping, profile.pingErr)

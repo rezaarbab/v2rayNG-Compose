@@ -831,7 +831,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setHomeOrder(order: List<Int>) = setSettings { it.copy(homeOrder = packList(order)) }
 
     private fun log(level: String, msg: String) {
-        put { s -> s.copy(logs = (s.logs + LogLine(TimeKit.now(), level, msg)).takeLast(240)) }
+        // the log is shown on screen and pasted around: it must never carry an endpoint
+        val clean = ir.v2rayng.compose.core.LogSanitize.clean(msg)
+        put { s -> s.copy(logs = (s.logs + LogLine(TimeKit.now(), level, clean)).takeLast(240)) }
     }
 
     /** Once the first frame is drawn: what the user actually feels as "the app takes long to open". */

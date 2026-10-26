@@ -1218,6 +1218,8 @@ $('stats').innerHTML=
  '<div class="stat"><b>'+s.syncsToday+'</b><span>همگام‌سازی امروز</span></div>'+
  '<div class="stat"><b>'+s.activeServers+'</b><span>سرور فعال</span></div>'+
  '<div class="stat"><b class="r">'+(s.offServers||0)+'</b><span>سرور خاموش</span></div>'}
+/** The device info column is a JSON string in D1 - parse it once so the panel shows fields, not escaped text. */
+function infoOf(v){if(!v)return{};if(typeof v==='object')return v;try{const p=JSON.parse(v);return p&&typeof p==='object'?p:{}}catch(e){return{raw:String(v).slice(0,300)}}}
 async function loadDevices(){const j=await api({action:'devices.list'});DEVS=j.devices||[];CUT=j.cut||0;
 window.BLOCKED=j.blocked||{devices:[],ips:[],models:[]};
 if($('blk_d')&&$('blk_d').value==='')$('blk_d').value=(window.BLOCKED.devices||[]).join(',');
@@ -1247,7 +1249,7 @@ list.forEach(d=>{
  '<button class="gray sm" data-k=ip data-id="'+esc(d.ip||'')+'" data-on='+(iBlk?'0':'1')+'>'+(iBlk?'آزاد':'مسدود')+' آیپی</button> '+
  '<button class="gray sm" data-k=model data-id="'+esc(d.model||'')+'" data-on='+(mBlk?'0':'1')+'>'+(mBlk?'آزاد':'مسدود')+' مدل</button></td>'+
  '<td><button class="red sm" data-del="'+esc(d.id)+'">حذف</button> '+
- '<button class="gray sm" data-info="'+esc(JSON.stringify(d.info?d.info:{})||'{}')+'">ℹ</button></td></tr>';
+ '<button class="gray sm" data-info="'+esc(JSON.stringify(infoOf(d.info)))+'">ℹ</button></td></tr>';
 });
 html+='</table>';
 box.innerHTML=html;
@@ -1255,8 +1257,15 @@ box.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>{if(!b.dataset.i
 box.querySelectorAll('button[data-del]').forEach(b=>b.onclick=()=>{if(confirm('این دستگاه از لیست حذف شود؟'))api({action:'dev.del',id:b.dataset.del}).then(loadDevices)});
 box.querySelectorAll('button[data-info]').forEach(b=>b.onclick=()=>{
  const d2=b.getAttribute('data-info')||'{}';let i2={};try{i2=JSON.parse(d2)}catch(e){}
- const rows2=Object.keys(i2).map(k=>'<b>'+esc(k)+':</b> '+esc(i2[k])).join('<br>');
- const m2=supportModal||null;if(m2)m2(rows2||'هیچ اطلاعاتی نیست')})}
+ i2=infoOf(i2);
+ const LBL={brand:'برند',device:'دستگاه',model:'مدل',sdk:'SDK اندروید',os:'نسخه اندروید',app_ver:'نسخه اپ',installed:'زمان نصب',sign:'امضای APK (SHA-256)'};
+ const keys=Object.keys(i2).filter((k)=>i2[k]!==''&&i2[k]!=null);
+ let rows2='';
+ if(!keys.length){rows2='<tr><td class=note>هیچ اطلاعاتی ارسال نشده</td></tr>'}
+ keys.forEach((k)=>{let v=i2[k];
+  if(k==='installed'&&typeof v==='number'&&v>0){try{v=new Date(v).toLocaleString('fa-IR')}catch(e){v=String(v)}}
+  rows2+='<tr><td class=note style="white-space:nowrap">'+esc(LBL[k]||k)+'</td><td style="direction:ltr;text-align:right;word-break:break-all">'+esc(String(v))+'</td></tr>';});
+ const m2=supportModal||null;if(m2)m2('<table>'+rows2+'</table>')})}
 
 /* ---- boot ---- */
 /* password on EVERY visit - nothing persisted; all panels load in parallel for speed */
