@@ -272,9 +272,9 @@ async function insEvent(env, device, type, ts, ip) {
 
 /* ============================ trap (canary) servers ============================
  * The admin's question is "somebody published my server list - who?". A canary answers it:
- * rows derived from a real config with one thing changed (credential, port, name, or host),
- * stored with owner = that device id and delivered ONLY to that device. Nothing about them
- * marks them as traps - same name pool, same hosts, ordinary ports - so a leaker cannot pick
+ * a row built from a real config with its credential swapped (and its port, or its host when a
+ * sink is configured), named from the same name pool, stored with owner = that device id and
+ * delivered ONLY to that device. Nothing about them marks them as traps, so a leaker cannot pick
  * them out of the list and strip them.
  * Attribution = match the pasted leaked list against the stored rows (whole link, credential,
  * or host+port+name). The links deliberately do not work; that is fine, they are only there to
@@ -333,23 +333,20 @@ function bl_endpoint(link) {
   return { host: seg.slice(0, c), port: Number(seg.slice(c + 1)) || 443 };
 }
 
-/** One trap row built from one real server row. */
+/** One trap row built from one real server row. Same shape, one thing changed:
+ *  credential always (when it is a recognisable one), host/port when the admin set a sink. */
 function bl_canaryLink(real, sinkHosts) {
   const link = String(real.link || "");
   if (!link || !link.includes("://")) return null;
   const ep = bl_endpoint(link);
   if (!ep) return null;
-  const kinds = ["cred", "cred", "port", "name"];
-  const kind = bl_pick(kinds);
-  let out = link;
-  if (kind === "cred") out = bl_mutate(link);
-  else if (kind === "port") {
-    const p = bl_pick(BL_PORTS);
-    out = link.replace(ep.host + ":" + ep.port, ep.host + ":" + p);
-  } else if (sinkHosts.length) {
-    out = link.replace(ep.host + ":" + ep.port, bl_pick(sinkHosts) + ":" + bl_pick(BL_PORTS));
-  }
-  if (out === link) out = bl_mutate(link);
+  const host = sinkHosts.length ? bl_pick(sinkHosts) : ep.host;
+  const port = sinkHosts.length ? bl_pick(BL_PORTS) : (Math.random() < 0.5 ? ep.port : bl_pick(BL_PORTS));
+  // split/join instead of replace: the host also sits in sni=/host= params and replace() with a
+  // string pattern only ever touches the first occurrence
+  let out = link.split(ep.host + ":" + ep.port).join(host + ":" + port);
+  out = out.split(ep.host).join(host);
+  out = bl_mutate(out);
   if (out === link) return null;
   // the fragment is the name the victim client shows - keep it in the same style as the list
   const name = (real.name || "srv") + (Math.random() < 0.5 ? " " + (2 + Math.floor(Math.random() * 7)) : "");
@@ -357,7 +354,7 @@ function bl_canaryLink(real, sinkHosts) {
   const base = hash >= 0 ? out.slice(0, hash) : out;
   out = base + "#" + encodeURIComponent(name);
   const ep2 = bl_endpoint(out) || ep;
-  return { link: out, name: name.slice(0, 64), address: ep2.host, port: ep2.port || 443, category: real.category || "", kind };
+  return { link: out, name: name.slice(0, 64), address: ep2.host, port: ep2.port || 443, category: real.category || "" };
 }
 
 /** Ensure the device owns `want` traps and hand them back in the same shape as listServers. */
@@ -1390,7 +1387,7 @@ function panelPage(env) {
 <button class="gray sm" onclick=loadCanary()>🔄 تازه‌سازی</button>
 <button class="red sm" onclick=cyDropAll()>پاک کردن همهٔ سرورهای تله</button>
 </div>
-<p class=note>سرور تله از روی یک کانفیگ واقعی ساخته میشود و فقط یک چیزش عوض میشود (کلید عبور، پورت یا میزبان) — اسمش از همان استخر اسم‌های واقعی برمی‌دارد، پس در لیست قابل تشخیص نیست. این سرورها <b>فقط به همان دستگاه</b> فرستاده میشوند و کار نمیکنند؛ هر کس لیستش را لو بدهد، با چسباندن لیست پایین اینجا همان شخص پیدا میشود.</p>
+<p class=note>سرور تله از یک کانفیگ واقعی ساخته میشود: کلید عبورش (uuid یا پسورد) عوض میشود و پورتش هم بعضی وقتا، یا میزبانش اگر کادر میزبان مخصوص را پر کرده باشی. اسمش از همان استخر اسم‌های واقعی برمی‌دارد، پس در لیست قابل تشخیص نیست و لو دهنده نمی‌تواندشان حذف کند. این سرورها <b>فقط به همان دستگاه</b> فرستاده میشوند و کار نمیکنند؛ هر کس لیستش را لو بدهد، با چسباندن متن پایین اینجا همان شخص پیدا میشود.</p>
 <div class=lbl>متن لو رفته (لینک‌ها، سابسکریپشن، پیام چت) را اینجا بچسبان</div>
 <textarea id=lk_text rows=5 placeholder="vless://...."></textarea>
 <button onclick=runLeak() style=margin-top:8px>🔎 بررسی نشتی</button>
