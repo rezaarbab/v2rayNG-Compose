@@ -119,13 +119,43 @@ object BlobSecure {
         return BlobB64.encode(ts + nonce + BlobStego.hmac(kt, tokMsg(device, ts, nonce)))
     }
 
+    /** What the last proof attempt looked like, so one log line says whether the keystore pair is
+     *  self-consistent here or whether the worker is reading something else. */
+    @Volatile
+    var lastProofNote: String = ""
+        private set
+
     /** Proof that this install owns its hardware key: the same message, signed instead of MACed.
      *  Sent only on /api/key, where the worker checks it against the public key stored for this
      *  device. null = the keystore refused to sign, so no session can be opened. */
     fun deviceProof(device: String): String? {
         val ts = tsBytes(nextTs())
         val nonce = newNonce()
-        val sig = BlobIdentity.sign(tokMsg(device, ts, nonce)) ?: return null
+        val msg = tokMsg(device, ts, nonce)
+        val sig = BlobIdentity.sign(msg) ?: return null
+        val pubDer = BlobB64.decode(BlobIdentity.publicKeyB64() ?: return null) ?: return null
+        // verify our own signature with the bytes we export as the public key: REJECTED here means
+        // this device's exported key is not the pair that signed (keystore/format), while ok here
+        // plus a refusal from the worker means the two sides read the encoding differently
+        val self: String = try {
+            val pk = java.security.KeyFactory.getInstance("EC").generatePublic(
+                java.security.spec.X509EncodedKeySpec(pubDer),
+            )
+            val v = java.security.Signature.getInstance("SHA256withECDSA")
+            v.initVerify(pk)
+            v.update(msg)
+            if (v.verify(sig)) "self-verify ok" else "self-verify REJECTED"
+        } catch (e: Exception) {
+            "self-verify error " + e.javaClass.simpleName
+        }
+        val md = try {
+            java.security.MessageDigest.getInstance("SHA-256").digest(msg).take(3).joinToString("") { String.format("%02x", it) }
+        } catch (_: Exception) {
+            "?"
+        }
+        lastProofNote = self + ", fp " + BlobIdentity.fingerprint() + ", msg " + md + " (" + msg.size + "B), pub " + pubDer.size + "B[" +
+            pubDer.take(4).joinToString("") { String.format("%02x", it) } + "], sig " + sig.size + "B"
+        blog("deviceProof: " + lastProofNote)
         return BlobB64.encode(ts + nonce + sig)
     }
 
@@ -134,14 +164,18 @@ object BlobSecure {
     private fun issueKeys(base: String, body: JSONObject): Session? {
         return try {
             val device = body.getString("device")
-            val pub = BlobIdentity.publicKeyB64() ?: run {
-                blog("issueKeys: this device has no keystore identity key")
-                fail("no device identity key (" + (BlobIdentity.note ?: "keystore unavailable") + ")")
-                return null
-            }
+            // proof FIRST: sign() replaces an unreadable keystore key and retries, and a key that
+            // was just replaced has a different public half - reading pub before that happened
+            // sends the dead key with a signature made by the new one, which the worker can only
+            // report as "signature does not match"
             val proof = deviceProof(device) ?: run {
                 blog("issueKeys: keystore signing failed")
                 fail("device identity signature failed (keystore)")
+                return null
+            }
+            val pub = BlobIdentity.publicKeyB64() ?: run {
+                blog("issueKeys: this device has no keystore identity key")
+                fail("no device identity key (" + (BlobIdentity.note ?: "keystore unavailable") + ")")
                 return null
             }
             val req = JSONObject()
@@ -168,8 +202,9 @@ object BlobSecure {
                 return null
             }
             if (resp.optInt("v", 0) < 2 || resp.optString("enc") != "k") {
-                blog("issueKeys: " + refused("session keys", r, resp))
-                fail(refused("session keys", r, resp))
+                val why = refused("session keys", r, resp) + (if (lastProofNote.isNotBlank()) " [" + lastProofNote + "]" else "")
+                blog("issueKeys: " + why)
+                fail(why)
                 return null
             }
             val kc = BlobB64.decode(resp.getString("kc")) ?: run { blog("issueKeys: bad b64 kc"); fail("session keys: invalid response (protocol)"); return null }

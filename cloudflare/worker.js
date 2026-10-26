@@ -2293,15 +2293,19 @@ async function bl_ecTokCheck(env, device, tok, pubB64) {
     try {
       key = await crypto.subtle.importKey("spki", der, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
     } catch (e) {
-      return { ok: false, why: "public key is not P-256 spki" };
+      return { ok: false, why: "public key is not P-256 spki (" + der.length + "B, head " + bl_hex(der.slice(0, 4)) + ")" };
     }
     let good = false;
     try {
       good = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, p.proof, p.msg);
     } catch (e) {
-      return { ok: false, why: "signature rejected by the platform" };
+      return { ok: false, why: "signature rejected by the platform (" + p.proof.length + "B, head " + bl_hex(p.proof.slice(0, 4)) + ")" };
     }
-    if (!good) return { ok: false, why: "signature does not match this device key" };
+    // the msg digest and the byte lengths are what separates "the two sides signed different
+    // bytes" from "the encoding is read differently" - compare them with the app's own log line
+    if (!good) {
+      return { ok: false, why: "signature does not match this device key (msg " + bl_hex((await bl_sha(p.msg))).slice(0, 6) + "/" + p.msg.length + "B, sig " + p.proof.length + "B head " + bl_hex(p.proof.slice(0, 2)) + ", pub " + der.length + "B head " + bl_hex(der.slice(0, 4)) + ")" };
+    }
     if (!(await bl_tokAdvance(env, device, p.ts))) return { ok: false, why: "replayed token" };
     return { ok: true, ts: p.ts };
   } catch (e) {
