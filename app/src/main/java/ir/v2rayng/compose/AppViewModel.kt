@@ -201,7 +201,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 pingServers(null, effFlagStart())
             }
             // remote admin backend (cloudflare worker - see cloudflare/worker.js)
-            syncNow()
             startRemoteLoop()
         }
         var lastRealState = ir.v2rayng.compose.core.RealState.IDLE
@@ -517,15 +516,17 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun remoteBase(): String = Remote.BASE
 
-    fun syncNow() {
+    /** announce=true only for an explicit user action - a background refresh must never pop
+     *  "Fetching settings…" over the list the user already has on screen. */
+    fun syncNow(announce: Boolean = true) {
         val dev = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
-        infoToast(S.SYNC_FETCHING)
+        if (announce) infoToast(S.SYNC_FETCHING)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val res = Remote.sync(dev, "sync", _state.value.vpnState == VpnState.CONNECTED)
                 if (res != null) {
                     applyRemote(res)
-                    infoToast(S.SYNC_OK)
+                    if (announce) infoToast(S.SYNC_OK)
                     log("INFO", "Sync OK - settings refreshed")
                 } else {
                     handleSyncFail()
@@ -637,19 +638,26 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private fun startRemoteLoop() {
         viewModelScope.launch(Dispatchers.IO) {
-            delay(4000L)
-            var first = true
+            // first sync right away, then every two minutes - and silent, because the user is
+            // already looking at everything that was stored on the device
+            try {
+                val dev0 = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
+                val r0 = Remote.sync(dev0, "sync", _state.value.vpnState == VpnState.CONNECTED)
+                if (r0 != null) applyRemote(r0) else log("WARN", "Sync failed - " + (Remote.lastFail ?: "unknown"))
+            } catch (e: Exception) {
+                log("WARN", "Sync failed - " + (e.javaClass.simpleName))
+            }
+            delay(120_000L)
             while (true) {
                 try {
                     val connected = _state.value.vpnState == VpnState.CONNECTED
                     val dev = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
-                    val res = Remote.sync(dev, if (first) "sync" else "heartbeat", connected)
+                    val res = Remote.sync(dev, "heartbeat", connected)
                     if (res != null) applyRemote(res)
                     else log("WARN", "Sync failed - " + (Remote.lastFail ?: "unknown"))
                     // no separate beat request - the sync body itself refreshes last_seen/connected
                 } catch (_: Exception) {
                 }
-                first = false
                 delay(120_000L)
             }
         }

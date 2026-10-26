@@ -119,6 +119,7 @@ class SettingsStore(context: Context) {
          *  about a minute after every restart. The whole object is now one sealed blob: one unseal. */
         private const val BLOB_KEY = "sec-all"
         private const val UI_PREFS = "v2ui"
+        private const val DEFAULT_REMOTE = "https://god-panel.lastofanarchy.workers.dev"
 
         @Volatile
         private var cache: Settings? = null
@@ -310,17 +311,51 @@ class SettingsStore(context: Context) {
                 arr.put(o)
             }
             SecurePrefs.set("servers", arr.toString(), ctx)
-            SecurePrefs.set("selectedId", selectedId, ctx)
+            saveSelectedId(selectedId)
         } catch (_: Exception) {
         }
     }
 
-    fun loadSelectedId(): String = SecurePrefs.getString("selectedId", "s1", ctx)
+    /** The selected row id and the admin URL are not secrets (an internal id, and a URL that is
+     *  already a compile-time default), and both are read on every cold start - so they live in the
+     *  plain prefs file. That takes two StrongBox unseals, roughly 450ms, off the entry path. */
+    fun loadSelectedId(): String {
+        val fast = uiPrefs().getString("sel", null)
+        if (!fast.isNullOrBlank()) return fast
+        val legacy = try { SecurePrefs.getString("selectedId", "", ctx) } catch (_: Exception) { "" }
+        if (legacy.isNotBlank()) setSelectedIdFast(legacy)
+        return legacy.ifBlank { "s1" }
+    }
 
-    fun loadRemoteBase(): String = SecurePrefs.getString("remoteBase", "https://god-panel.lastofanarchy.workers.dev", ctx)
+    fun saveSelectedId(id: String) = setSelectedIdFast(id)
 
-    fun saveRemoteBase(raw: String) {
-        SecurePrefs.set("remoteBase", raw, ctx)
+    fun loadRemoteBase(): String {
+        val fast = uiPrefs().getString("rbase", null)
+        if (!fast.isNullOrBlank()) return fast
+        val legacy = try { SecurePrefs.getString("remoteBase", "", ctx) } catch (_: Exception) { "" }
+        if (legacy.isNotBlank()) {
+            setSelectedBaseFast(legacy)
+            return legacy
+        }
+        return DEFAULT_REMOTE
+    }
+
+    fun saveRemoteBase(raw: String) = setSelectedBaseFast(raw.trim())
+
+    private fun uiPrefs() = ctx.getSharedPreferences(UI_PREFS, android.content.Context.MODE_PRIVATE)
+
+    private fun setSelectedIdFast(id: String) {
+        try {
+            uiPrefs().edit().putString("sel", id).apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun setSelectedBaseFast(v: String) {
+        try {
+            uiPrefs().edit().putString("rbase", v).apply()
+        } catch (_: Exception) {
+        }
     }
 
     fun loadRemote(): String = SecurePrefs.getString("remoteState", "", ctx)
@@ -333,10 +368,6 @@ class SettingsStore(context: Context) {
 
     fun saveCustom(raw: String) {
         SecurePrefs.set("customStickers", raw, ctx)
-    }
-
-    fun saveSelectedId(id: String) {
-        SecurePrefs.set("selectedId", id, ctx)
     }
 
     /** Plaintext copy of the three values the first frame's palette needs, so a cold start never
