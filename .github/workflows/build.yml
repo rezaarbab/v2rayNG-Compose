@@ -42,9 +42,25 @@ jobs:
               exit 1
             fi
             if [ -n "$KS_KEYPASS" ] && [ "$KS_KEYPASS" != "$KS_PASS" ]; then
-              echo "::warning::RELEASE_KEY_PASSWORD differs from RELEASE_STORE_PASSWORD. keytool writes PKCS12 by default, where the key lives under the store password - set both secrets to the same value."
+              echo "note: RELEASE_KEY_PASSWORD differs from RELEASE_STORE_PASSWORD - the private key entry is protected by its own password, so both are tried below"
             fi
-            echo "keystore opened with the secret password - certificate:"
+            # loading the keystore is not enough: Gradle also has to read the key, and a key
+            # protected by another password fails later with 'keystore password was incorrect'
+            KS_KEY="${KS_KEYPASS:-$KS_PASS}"
+            mkdir -p _signtest
+            printf 'Manifest-Version: 1.0\n\n' > _signtest/manifest.mf
+            jar cfm _signtest/t.jar _signtest/manifest.mf
+            if ! jarsigner -keystore ci-release.jks -storepass "$KS_PASS" -keypass "$KS_KEY" _signtest/t.jar blob >/dev/null 2>&1; then
+              if [ "$KS_KEY" != "$KS_PASS" ] && jarsigner -keystore ci-release.jks -storepass "$KS_PASS" -keypass "$KS_PASS" _signtest/t.jar blob >/dev/null 2>&1; then
+                echo "::error::the key 'blob' is protected by the STORE password, but RELEASE_KEY_PASSWORD holds something else. Set RELEASE_KEY_PASSWORD to the same value as RELEASE_STORE_PASSWORD (or delete it - the build then uses the store password)."
+              else
+                echo "::error::the keystore opens with RELEASE_STORE_PASSWORD but the private key 'blob' cannot be decrypted. Its key password is not what the build was given. Fix it once with: keytool -keypasswd -alias blob -keystore blob-release.jks -storepass <STORE_PASS> -keypass <OLD_KEY_PASS> -new <STORE_PASS>, then re-upload the base64. (This happens when the keystore was created with -storepass and -keypass set to different values.)"
+              fi
+              rm -rf _signtest
+              exit 1
+            fi
+            rm -rf _signtest
+            echo "keystore and key both readable - certificate:"
             keytool -list -v -keystore ci-release.jks -storepass "$KS_PASS" | sed -n '1,10p'
           else
             keytool -genkeypair -v -keystore ci-release.jks -alias blob -keyalg RSA -keysize 2048 -validity 7300 -storepass blob-tmp-2026 -keypass blob-tmp-2026 -dname "CN=Blob, O=Blob, C=IR"
