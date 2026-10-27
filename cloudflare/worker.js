@@ -127,6 +127,19 @@ async function appSync(env, request) {
   return new Response(JSON.stringify({ ok: true, v: 2, enc: "h" }), { headers: jsonHeaders() });
 }
 
+/** Why this handset is refused by the admin ("device" | "ip" | "model" | "" when it is not).
+ *  Used by BOTH the key issuance and the sync, because a block that only hides the app while
+ *  still delivering the server list is not a block - it is a lock on the front door with the
+ *  safe left open. */
+async function blockWhy(env, device, ip, model) {
+  const blk = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models"]);
+  const inList = (csv, v) => String(csv || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean).includes(String(v || "").toLowerCase());
+  if (inList(blk.blocked_devices, device)) return "device";
+  if (inList(blk.blocked_ips, ip)) return "ip";
+  if (inList(blk.blocked_models, model)) return "model";
+  return "";
+}
+
 /** Core device registration + admin payload. Used by the encrypted v2 sync only -
  *  ack receipts arrive inside the encrypted body (b.acks). */
 async function syncPayloadObj(env, request, b) {
@@ -183,26 +196,22 @@ async function syncPayloadObj(env, request, b) {
   const min = Number(cfg.min_version || 0);
   const latest = Number(cfg.latest_version || 0);
 
-  // admin block rules: by device-id / ip / device model
-  const blk = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models"]);
-  const inList = (csv, v) => String(csv || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean).includes(String(v || "").toLowerCase());
   const devId = String(b.device);
   const ipAddr = clientIp(request);
   const model = String(b.model || "");
-  let notEnabled = false;
-  let blockReason = "";
-  if (inList(blk.blocked_devices, devId)) { notEnabled = true; blockReason = "device"; }
-  else if (inList(blk.blocked_ips, ipAddr)) { notEnabled = true; blockReason = "ip"; }
-  else if (inList(blk.blocked_models, model)) { notEnabled = true; blockReason = "model"; }
+  // blocked - nothing about the admin's setup crosses the wire any more: no servers, no traps,
+  // no popup/notification/routing text, no delivered file. Just "you are blocked".
+  const blockReason = await blockWhy(env, devId, ipAddr, model);
+  if (blockReason) return { ok: true, now, enabled: false, blocked: blockReason, servers: [] };
 
   const shared = await listServers(env);
   // trap servers are generated per device and only ever appended to that device's payload, so a
   // leaked list can be matched back to the handset it came from
-  const traps = appEnabled && !notEnabled ? await canaryFor(env, devId, shared) : [];
+  const traps = appEnabled ? await canaryFor(env, devId, shared) : [];
   let out = {
     ok: true,
     now,
-    enabled: appEnabled && !notEnabled,
+    enabled: appEnabled,
     blocked: blockReason,
     servers: traps.length ? shared.concat(traps) : shared,
   };
@@ -2797,6 +2806,13 @@ async function blobKeyIssue(env, request) {
   if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
   const device = String(b.device).slice(0, 128);
   const ip = clientIp(request);
+  // a blocked handset is refused here already, so it never holds session keys and the encrypted
+  // channel cannot carry anything to it at all
+  const why0 = await blockWhy(env, device, ip, String(b.model || ""));
+  if (why0) {
+    await insEvent(env, device, "blocked-" + why0, Date.now(), ip);
+    return new Response(JSON.stringify({ ok: true, v: 2, enc: "x", why: "blocked by the admin (" + why0 + ")" }), { status: 403, headers: jsonHeaders() });
+  }
   let mode = "ec";
   let rotated = false;
   let derShape = "";
