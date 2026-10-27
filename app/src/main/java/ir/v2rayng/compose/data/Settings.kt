@@ -72,7 +72,7 @@ data class Settings(
     val routeFx: String = "",
     val antiFilter: Boolean = false,
     val antiFilterApps: String = "",
-    val homeOrder: String = "0,1,2,3,4",
+    val homeOrder: String = "0,1,2,3",
     val pingOnStart: Boolean = true,
     val autoPingNew: Boolean = true,
     val flagOnStart: Boolean = true,
@@ -86,6 +86,17 @@ fun parseList(s: String, def: List<Int>): List<Int> {
 }
 
 fun packList(l: List<Int>): String = l.joinToString(",")
+
+/**
+ * Sections in a fixed order, with anything unknown dropped and anything missing appended.
+ * "0,1,2,3,4" was once stored for a home that only has four blocks, and the layout dialog showed
+ * the fifth as an unnamed row - a list is only ever as long as the sections that exist.
+ */
+fun orderList(s: String, count: Int): List<Int> {
+    val kept = parseList(s, (0 until count).toList()).filter { it in 0 until count }.distinct()
+    val rest = (0 until count).toList().filter { it !in kept }
+    return kept + rest
+}
 
 fun parseLongList(s: String, def: List<Long>): List<Long> {
     return s.split(",").mapNotNull { it.trim().toLongOrNull() }.ifEmpty { def }
@@ -255,7 +266,7 @@ class SettingsStore(context: Context) {
             routeFx = t("routeFx", ""),
             antiFilter = b("antiFilter", false),
             antiFilterApps = t("antiFilterApps", ""),
-            homeOrder = t("homeOrder", "0,1,2,3,4"),
+            homeOrder = t("homeOrder", "0,1,2,3"),
             pingOnStart = b("pingOnStart", true),
             autoPingNew = b("autoPingNew", true),
             flagOnStart = b("flagOnStart", true),

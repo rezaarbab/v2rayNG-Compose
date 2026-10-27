@@ -282,6 +282,35 @@ async function insEvent(env, device, type, ts, ip) {
   } catch (e2) {}
 }
 
+/** Every place the trap pipeline can fail without saying anything, read back as facts:
+ *  switch, count, does the owner column exist, is there any server with a link to copy from,
+ *  how many traps exist and for how many devices, and the one sentence that explains the state. */
+async function canaryDiag(env) {
+  const d = { on: "0", want: 0, hasOwner: false, pool: 0, noLink: 0, traps: 0, trapDevs: 0, err: "", why: "" };
+  const cfg = await getSettings(env, ["canary_on", "canary_count"]);
+  d.on = cfg.canary_on === "1" ? "1" : "0";
+  d.want = Number(cfg.canary_count || 3);
+  try {
+    d.hasOwner = ((await env.DB.prepare("PRAGMA table_info(servers)").all()).results || []).some((c) => c.name === "owner");
+  } catch (e) { d.err = String((e && e.message) || e).slice(0, 90); }
+  if (d.hasOwner) {
+    try {
+      const one = async (sql) => Number((await env.DB.prepare(sql).first()).c);
+      d.pool = await one("SELECT COUNT(*) c FROM servers WHERE active=1 AND COALESCE(owner,'')='' AND COALESCE(link,'') LIKE '%://%'");
+      d.noLink = await one("SELECT COUNT(*) c FROM servers WHERE active=1 AND COALESCE(owner,'')='' AND COALESCE(link,'')=''");
+      d.traps = await one("SELECT COUNT(*) c FROM servers WHERE COALESCE(owner,'')<>'' AND active=1");
+      d.trapDevs = await one("SELECT COUNT(DISTINCT owner) c FROM servers WHERE COALESCE(owner,'')<>''");
+    } catch (e) { d.err = String((e && e.message) || e).slice(0, 90); }
+  }
+  d.why = d.on !== "1" ? "ارسال خاموش است"
+    : !d.hasOwner ? "جدول servers ستون owner را ندارد - یک بار dbfix را بزن"
+    : d.err ? "خطای دیتابیس: " + d.err
+    : d.pool === 0 ? "هیچ سرور فعالی لینک کانفیگ ندارد، پس چیزی برای کپی کردن وجود ندارد"
+    : d.traps === 0 ? "هنوز برای هیچ دستگاهی ساخته نشده - تله در همگام‌سازی بعدی همان دستگاه ساخته میشود (ساختن نشود یعنی درج در D1 خطا داده)"
+    : d.trapDevs + " دستگاه تله دارد";
+  return d;
+}
+
 /* ============================ trap (canary) servers ============================
  * The admin's question is "somebody published my server list - who?". A canary answers it:
  * a row built from a real config with its credential swapped (and its port, or its host when a
@@ -960,7 +989,21 @@ async function adminApi(env, b) {
           legacy: c.legacy_auth === "0" ? "0" : "1",
           trapTotal: tot,
           legacyClients: legacyC,
+          diag: await canaryDiag(env),
         });
+      }
+      case "canary.make": {
+        // force the pipeline for one device id and say what came out - the difference between
+        // "not yet generated" and "cannot be generated" is otherwise invisible from the panel
+        const ids = idList(b);
+        if (!ids.length) return okJson({ ok: false, error: "device id لازم است" });
+        const shared = await listServers(env);
+        const out = [];
+        for (const one of ids.slice(0, 5)) {
+          const made = await canaryFor(env, one, shared);
+          out.push({ device: one, traps: made.length, sample: (made[0] || {}).name || "", links: shared.filter((s) => s.link).length });
+        }
+        return okJson({ made: out, diag: await canaryDiag(env) });
       }
       case "canary.set": {
         await setSetting(env, "canary_on", b.on ? "1" : "0");
@@ -1420,8 +1463,10 @@ function panelPage(env) {
 <div class=toolbar style="margin-top:12px">
 <button onclick=saveCanary()>ذخیره</button>
 <button class="gray sm" onclick=loadCanary()>🔄 تازه‌سازی</button>
+<button class="gray sm" onclick=cyMake()>🔧 ساختن حالا برای ۵ دستگاه اخیر</button>
 <button class="red sm" onclick=cyDropAll()>پاک کردن همهٔ سرورهای تله</button>
 </div>
+<div id=cy_diag class=note style="margin-top:8px"></div>
 <p class=note>سرور تله از یک کانفیگ واقعی ساخته میشود: کلید عبورش (uuid یا پسورد) عوض میشود و پورتش هم بعضی وقتا، یا میزبانش اگر کادر میزبان مخصوص را پر کرده باشی. اسمش از همان استخر اسم‌های واقعی برمی‌دارد، پس در لیست قابل تشخیص نیست و لو دهنده نمی‌تواندشان حذف کند. این سرورها <b>فقط به همان دستگاه</b> فرستاده میشوند و کار نمیکنند؛ هر کس لیستش را لو بدهد، با چسباندن متن پایین اینجا همان شخص پیدا میشود.</p>
 <div class=lbl>متن لو رفته (لینک‌ها، سابسکریپشن، پیام چت) را اینجا بچسبان</div>
 <textarea id=lk_text rows=5 placeholder="vless://...."></textarea>
@@ -1805,10 +1850,20 @@ async function loadCanary(){const j=await api({action:'canary.state'});const c=j
  if($('cy_hosts'))$('cy_hosts').value=String(c.hosts||'');
  if($('lg_on'))$('lg_on').checked=String(j.legacy)!=='0';
  if($('cy_cnt'))$('cy_cnt').textContent=(Number(j.trapTotal)||0)+' سرور تله فعال · '+((j.legacyClients==null)?'?':j.legacyClients)+' دستگاه با اپ قدیمی';
+ const d=j.diag||{};
+ if($('cy_diag'))$('cy_diag').innerHTML='<b>وضعیت ساخت:</b> '+esc(d.why||'?')+
+  '<br><span class=note>روشن='+(d.on==='1'?'بله':'خیر')+' · تعداد خواسته='+(d.want||0)+' · ستون owner='+(d.hasOwner?'هست':'نیست')+' · سرور دارای لینک='+(d.pool||0)+' · سرور بی‌لینک='+(d.noLink||0)+
+  ' · تله‌ها='+(d.traps||0)+' برای '+(d.trapDevs||0)+' دستگاه</span>'+(d.err?'<br><span style="color:var(--red)">'+esc(d.err)+'</span>':'');
  if($('lk_out')&&!$('lk_out').innerHTML)$('lk_out').innerHTML='<span class=note>هنوز بررسی نشده</span>'}
 async function saveCanary(){await api({action:'canary.set',on:$('cy_on').checked,count:Number($('cy_count').value||0),
  hosts:$('cy_hosts').value,legacy:$('lg_on').checked});
  toast('ذخیره شد - سرورهای تله در همگام‌سازی بعدی هر دستگاه ساخته میشوند');loadCanary()}
+async function cyMake(){const ids=(DEVS||[]).slice(0,5).map(x=>String(x.id||'')).filter(Boolean);
+ if(!ids.length){toast('اول یک دستگاه باید همگام‌سازی کند',1);return}
+ const j=await api({action:'canary.make',ids:ids.join(',')});
+ if(!j||j.ok===false){toast((j&&j.error)||'خطا',1);return}
+ const m=(j.made||[]).map(x=>x.device.slice(0,8)+': '+x.traps+' (لینک‌دار '+x.links+')').join(' | ');
+ toast('ساخت: '+m);loadCanary()}
 async function cyDropAll(){if(!confirm('همهٔ سرورهای تله حذف شوند؟ هر دستگاه در همگام‌سازی بعدی مجموعهٔ تازه‌ای می‌گیرد.'))return;
  await api({action:'canary.drop',all:true});toast('پاک شد');loadCanary();loadDevices()}
 /** Paste whatever leaked and find the handset it came from. */
@@ -2280,6 +2335,58 @@ async function bl_tokenCheck(env, device, tok, hmacKey) {
   }
 }
 
+/** AndroidKeyStore's Signature class hands back DER; WebCrypto's ECDSA takes fixed 32+32 r||s.
+ *  Splitting the DER is what makes a real phone signature verifiable here at all - a length that
+ *  is not 64 is simply rejected by the platform and the failure looks like a bad signature.
+ *  Non-minimal INTEGER padding (which some keystores emit and DER readers tolerate) is stripped
+ *  on the way out. */
+function bl_derSplitRS(b) {
+  try {
+    if (!b || b.length < 8 || b[0] !== 0x30) return null;
+    let p = 2;
+    if (b[1] & 0x80) p = 2 + (b[1] & 0x7f); // long-form sequence length (never for P-256, but be safe)
+    if (b[p] !== 0x02) return null;
+    const rl = b[p + 1];
+    const r = b.slice(p + 2, p + 2 + rl);
+    p += 2 + rl;
+    if (b[p] !== 0x02) return null;
+    const sl = b[p + 1];
+    const s = b.slice(p + 2, p + 2 + sl);
+    const as32 = (x) => {
+      let v = x;
+      while (v.length > 1 && v[0] === 0) v = v.slice(1);
+      if (v.length > 32) return null;
+      const out = new Uint8Array(32);
+      out.set(v, 32 - v.length);
+      return out;
+    };
+    const rr = as32(r);
+    const ss = as32(s);
+    if (!rr || !ss) return null;
+    return { r: rr, s: ss };
+  } catch (e) {
+    return null;
+  }
+}
+
+/** WebCrypto's ECDSA takes r||s (fixed 32+32), AndroidKeyStore's Signature takes DER -
+ *  verifying the wrong shape is a silent false. Hand the platform every reading of these bytes. */
+function bl_ecSigForms(proof) {
+  const out = [];
+  const push = (b) => {
+    if (!out.some((o) => o.length === b.length && bl_eq(o, b))) out.push(b);
+  };
+  const rs = bl_derSplitRS(proof);
+  if (rs) {
+    const raw = new Uint8Array(64);
+    raw.set(rs.r, 0);
+    raw.set(rs.s, 32);
+    push(raw);
+  }
+  push(proof); // the bytes as they arrived, for a platform that wants the sender's own shape
+  return out;
+}
+
 /** The handset signed the one-shot message with the private half of `pubB64` (P-256, spki). */
 async function bl_ecTokCheck(env, device, tok, pubB64) {
   try {
@@ -2291,40 +2398,42 @@ async function bl_ecTokCheck(env, device, tok, pubB64) {
     if (!der || der.length < 40 || der.length > 200) return { ok: false, why: "bad public key" };
     let key;
     try {
-      key = await crypto.subtle.importKey("spki", der, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+      key = await crypto.subtle.importKey("spki", der, { name: "ECDSA", namedCurve: "P-256" }, true, ["verify"]);
     } catch (e) {
       return { ok: false, why: "public key is not P-256 spki (" + der.length + "B, head " + bl_hex(der.slice(0, 4)) + ")" };
     }
     let good = false;
-    try {
-      good = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, p.proof, p.msg);
-    } catch (e) {
-      return { ok: false, why: "signature rejected by the platform (" + p.proof.length + "B, head " + bl_hex(p.proof.slice(0, 4)) + ")" };
+    let shape = "";
+    const forms = bl_ecSigForms(p.proof);
+    for (let i = 0; i < forms.length; i++) {
+      try {
+        if (await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, forms[i], p.msg)) {
+          good = true;
+          shape = forms[i].length + "B#" + i;
+          break;
+        }
+      } catch (e) {
+        shape = "#" + i + " threw " + String((e && e.message) || e).slice(0, 18);
+      }
+    }
+    if (good) {
+      if (!(await bl_tokAdvance(env, device, p.ts))) return { ok: false, why: "replayed token" };
+      // recorded when the accepted reading is not the byte string that arrived (DER -> r||s)
+      return { ok: true, ts: p.ts, normalized: shape === p.proof.length + "B#0" ? "" : shape + " from " + p.proof.length + "B" };
     }
     // the msg digest and the byte lengths are what separates "the two sides signed different
     // bytes" from "the encoding is read differently" - compare them with the app's own log line
     if (!good) {
-      // digest of what this side received, plus a self-test with a key the platform generated
-      // itself: self-test ok  -> Cloudflare's ECDSA works, so the bytes or the device pair differ;
-      // self-test FAILS -> this worker cannot verify ECDSA at all and the scheme must change
-      let st = "?";
+      // digest of what this side received, kept so a refusal names the cause; the platform
+      // self-test that lived here proved ECDSA works on this worker and is now gone
       let reexport = "?";
       try {
         reexport = bl_hex((await bl_sha(new Uint8Array(await crypto.subtle.exportKey("spki", key))))).slice(0, 6);
       } catch (e) {}
-      try {
-        const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
-        const data = new TextEncoder().encode("selftest");
-        const s2 = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, kp.privateKey, data);
-        const k2 = await crypto.subtle.importKey("spki", await crypto.subtle.exportKey("spki", kp.publicKey), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
-        st = (await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, k2, s2, data)) ? "ok" : "FAILS";
-      } catch (e) {
-        st = "error " + String((e && e.message) || e).slice(0, 24);
-      }
       return {
         ok: false,
         why: "signature does not match (msg " + bl_hex((await bl_sha(p.msg))).slice(0, 6) + "/" + p.msg.length + "B, sig " + p.proof.length + "B#" + bl_hex((await bl_sha(p.proof))).slice(0, 6) +
-          ", pub " + der.length + "B#" + bl_hex((await bl_sha(der))).slice(0, 6) + "->reexport#" + reexport + ", worker-ecdsa-selftest " + st + ")",
+          ", pub " + der.length + "B#" + bl_hex((await bl_sha(der))).slice(0, 6) + "->reexport#" + reexport + ", der" + shape + ")",
       };
     }
     if (!(await bl_tokAdvance(env, device, p.ts))) return { ok: false, why: "replayed token" };
@@ -2354,7 +2463,7 @@ async function bl_enrollCheck(env, device, pubB64, tok, ip) {
     const same = await bl_ecTokCheck(env, device, tok, stored);
     if (!same.ok) return { ok: false, why: same.why };
     try { await env.DB.prepare("UPDATE dev_keys SET updated=?2 WHERE device=?1").bind(device, now).run(); } catch (e) {}
-    return { ok: true, mode: "ec", rotated: false };
+    return { ok: true, mode: "ec", rotated: false, der: same.normalized || "" };
   }
   const fresh = await bl_ecTokCheck(env, device, tok, String(pubB64 || ""));
   if (!fresh.ok) return { ok: false, why: stored ? "stored key refused and " + fresh.why : fresh.why };
@@ -2374,7 +2483,7 @@ async function bl_enrollCheck(env, device, pubB64, tok, ip) {
     await env.DB.prepare("INSERT INTO dev_key_log (device, pub, ts, ip) VALUES (?1,?2,?3,?4)")
       .bind(device, pub, now, String(ip || "").slice(0, 64)).run();
   } catch (e) {}
-  return { ok: true, mode: "ec", rotated: !!stored };
+  return { ok: true, mode: "ec", rotated: !!stored, der: fresh.normalized || "" };
 }
 
 function bl_tokMsg(device, ts, nonce) {
@@ -2451,6 +2560,7 @@ async function blobKeyIssue(env, request) {
   const ip = clientIp(request);
   let mode = "ec";
   let rotated = false;
+  let derShape = "";
   if (b.alg === "ec") {
     const r = await bl_enrollCheck(env, device, String(b.pub || ""), String(b.sig || ""), ip);
     if (!r.ok) {
@@ -2459,6 +2569,7 @@ async function blobKeyIssue(env, request) {
     }
     mode = r.mode;
     rotated = r.rotated;
+    derShape = r.der || "";
   } else {
     const cfgL = await getSettings(env, ["legacy_auth"]);
     if (String(cfgL.legacy_auth || "1") === "0" || !env.BLOB_ROOT) {
@@ -2496,6 +2607,9 @@ async function blobKeyIssue(env, request) {
     } catch (e2) {}
   }
   if (rotated) await insEvent(env, device, "key-rotated", Date.now(), ip);
+  // a device whose keystore pads its DER signatures non-minimally only works through the
+  // re-encode above; recorded so the panel shows it and so it is not a mystery later
+  if (derShape) await insEvent(env, device, "key-der-normalized " + derShape, Date.now(), ip);
   return new Response(JSON.stringify({
     ok: true,
     v: 2,
@@ -2505,6 +2619,7 @@ async function blobKeyIssue(env, request) {
     exp: expSec,
     tv: Date.now(),
     mode,
+    der: derShape,
   }), { headers: jsonHeaders() });
 }
 /** Was read as a module variable without ever being declared, so ensureSchema threw

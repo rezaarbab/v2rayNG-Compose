@@ -51,6 +51,7 @@ import androidx.compose.ui.window.Dialog
 import ir.v2rayng.compose.AppViewModel
 import ir.v2rayng.compose.data.AppState
 import ir.v2rayng.compose.data.Settings
+import ir.v2rayng.compose.data.orderList
 import ir.v2rayng.compose.data.parseList
 import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.stickers.StickerCharacter
@@ -353,7 +354,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
         MoveNavDialog(parseList(settings.navOrder, (0..4).toList()), vm) { moveMenu = false }
     }
     if (moveHome) {
-        HomeLayoutDialog(parseList(settings.homeOrder, listOf(0, 1, 2, 3, 4)), vm) { moveHome = false }
+        HomeLayoutDialog(orderList(settings.homeOrder, S.HOME_SECTIONS.size), vm) { moveHome = false }
     }
     if (showAppPicker) {
         AppPickerDialog(state.apps, settings.antiFilterApps, vm) { showAppPicker = false }

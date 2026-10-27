@@ -55,7 +55,7 @@ import ir.v2rayng.compose.data.Settings
 import ir.v2rayng.compose.data.StickerFx
 import ir.v2rayng.compose.data.TimeKit
 import ir.v2rayng.compose.data.VpnState
-import ir.v2rayng.compose.data.parseList
+import ir.v2rayng.compose.data.orderList
 import ir.v2rayng.compose.data.parseFxPack
 import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.stickers.StickerCharacter
@@ -120,7 +120,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
         else -> V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
     }
 
-    val order = parseList(settings.homeOrder, listOf(0, 1, 2, 3)).take(4)
+    val order = orderList(settings.homeOrder, S.HOME_SECTIONS.size)
     val motion = settings.motionGlobal && settings.animate
 
     Column(
