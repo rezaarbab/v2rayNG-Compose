@@ -27,6 +27,9 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -105,7 +108,19 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             value = query,
             onValueChange = { query = it },
             singleLine = true,
-            label = { Text(S.SEARCH_SERVERS) },
+            placeholder = { Text(S.SEARCH_SERVERS) },
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Clear, contentDescription = S.CLEAR) }
+                }
+            },
+            shape = RoundedCornerShape(50),
+            colors = OutlinedTextFieldDefaults.colors(
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                unfocusedBorderColor = Color.Transparent,
+            ),
             modifier = Modifier.fillMaxWidth(),
         )
         if (categories.isNotEmpty()) {
@@ -122,14 +137,43 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
 
         if (filtered.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    text = S.IMPORT_EMPTY,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        Modifier
+                            .size(72.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            if (state.servers.isEmpty()) Icons.Filled.Add else Icons.Filled.Search,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(34.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = if (state.servers.isEmpty()) S.IMPORT_EMPTY else S.NO_MATCH,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    if (state.servers.isEmpty()) {
+                        Spacer(Modifier.height(12.dp))
+                        androidx.compose.material3.Button(onClick = { showImport = true }, shape = RoundedCornerShape(50)) {
+                            Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(S.IMPORT_TITLE)
+                        }
+                    }
+                }
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 12.dp),
+            ) {
                 val sorted = filtered.sortedWith(
                     compareByDescending<ir.v2rayng.compose.data.ServerProfile> { it.pinned }
                         .thenBy { state.servers.indexOfFirst { x -> x.id == it.id } },
@@ -232,18 +276,23 @@ private fun ServerRow(
     onPingOne: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+    val container = if (selected) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.10f).compositeOver(MaterialTheme.colorScheme.surfaceContainerHigh)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    }
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
             .clickable { onPick() }
             .border(
-                androidx.compose.foundation.BorderStroke(if (selected) 2.dp else 1.dp, borderColor),
+                androidx.compose.foundation.BorderStroke(if (selected) 1.5.dp else 1.dp, borderColor),
                 RoundedCornerShape(20.dp),
             ),
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(containerColor = container),
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(

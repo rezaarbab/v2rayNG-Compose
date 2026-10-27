@@ -10,8 +10,19 @@ object S {
     const val STATUS_CONNECTED = "Connected"
     const val STATUS_BROKEN = "Connection failed"
 
-    const val TAP_HINT = "Tap to connect + Hold (1s) to customize"
+    const val TAP_HINT = "Tap the sticker or the button · hold the sticker (1s) to customize"
     const val HOLD_HINT = "Hold any sticker (1s) to customize it"
+
+    const val CONNECT = "Connect"
+    const val DISCONNECT = "Disconnect"
+    const val CANCEL_CONNECT = "Cancel"
+    const val RETRY = "Try again"
+    const val CURRENT_SERVER = "Current server"
+    const val CHANGE_SERVER = "Change"
+    const val NO_SERVER = "No server selected"
+    const val RESET_TRAFFIC_HOME = "Reset traffic"
+    const val COPY = "Copy"
+    const val COPIED = "Copied!"
 
     const val UPLOAD = "Upload"
     const val DOWNLOAD = "Download"
@@ -34,6 +45,7 @@ object S {
     const val IMPORT_TITLE = "Import from link"
     const val IMPORT_HINT = "vless:// | vmess:// | trojan:// | ss://"
     const val IMPORT_EMPTY = "No servers yet - import a real link with the + button"
+    const val NO_MATCH = "No server matches this search"
     const val FIELD_NAME = "Name"
     const val FIELD_ADDRESS = "Address"
     const val ADD = "Add"

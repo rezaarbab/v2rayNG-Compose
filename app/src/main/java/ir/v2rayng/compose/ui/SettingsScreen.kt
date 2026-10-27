@@ -1,4 +1,4 @@
-﻿package ir.v2rayng.compose.ui
+package ir.v2rayng.compose.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -528,12 +528,12 @@ private fun CustomAccentDialog(current: Long, vm: AppViewModel, onDismiss: () ->
 
 @Composable
 fun SelectChip(text: String, selected: Boolean, onClick: () -> Unit) {
-    val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
-    val bg = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant
+    val borderColor = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+    val bg = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceContainerHigh
     Box(
         Modifier
             .clip(RoundedCornerShape(50))
-            .border(BorderStroke(if (selected) 2.dp else 1.dp, borderColor), RoundedCornerShape(50))
+            .border(BorderStroke(if (selected) 1.5.dp else 1.dp, borderColor), RoundedCornerShape(50))
             .background(bg)
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 8.dp)
@@ -555,13 +555,14 @@ fun ColorDot(color: Color, name: String, isSel: Boolean, onClick: () -> Unit) {
     ) {
         Box(
             Modifier
-                .size(30.dp)
-                .clip(RoundedCornerShape(50))
-                .background(color)
+                .size(36.dp)
                 .border(
-                    BorderStroke(if (isSel) 3.dp else 1.dp, MaterialTheme.colorScheme.onBackground),
+                    BorderStroke(2.dp, if (isSel) MaterialTheme.colorScheme.onBackground else Color.Transparent),
                     RoundedCornerShape(50),
                 )
+                .padding(4.dp)
+                .clip(RoundedCornerShape(50))
+                .background(color)
         )
         if (name.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
