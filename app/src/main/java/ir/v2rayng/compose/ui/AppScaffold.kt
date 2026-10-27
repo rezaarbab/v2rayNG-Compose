@@ -1,21 +1,14 @@
 package ir.v2rayng.compose.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.draw.clip
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
@@ -161,47 +154,20 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
             " navStickers=" + settings.navStickers + " bubble=" + settings.bubbleOn +
             " style=" + settings.stickerStyle
     }
-    LaunchedEffect(state.vpnState) { ConnClock.observe(state.vpnState) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             CenterAlignedTopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        val dot by androidx.compose.animation.animateColorAsState(statusColor(state.vpnState), label = "topDot")
-                        Box(
-                            Modifier
-                                .size(9.dp)
-                                .clip(CircleShape)
-                                .background(dot)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(S.APP, fontWeight = FontWeight.ExtraBold, style = MaterialTheme.typography.titleLarge)
-                    }
-                },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                ),
+                title = { Text(S.APP, fontWeight = FontWeight.Bold) },
             )
         },
         bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                tonalElevation = 0.dp,
-            ) {
+            NavigationBar {
                 order.forEachIndexed { pos, real ->
                     NavigationBarItem(
                         selected = tab == pos,
                         onClick = { tab = pos },
-                        colors = NavigationBarItemDefaults.colors(
-                            indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
                         icon = {
                             Box(
                                 Modifier.holdFor(
@@ -233,7 +199,7 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                                 }
                             }
                         },
-                        label = { Text(S.TABS[real], fontWeight = if (tab == pos) FontWeight.Bold else FontWeight.Normal) },
+                        label = { Text(S.TABS[real]) },
                     )
                 }
             }

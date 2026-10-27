@@ -34,10 +34,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.luminance
-import androidx.compose.foundation.background
-import ir.v2rayng.compose.ui.theme.StatusColors
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -62,19 +58,13 @@ fun LogScreen(state: AppState, vm: AppViewModel) {
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = S.LOGS_TITLE,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    text = "${state.logs.size}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            androidx.compose.material3.FilledTonalButton(
+            Text(
+                text = S.LOGS_TITLE,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f),
+            )
+            androidx.compose.material3.TextButton(
                 onClick = {
                     if (state.logs.isNotEmpty()) {
                         val text = buildString {
@@ -86,15 +76,8 @@ fun LogScreen(state: AppState, vm: AppViewModel) {
                         copied = true
                     }
                 },
-                shape = RoundedCornerShape(50),
             ) {
-                Text(if (copied) S.COPIED else S.COPY)
-            }
-            LaunchedEffect(copied) {
-                if (copied) {
-                    kotlinx.coroutines.delay(1800L)
-                    copied = false
-                }
+                Text(if (copied) "Copied!" else "Copy")
             }
             TipIconButton(Icons.Filled.Delete, S.CLEAR) { vm.clearLogs() }
         }
@@ -123,58 +106,43 @@ fun LogScreen(state: AppState, vm: AppViewModel) {
 
 @Composable
 private fun LogRow(line: LogLine) {
-    // level colors are mixed over the surface so badges stay readable in light and dark themes
-    val base = when (line.level) {
-        "ERROR" -> StatusColors.Error
-        "WARN" -> StatusColors.Connecting
-        "CORE" -> Color(0xFF8AB7F7)
-        else -> StatusColors.Connected
+    val (bg, fg) = when (line.level) {
+        "ERROR" -> Color(0xFF5C1A1A) to Color(0xFFFFC2C2)
+        "WARN" -> Color(0xFF4A3410) to Color(0xFFFFD9A0)
+        "CORE" -> Color(0xFF1A2A5C) to Color(0xFFBCD2FF)
+        else -> Color(0xFF14351F) to Color(0xFF9BF3CB)
     }
-    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    val bg = base.copy(alpha = 0.18f)
-    val fg = if (dark) base else lerp(base, Color.Black, 0.35f)
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Row(
-            verticalAlignment = Alignment.Top,
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
         ) {
-            Box(
-                Modifier
-                    .padding(top = 2.dp)
-                    .width(3.dp)
-                    .height(16.dp)
-                    .background(base, RoundedCornerShape(50))
+            Text(
+                text = line.time,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.width(64.dp),
             )
-            Spacer(Modifier.width(8.dp))
-            Column(Modifier.fillMaxWidth()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Surface(color = bg, shape = RoundedCornerShape(50)) {
-                        Text(
-                            text = line.level,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = fg,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = line.time,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Spacer(Modifier.height(3.dp))
+            Surface(color = bg, shape = RoundedCornerShape(50)) {
                 Text(
-                    text = line.msg,
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = line.level,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = fg,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                 )
             }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = line.msg,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
