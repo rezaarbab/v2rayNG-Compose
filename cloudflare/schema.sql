@@ -74,8 +74,8 @@ CREATE TABLE IF NOT EXISTS blob_sessions (
   exp          INTEGER,
   rot          INTEGER DEFAULT 0,
   last_payload TEXT DEFAULT '',
-  -- how this session was authenticated: "ec" = signed by this handset's keystore key,
-  -- "legacy" = an app build from before that, accepted while legacy_auth stays on
+  -- how this session was authenticated: "ec" = signed by this handset's keystore key.
+  -- key is sealed with SESSION_SEAL (prefix v1:) instead of bare hex once that secret is set
   mode         TEXT DEFAULT 'legacy'
 );
 
@@ -114,7 +114,10 @@ CREATE TABLE IF NOT EXISTS dev_keys (
   updated INTEGER,
   -- how many times this id showed up with a different key (reinstall, or a stolen id - the
   -- panel shows it and the admin decides)
-  rot     INTEGER DEFAULT 0
+  rot     INTEGER DEFAULT 0,
+  -- what the handset reported about its own certificate: attested, chain length,
+  -- self-signed, attestation extension present, issuer
+  att     TEXT DEFAULT ''
 );
 
 -- every key this id ever arrived with, with the IP and time it was first seen
@@ -125,3 +128,12 @@ CREATE TABLE IF NOT EXISTS dev_key_log (
   ip     TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_keylog_dev ON dev_key_log (device, ts);
+
+-- wrong panel-password attempts per source IP: five free tries, then a block that doubles.
+-- Kept in the database so every worker isolate enforces the same lockout.
+CREATE TABLE IF NOT EXISTS auth_lock (
+  ip    TEXT PRIMARY KEY,
+  n     INTEGER DEFAULT 0,
+  until INTEGER DEFAULT 0,
+  ts    INTEGER
+);

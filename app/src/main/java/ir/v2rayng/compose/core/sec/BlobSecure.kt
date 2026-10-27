@@ -193,6 +193,7 @@ object BlobSecure {
                 .put("alg", "ec")
                 .put("pub", pub)
                 .put("sig", proof)
+                .put("att", JSONObject(BlobIdentity.attestation()))
             val r = httpPost(base, "/api/key", req)
             if (r.body == null) {
                 blog("issueKeys: /api/key got nothing (status " + r.status + ")")

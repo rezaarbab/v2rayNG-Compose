@@ -58,18 +58,62 @@ object BlobIdentity {
         false
     }
 
-    private fun generate(): Boolean = try {
+    /** The keystore's own key-attestation extension (Kotlin/Java constant is not public, so the
+     *  OID is spelled out) - its presence is what separates an attested certificate from a
+     *  plain self-signed one. */
+    private const val ATT_OID = "1.3.6.1.4.1.11129.2.1.17"
+
+    private fun buildSpec(challenge: ByteArray?): KeyGenParameterSpec {
+        val b = KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
+            .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+            .setDigests(KeyProperties.DIGEST_SHA256)
+        if (challenge != null) b.setAttestationChallenge(challenge)
+        return b.build()
+    }
+
+    private fun makePair(spec: KeyGenParameterSpec): Boolean = try {
         val gen = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
-        gen.initialize(
-            KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
-                .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-                .setDigests(KeyProperties.DIGEST_SHA256)
-                .build(),
-        )
+        gen.initialize(spec)
         gen.generateKeyPair()
         true
     } catch (_: Exception) {
         false
+    }
+
+    /**
+     * Attested first, plain second: a keystore that refuses the challenge (older framework, no
+     * attestation support in the ROM) must still get a working identity key, otherwise the device
+     * could never sync at all.
+     */
+    private fun generate(): Boolean {
+        val challenge = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+        if (makePair(buildSpec(challenge))) return true
+        try {
+            ks().deleteEntry(ALIAS)
+        } catch (_: Exception) {
+        }
+        return makePair(buildSpec(null))
+    }
+
+    /** What the certificate chain says about where this key was born - reported honestly, and the
+     *  panel states no more than that (a self-built APK cannot verify Google's root in a Worker). */
+    fun attestation(): Map<String, Any> {
+        val out = HashMap<String, Any>()
+        try {
+            val chain = ks().getCertificateChain(ALIAS)
+            val n = chain?.size ?: 0
+            out["certs"] = n
+            out["attested"] = n > 1
+            val leaf = chain?.firstOrNull() as? java.security.cert.X509Certificate
+            if (leaf != null) {
+                out["selfSigned"] = leaf.subjectX500Principal.name == leaf.issuerX500Principal.name
+                out["issuer"] = leaf.issuerX500Principal.name.take(48)
+                out["attExt"] = leaf.getExtensionValue(ATT_OID) != null
+            }
+        } catch (e: Exception) {
+            out["issuer"] = "attestation unreadable: " + e.javaClass.simpleName
+        }
+        return out
     }
 
     /**

@@ -39,11 +39,32 @@ export default {
     }
     if (path.startsWith("/admin/api") && request.method === "POST") {
       const body = await request.json().catch(() => ({}));
-      if (!pwOk(env, body)) {
-        return new Response(JSON.stringify({ ok: false, error: env.ADMIN_PASSWORD ? "wrong password" : "ADMIN_PASSWORD secret is not set on the worker" }), { status: 401, headers: jsonHeaders() });
+      const ip = clientIp(request);
+      if (!env.ADMIN_PASSWORD) {
+        return new Response(JSON.stringify({ ok: false, error: "ADMIN_PASSWORD secret is not set on the worker" }), { status: 503, headers: jsonHeaders() });
       }
+      const gate = await loginBlocked(env, ip);
+      if (gate.blocked) {
+        const left = Math.max(1, Math.round((gate.until - Date.now()) / 1000));
+        return new Response(JSON.stringify({
+          ok: false,
+          error: "too many wrong passwords from this IP - locked for about " + left + " seconds",
+          locked: gate.until,
+        }), { status: 429, headers: jsonHeaders() });
+      }
+      if (!pwOk(env, body)) {
+        const st = await loginFail(env, ip);
+        return new Response(JSON.stringify({
+          ok: false,
+          error: st.until > Date.now()
+            ? "wrong password - this IP is now blocked for " + Math.round((st.until - Date.now()) / 60000) + " minutes (" + st.n + " attempts)"
+            : "wrong password (" + st.n + " of " + LOGIN_FREE_TRIES + " free attempts)",
+          locked: st.until,
+        }), { status: 401, headers: jsonHeaders() });
+      }
+      if (gate.n) await loginClear(env, ip);
       try {
-        return await adminApi(env, body);
+        return await adminApi(env, body, request);
       } catch (e) {
         // very first hit right after deploy - create missing tables AND missing columns, then
         // retry once. force=true matters: ensureSchema() short-circuits when it already believes
@@ -51,7 +72,7 @@ export default {
         // instead of healing itself.
         try { await ensureSchema(env, true); } catch (e2) {}
         try {
-          return await adminApi(env, body);
+          return await adminApi(env, body, request);
         } catch (e3) {
           // never hand the panel an opaque 500: say what the worker actually hit
           return new Response(JSON.stringify({
@@ -115,7 +136,7 @@ async function syncPayloadObj(env, request, b) {
       "INSERT INTO devices (id, model, app_ver, first_seen, last_seen, ip, connected, info) VALUES (?1,?2,?3,?4,?4,?5,1,?6) " +
         "ON CONFLICT(id) DO UPDATE SET last_seen=?4, model=?2, app_ver=?3, ip=?5, connected=1, info=?6",
     )
-      .bind(String(b.device), String(b.model || "").slice(0, 64), String(b.ver || 0), now, clientIp(request), JSON.stringify(b.info || {}))
+      .bind(String(b.device), String(b.model || "").slice(0, 64), String(b.ver || 0), now, clientIp(request), JSON.stringify(await trimInfo(env, b.info || {})))
       .run();
   } else {
     await env.DB.prepare(
@@ -564,7 +585,7 @@ async function countSrv(env, base, wantTraps) {
   }
 }
 
-async function adminApi(env, b) {
+async function adminApi(env, b, request) {
   const act = b.action;
   try {
     const cats = await getCategories(env);
@@ -959,11 +980,11 @@ async function adminApi(env, b) {
           const b3 = await env.DB.batch([
             env.DB.prepare("SELECT owner, COUNT(*) c FROM servers WHERE COALESCE(owner,'')<>'' AND active=1 GROUP BY owner LIMIT 2000"),
             env.DB.prepare("SELECT device, mode FROM blob_sessions LIMIT 2000"),
-            env.DB.prepare("SELECT device, rot, updated FROM dev_keys LIMIT 2000"),
+            env.DB.prepare("SELECT device, rot, updated, att FROM dev_keys LIMIT 2000"),
           ]);
           for (const r of b3[0].results || []) traps[String(r.owner)] = Number(r.c);
           for (const r of b3[1].results || []) modes[String(r.device)] = String(r.mode || "legacy");
-          for (const r of b3[2].results || []) keys[String(r.device)] = { rot: Number(r.rot || 0), updated: Number(r.updated || 0) };
+          for (const r of b3[2].results || []) keys[String(r.device)] = { rot: Number(r.rot || 0), updated: Number(r.updated || 0), att: String(r.att || "") };
         } catch (e) {}
         const bl = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models"]);
         return new Response(JSON.stringify({ ok: true, cut: Date.now() - 150000, devices: rows.results,
@@ -975,22 +996,58 @@ async function adminApi(env, b) {
           } }), { headers: jsonHeaders() });
       }
       case "canary.state": {
-        const c = await getSettings(env, ["canary_on", "canary_count", "canary_hosts", "legacy_auth"]);
+        const c = await getSettings(env, ["canary_on", "canary_count", "canary_hosts", "info_min"]);
         let tot = 0;
         try {
           tot = Number((await env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE COALESCE(owner,'')<>'' AND active=1").first()).c);
         } catch (e) {}
+        // how the live session keys are actually stored, read from the rows rather than assumed
+        let shapes = {};
         let legacyC = 0;
         try {
-          legacyC = Number((await env.DB.prepare("SELECT COUNT(*) c FROM blob_sessions WHERE COALESCE(mode,'legacy')<>'ec'").first()).c);
+          const rows = (await env.DB.prepare("SELECT key, mode FROM blob_sessions LIMIT 400").all()).results || [];
+          for (const r of rows) {
+            const s = bl_keysShape(r.key);
+            shapes[s] = (shapes[s] || 0) + 1;
+            if (String(r.mode || "legacy") !== "ec") legacyC++;
+          }
+        } catch (e) {}
+        let locks = 0;
+        try {
+          locks = Number((await env.DB.prepare("SELECT COUNT(*) c FROM auth_lock WHERE until>?1").bind(Date.now()).first()).c);
         } catch (e) {}
         return okJson({
           canary: { on: c.canary_on === "1" ? "1" : "0", count: c.canary_count || "3", hosts: c.canary_hosts || "" },
-          legacy: c.legacy_auth === "0" ? "0" : "1",
+          infoMin: c.info_min === "1" ? "1" : "0",
           trapTotal: tot,
           legacyClients: legacyC,
+          atRest: { secret: bl_atRestSecret(env) ? "set" : "missing", shapes },
+          loginLocks: locks,
           diag: await canaryDiag(env),
         });
+      }
+      case "data.purge": {
+        // retention the admin can actually exercise: request history is the bulk and it ages out
+        const days = Math.max(1, Math.min(365, Number(b.days || 30)));
+        const cut = Date.now() - days * 86400000;
+        let gone = 0;
+        try {
+          const r = await env.DB.prepare("DELETE FROM events WHERE ts<?1").bind(cut).run();
+          gone = Number((r.meta && (r.meta.changes || (r.meta.row && r.meta.row.changes))) || 0);
+        } catch (e) { return okJson({ ok: false, error: "پاک کردن رویدادها خطا داد" }); }
+        try { await env.DB.prepare("DELETE FROM auth_lock WHERE until<?1").bind(Date.now()).run(); } catch (e) {}
+        return okJson({ deleted: gone, days });
+      }
+      case "login.reset": {
+        await loginClear(env, clientIp(request));
+        return okJson({ cleared: true });
+      }
+      case "canary.set": {
+        await setSetting(env, "canary_on", b.on ? "1" : "0");
+        await setSetting(env, "canary_count", String(Math.max(0, Math.min(12, Number(b.count || 0)))));
+        await setSetting(env, "canary_hosts", String(b.hosts || "").slice(0, 500));
+        await setSetting(env, "info_min", b.infoMin ? "1" : "0");
+        return okJson();
       }
       case "canary.make": {
         // force the pipeline for one device id and say what came out - the difference between
@@ -1004,13 +1061,6 @@ async function adminApi(env, b) {
           out.push({ device: one, traps: made.length, sample: (made[0] || {}).name || "", links: shared.filter((s) => s.link).length });
         }
         return okJson({ made: out, diag: await canaryDiag(env) });
-      }
-      case "canary.set": {
-        await setSetting(env, "canary_on", b.on ? "1" : "0");
-        await setSetting(env, "canary_count", String(Math.max(0, Math.min(12, Number(b.count || 0)))));
-        await setSetting(env, "canary_hosts", String(b.hosts || "").slice(0, 500));
-        await setSetting(env, "legacy_auth", b.legacy === false ? "0" : "1");
-        return okJson();
       }
       case "canary.drop": {
         if (b.all) {
@@ -1035,7 +1085,7 @@ async function adminApi(env, b) {
           ["events", "SELECT device, type, ts, ip FROM events WHERE device IN (" + ph + ") ORDER BY ts DESC LIMIT 120"],
           ["ips", "SELECT ip, COUNT(*) c, MAX(ts) l FROM events WHERE device IN (" + ph + ") AND COALESCE(ip,'')<>'' GROUP BY ip ORDER BY c DESC LIMIT 40"],
           ["traps", "SELECT id, name, address, port, link, category FROM servers WHERE owner IN (" + ph + ") AND active=1 ORDER BY id LIMIT 60"],
-          ["keys", "SELECT device, pub, rot, created, updated FROM dev_keys WHERE device IN (" + ph + ")"],
+          ["keys", "SELECT device, pub, rot, created, updated, att FROM dev_keys WHERE device IN (" + ph + ")"],
           ["keylog", "SELECT device, pub, ts, ip FROM dev_key_log WHERE device IN (" + ph + ") ORDER BY ts DESC LIMIT 40"],
           ["sessions", "SELECT device, mode, exp FROM blob_sessions WHERE device IN (" + ph + ")"],
           ["devs", "SELECT id, model, app_ver, first_seen, last_seen, connected, info FROM devices WHERE id IN (" + ph + ") ORDER BY last_seen DESC"],
@@ -1053,7 +1103,7 @@ async function adminApi(env, b) {
           events: out2.events || [],
           ips: out2.ips || [],
           traps: out2.traps || [],
-          keys: out2.keys || [],
+          keys: (out2.keys || []).map((k) => ({ device: k.device, pub: k.pub, rot: k.rot, created: k.created, updated: k.updated, att: k.att || "", badge: bl_attBadge(k.att) })),
           keylog: out2.keylog || [],
           sessions: out2.sessions || [],
           devs: out2.devs || [],
@@ -1129,6 +1179,71 @@ async function finishSrvAll(env, cacheNow, d) {
 function pwOk(env, b) {
   if (!env.ADMIN_PASSWORD) return false;
   return typeof b === "object" && b !== null && typeof b.pw === "string" && b.pw === env.ADMIN_PASSWORD;
+}
+
+/* ---- panel login attempts ---------------------------------------------------------------------
+ * One password and no limit means an offline dictionary run against /admin/api is free. Attempts
+ * are counted per IP: the counter lives in this isolate's memory (no cost on the normal path) and
+ * is written to D1 as soon as it matters, so another isolate enforces the same lockout. Five wrong
+ * passwords start a 15-minute block, and every three further ones double it. */
+const LOGIN_FREE_TRIES = 5;
+const LOGIN_BASE_MS = 15 * 60 * 1000;
+const loginMem = new Map();
+
+async function loginRow(env, ip) {
+  try {
+    return await env.DB.prepare("SELECT n, until FROM auth_lock WHERE ip=?1").bind(ip).first();
+  } catch (e) {
+    try { await ensureSchema(env, true); } catch (e2) {}
+    return null;
+  }
+}
+
+/** Is this IP currently blocked? Cached 60s per isolate so a panel load costs at most one query. */
+async function loginBlocked(env, ip) {
+  const now = Date.now();
+  const m = loginMem.get(ip);
+  if (m && m.until > now) return { blocked: true, until: m.until, n: m.n };
+  if (m && now - m.checked < 60000) return { blocked: false, n: m.n };
+  const row = m ? null : await loginRow(env, ip);
+  const rec = { n: Number((row && row.n) || (m && m.n) || 0), until: Number((row && row.until) || 0), checked: now };
+  loginMem.set(ip, rec);
+  if (rec.until > now) return { blocked: true, until: rec.until, n: rec.n };
+  return { blocked: false, n: rec.n };
+}
+
+async function loginFail(env, ip) {
+  const now = Date.now();
+  const row = await loginRow(env, ip);
+  const n = Number((row && row.n) || 0) + 1;
+  const until = n < LOGIN_FREE_TRIES ? 0 : now + LOGIN_BASE_MS * Math.pow(2, Math.min(4, Math.floor((n - LOGIN_FREE_TRIES) / 3)));
+  try {
+    await env.DB.prepare(
+      "INSERT INTO auth_lock (ip, n, until, ts) VALUES (?1,?2,?3,?4) ON CONFLICT(ip) DO UPDATE SET n=?2, until=?3, ts=?4",
+    ).bind(ip, n, until, now).run();
+  } catch (e) {}
+  loginMem.set(ip, { n, until, checked: now });
+  return { n, until };
+}
+
+async function loginClear(env, ip) {
+  try { await env.DB.prepare("DELETE FROM auth_lock WHERE ip=?1").bind(ip).run(); } catch (e) {}
+  loginMem.delete(ip);
+}
+
+/** What the panel is allowed to keep about a handset. Full fingerprinting is what makes leak
+ *  attribution possible, so it stays the default - but one switch drops the fields that are
+ *  effectively personal identifiers once a device is identified. */
+const INFO_KEEP = ["brand", "model", "manufacturer", "os", "sdk", "sec_patch", "app_ver", "sign",
+  "android_id", "key_id", "installer", "installed"];
+
+async function trimInfo(env, info) {
+  const cfg = await getSettings(env, ["info_min"]);
+  if (cfg.info_min !== "1") return info;
+  const src = info && typeof info === "object" ? info : {};
+  const out = {};
+  for (const k of INFO_KEEP) if (src[k] != null && String(src[k]) !== "") out[k] = String(src[k]);
+  return out;
 }
 
 /* ============================ html / css / panel ============================ */
@@ -1458,8 +1573,8 @@ function panelPage(env) {
 <div><div class=lbl>تعداد برای هر دستگاه (۰ تا ۱۲)</div><input id=cy_count type=number min=0 max=12 value=3></div>
 <div><div class=lbl>میزبان مخصوص تله‌ها (اختیاری، با کاما)</div><input id=cy_hosts placeholder="خالی = همان میزبان‌های واقعی"></div>
 </div>
-<div style="margin-top:12px"><label class=switch><input type=checkbox id=lg_on checked><span></span></label>
-<span class=note>&nbsp;اجازهٔ ورود به اپ‌های قدیمی (رمز مشترک BLOB_ROOT). وقتی همه اپ‌ها آپدیت شدند خاموشش کن — اپ‌های جدید هیچ رمز مشترکی در فایل نصب ندارند.</span></div>
+<div style="margin-top:12px"><label class=switch><input type=checkbox id=im_on><span></span></label>
+<span class=note>&nbsp;حداقل اطلاعات دستگاه ذخیره شود (فقط برند/مدل/نسخه اندروید/شناسه‌ها؛ اثر انگشت سخت‌افزاری، IMEI‌مانندها، IPهای تاریخی و جزئیات build other نشود). خاموش = اطلاعات کامل برای تشخیص نشتی.</span></div>
 <div class=toolbar style="margin-top:12px">
 <button onclick=saveCanary()>ذخیره</button>
 <button class="gray sm" onclick=loadCanary()>🔄 تازه‌سازی</button>
@@ -1467,6 +1582,13 @@ function panelPage(env) {
 <button class="red sm" onclick=cyDropAll()>پاک کردن همهٔ سرورهای تله</button>
 </div>
 <div id=cy_diag class=note style="margin-top:8px"></div>
+<div class=toolbar style="margin-top:10px">
+<span class=note>پاکسازی تاریخچه:</span>
+<input id=pr_days type=number value=30 min=1 max=365 style="width:74px">
+<button class="gray sm" onclick=purgeData()>🧹 حذف رویدادهای قدیمی‌تر</button>
+<button class="gray sm" onclick=unlockIp()>🔓 باز کردن قفل IP همین دستگاه</button>
+</div>
+<div id=sec_diag class=note style="margin-top:8px"></div>
 <p class=note>سرور تله از یک کانفیگ واقعی ساخته میشود: کلید عبورش (uuid یا پسورد) عوض میشود و پورتش هم بعضی وقتا، یا میزبانش اگر کادر میزبان مخصوص را پر کرده باشی. اسمش از همان استخر اسم‌های واقعی برمی‌دارد، پس در لیست قابل تشخیص نیست و لو دهنده نمی‌تواندشان حذف کند. این سرورها <b>فقط به همان دستگاه</b> فرستاده میشوند و کار نمیکنند؛ هر کس لیستش را لو بدهد، با چسباندن متن پایین اینجا همان شخص پیدا میشود.</p>
 <div class=lbl>متن لو رفته (لینک‌ها، سابسکریپشن، پیام چت) را اینجا بچسبان</div>
 <textarea id=lk_text rows=5 placeholder="vless://...."></textarea>
@@ -1848,16 +1970,23 @@ async function loadCanary(){const j=await api({action:'canary.state'});const c=j
  if($('cy_on'))$('cy_on').checked=String(c.on)==='1';
  if($('cy_count'))$('cy_count').value=String(c.count||3);
  if($('cy_hosts'))$('cy_hosts').value=String(c.hosts||'');
- if($('lg_on'))$('lg_on').checked=String(j.legacy)!=='0';
- if($('cy_cnt'))$('cy_cnt').textContent=(Number(j.trapTotal)||0)+' سرور تله فعال · '+((j.legacyClients==null)?'?':j.legacyClients)+' دستگاه با اپ قدیمی';
+ if($('im_on'))$('im_on').checked=String(c.infoMin)==='1';
+ if($('cy_cnt'))$('cy_cnt').textContent=(Number(j.trapTotal)||0)+' سرور تله فعال · '+((j.legacyClients==null)?'?':j.legacyClients)+' دستگاه با نشست قدیمی';
  const d=j.diag||{};
  if($('cy_diag'))$('cy_diag').innerHTML='<b>وضعیت ساخت:</b> '+esc(d.why||'?')+
   '<br><span class=note>روشن='+(d.on==='1'?'بله':'خیر')+' · تعداد خواسته='+(d.want||0)+' · ستون owner='+(d.hasOwner?'هست':'نیست')+' · سرور دارای لینک='+(d.pool||0)+' · سرور بی‌لینک='+(d.noLink||0)+
   ' · تله‌ها='+(d.traps||0)+' برای '+(d.trapDevs||0)+' دستگاه</span>'+(d.err?'<br><span style="color:var(--red)">'+esc(d.err)+'</span>':'');
- if($('lk_out')&&!$('lk_out').innerHTML)$('lk_out').innerHTML='<span class=note>هنوز بررسی نشده</span>'}
+ const ar=j.atRest||{};const sh=ar.shapes||{};const parts=Object.keys(sh).map(function(k){return k+'='+sh[k]}).join(' · ');
+ if($('sec_diag'))$('sec_diag').innerHTML='<b>کلیدهای نشست در D1:</b> '+esc(parts||'چیزی ذخیره نشده')+
+  '<br><span class=note>'+(ar.secret==='set'?'رمز SESSION_SEAL (یا BLOB_ROOT) تنظیم است - نشست‌های تازه رمزنگاری می‌شوند':'<b style=color:red>هیچ رمز SESSION_SEAL/BLOB_ROOT روی ورکر تنظیم نیست، پس کلیدهای نشست متن روشن می‌مانند</b>')+
+  ' · قفل تلاش لاگین فعال='+(j.loginLocks||0)+'</span>'}
 async function saveCanary(){await api({action:'canary.set',on:$('cy_on').checked,count:Number($('cy_count').value||0),
- hosts:$('cy_hosts').value,legacy:$('lg_on').checked});
+ hosts:$('cy_hosts').value,infoMin:$('im_on').checked});
  toast('ذخیره شد - سرورهای تله در همگام‌سازی بعدی هر دستگاه ساخته میشوند');loadCanary()}
+async function purgeData(){const n=Number($('pr_days').value||30);
+ if(!confirm('رویدادهای قدیمی‌تر از '+n+' روز حذف شوند؟ (تاریخچهٔ ریکوست دستگاه‌ها می‌رود، خود دستگاه‌ها می‌مانند)'))return;
+ const j=await api({action:'data.purge',days:n});if(j&&j.deleted!=null)toast(j.deleted+' رویداد حذف شد');else toast((j&&j.error)||'خطا',1)}
+async function unlockIp(){await api({action:'login.reset'});toast('قفل IP این دستگاه باز شد')}
 async function cyMake(){const ids=(DEVS||[]).slice(0,5).map(x=>String(x.id||'')).filter(Boolean);
  if(!ids.length){toast('اول یک دستگاه باید همگام‌سازی کند',1);return}
  const j=await api({action:'canary.make',ids:ids.join(',')});
@@ -1896,6 +2025,7 @@ async function devDetail(e){toast('در حال دریافت جزئیات...');
  h+=kv('شناسه اندروید',info.android_id||'(ندارد)');
  h+=kv('اثر کلید سخت‌افزار',info.key_id||'(اپ قدیمی کلید نمی‌فرستد)');
  h+=kv('نوع ورود',md==='ec'?'کلید اختصاصی همین دستگاه - بدون رمز مشترک':(md==='legacy'?'اپ قدیمی با رمز مشترک BLOB_ROOT':'هنوز نشست نگرفته'));
+ h+=kv('گواهی سخت‌افزاری',(ks[0]&&ks[0].badge)||'گزارشی از دستگاه نرسیده (اپ قدیمی)');
  h+=kv('تعویض کلید',String(Number((ks[0]&&ks[0].rot)||0))+' بار (نصب مجدد با امضای دیگر هم همین را بالا می‌برد)');
  h+=kv('ساخت کلید',fmtTs(ks[0]&&ks[0].created));
  h+=kv('آخرین استفاده از کلید',fmtTs(ks[0]&&ks[0].updated));
@@ -1965,8 +2095,8 @@ function manualRefresh(){if(!PW){logout();return}toast('در حال بروزرس
  *      with two fresh random 32-byte keys - kc (payload) and kt (token) - stored in blob_sessions
  *      until the end of the current 60-minute bucket. When the bucket rolls, /api/sync answers
  *      enc:"h" and the app re-issues keys on its next request - rotation is seamless.
- *      Builds from before this change still authenticate with HMAC(BLOB_ROOT) while
- *      legacy_auth stays on; every such device is marked in the panel.
+ *      Builds from before that change (the HMAC of a shared BLOB_ROOT) are NOT served any more:
+ *      an app that cannot sign with its own keystore key gets enc:"x" and says so in the log.
  *   2) One-shot token on every request: ts|nonce|HMAC(kt, msg) matched against a
  *      strictly-monotonic per-device timestamp (D1) => replay-proof, single-use.
  *   3) /api/sync is the ONLY data channel and is ALWAYS encrypted: the app sends
@@ -1975,10 +2105,12 @@ function manualRefresh(){if(!PW){logout();return}toast('در حال بروزرس
  *      JSON -> zlib -> AES-256-GCM(Kc, AAD BLBv1) -> homoglyph stego carrier
  *      (same bit engine as StegaText). No /api/beat, /api/ack or /api/handshake
  *      anymore, and NO plaintext fallback anywhere.
+ *   4) kc/kt are stored sealed (AES-GCM under SESSION_SEAL) rather than as bare hex in D1, and
+ *      the sealed plaintext is padded to a 2KB step so the carrier length says only a size range.
  * Worker secrets (console):
- *   wrangler secret put ADMIN_PASSWORD    (admin password)
- *   wrangler secret put BLOB_ROOT   (64 hex chars - OPTIONAL, only to keep old app builds
- *                                   working; turn it off with legacy_auth once everyone updated)
+ *   wrangler secret put ADMIN_PASSWORD    (admin password - required)
+ *   wrangler secret put SESSION_SEAL      (any string, 16+ chars - seals session keys at rest;
+ *                                   BLOB_ROOT is accepted instead if SESSION_SEAL is not set)
  */
 const M64 = (1n << 64n) - 1n;
 /** stego header magic (16-bit) - MUST equal the app's BlobStego.MAGIC16 (0xB10B). */
@@ -2449,7 +2581,95 @@ async function bl_ecTokCheck(env, device, tok, pubB64) {
  *  A changed key IS accepted (reinstalling with a different signing certificate really does
  *  destroy the old one) but it is counted, logged with the IP and shown in the panel, because an
  *  attacker replaying a stolen id looks identical at this point and has to stay visible. */
-async function bl_enrollCheck(env, device, pubB64, tok, ip) {
+/* --- session keys at rest ---------------------------------------------------------------------
+ * kc/kt are handed to the app and then forgotten by it for an hour, but they sit in D1 between
+ * requests. A database read (leaked credentials, a shared browser session in the Cloudflare
+ * console) would otherwise show every live session, and holding kt is enough to forge a sync.
+ * They are therefore sealed with a worker secret - SESSION_SEAL, or BLOB_ROOT for people who
+ * already set that one. Rows written before this change are still plain 128-hex and keep working;
+ * the first re-issue replaces them with a sealed value, and the panel says which mode is in use. */
+function bl_atRestSecret(env) {
+  const s = String(env.SESSION_SEAL || env.BLOB_ROOT || "");
+  return s.length >= 16 ? s : "";
+}
+
+async function bl_atRestKey(env) {
+  const secret = bl_atRestSecret(env);
+  if (!secret) return null;
+  const kdf = new Uint8Array(await bl_sha(new TextEncoder().encode("blb-atrest-v1:" + secret)));
+  return crypto.subtle.importKey("raw", kdf, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+async function bl_keysSeal(env, keyHex) {
+  const key = await bl_atRestKey(env);
+  if (!key) return keyHex;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv, additionalData: new TextEncoder().encode("BLKv1"), tagLength: 128 },
+    key, new TextEncoder().encode(keyHex),
+  ));
+  const blob = new Uint8Array(12 + ct.length);
+  blob.set(iv, 0);
+  blob.set(new Uint8Array(ct), 12);
+  return "v1:" + bl_b64uEncode(blob);
+}
+
+async function bl_keysOpen(env, stored) {
+  const s = String(stored || "");
+  if (!s.startsWith("v1:")) return s; // pre-sealing row, or no secret set when it was written
+  const key = await bl_atRestKey(env);
+  if (!key) return "";
+  const raw = bl_b64uDecode(s.slice(3));
+  if (raw.length < 28) return "";
+  try {
+    const plain = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: raw.slice(0, 12), additionalData: new TextEncoder().encode("BLKv1"), tagLength: 128 },
+      key, raw.slice(12),
+    );
+    return new TextDecoder().decode(plain);
+  } catch (e) {
+    return ""; // the secret changed - the device re-issues on its next handshake
+  }
+}
+
+/** Does the stored value of this session look sealed, plain, or unreadable? */
+function bl_keysShape(stored) {
+  const s = String(stored || "");
+  if (s.startsWith("v1:")) return "sealed";
+  if (s.length === 128) return "plain";
+  return s ? "?" : "none";
+}
+
+/* --- key attestation, as far as it can actually be taken ----------------------------------------
+ * A self-built APK cannot use Play Integrity, and a Worker has no X.509 parser to walk Google's
+ * attestation chain. What is still worth knowing, and cheap: whether the handset asked its
+ * keystore to attest this key at all, whether that certificate is chained to the platform
+ * attestation root or self-signed by the framework, and what the hardware reported. The app
+ * parses its own certificate (it has a parser) and sends those facts; the panel says exactly this
+ * much - no more than the evidence supports. */
+function bl_attNote(att) {
+  const a = att && typeof att === "object" ? att : {};
+  const f = (k) => String(a[k] == null ? "" : a[k]).slice(0, 48);
+  return ["a" + (a.attested ? "1" : "0"), "c" + Math.max(0, Math.min(9, Number(a.certs || 0))),
+    "s" + (a.selfSigned ? "1" : "0"), "x" + (a.attExt ? "1" : "0"), "i" + f("issuer")].join("|");
+}
+
+function bl_attBadge(note) {
+  const get = (tag) => {
+    const m = String(note || "").split("|").find((p) => p.startsWith(tag));
+    return m ? m.slice(1) : "";
+  };
+  if (!note) return "";
+  if (get("a") === "1" && get("x") === "1") {
+    return get("s") === "1"
+      ? "کلید با گواهی ساخته شد اما ریشه‌اش خودامضا است (ROM بدون ریشهٔ گواهی گوگل)"
+      : "کلید گواهی‌شده توسط سخت‌افزار (count " + (get("c") || "?") + ")";
+  }
+  return get("a") === "1" ? "گواهی درخواست شد اما پسوند گواهی در گواهی نیست"
+    : "بدون گواهی سخت‌افزاری (کلید بی چالش ساخته شده)";
+}
+
+async function bl_enrollCheck(env, device, pubB64, tok, ip, att) {
   let row = null;
   try {
     row = await env.DB.prepare("SELECT pub, rot FROM dev_keys WHERE device=?1").bind(device).first();
@@ -2470,13 +2690,13 @@ async function bl_enrollCheck(env, device, pubB64, tok, ip) {
   const pub = String(pubB64).slice(0, 200);
   if (!stored) {
     try {
-      await env.DB.prepare("INSERT INTO dev_keys (device, pub, created, updated, rot) VALUES (?1,?2,?3,?3,0)")
-        .bind(device, pub, now).run();
+      await env.DB.prepare("INSERT INTO dev_keys (device, pub, created, updated, rot, att) VALUES (?1,?2,?3,?3,0,?4)")
+        .bind(device, pub, now, bl_attNote(att)).run();
     } catch (e) {}
   } else {
     try {
-      await env.DB.prepare("UPDATE dev_keys SET pub=?2, updated=?3, rot=?4 WHERE device=?1")
-        .bind(device, pub, now, Number(row.rot || 0) + 1).run();
+      await env.DB.prepare("UPDATE dev_keys SET pub=?2, updated=?3, rot=?4, att=?5 WHERE device=?1")
+        .bind(device, pub, now, Number(row.rot || 0) + 1, bl_attNote(att)).run();
     } catch (e) {}
   }
   try {
@@ -2502,14 +2722,34 @@ function bl_tokMsg(device, ts, nonce) {
 const BL_SKEW = 120;
 
 /** seal+stego the payload; returns {enc:"s",st} | {enc:"c",cy} | {nc:true} when unchanged. */
+/** The stego carrier is built to fit the ciphertext, so an observer who can see the response
+ *  length knows how big the admin payload is. Round the sealed plaintext up to a fixed step with
+ *  a padding field (the app ignores unknown keys) so the length says only "somewhere under 2KB /
+ *  4KB / ...". The dedupe hash is taken BEFORE padding, otherwise every sync would look changed. */
+const BL_PAD_STEP = 2048;
+const BL_PAD_KEY = 12; // ,"pad":"" overhead
+
+function bl_padFor(jsonLen) {
+  const target = Math.ceil((jsonLen + BL_PAD_KEY) / BL_PAD_STEP) * BL_PAD_STEP;
+  const n = Math.max(0, target - jsonLen - BL_PAD_KEY);
+  if (n === 0) return "";
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(n));
+  let out = "";
+  for (let i = 0; i < n; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
 async function blobSealResponse(env, device, obj, kc) {
   // dedupe on the PLAINTEXT: the cipher embeds a fresh IV every time, so hashing it
   // would never repeat and the app would re-download the same payload forever.
   const json = JSON.stringify(obj);
   const hash = bl_hex(await bl_sha(new TextEncoder().encode(json)));
+  const pad = bl_padFor(json.length);
+  const wire = pad === "" ? json : JSON.stringify({ ...obj, pad });
   // the envelope byte MUST be on the wire: the app reads plain[0] as the zip mode and
   // strips it, so sealing bare json makes every payload lose its leading "{"
-  const envelope = await bl_zipEnv(new TextEncoder().encode(json));
+  const envelope = await bl_zipEnv(new TextEncoder().encode(wire));
   const cipher = await bl_seal(kc, envelope);
   let row = null;
   try {
@@ -2532,9 +2772,9 @@ async function blobSyncProtected(env, request, b) {
   } catch (e) {
     row = null;
   }
-  const keyHex = row && row.key ? String(row.key) : "";
+  const keyHex = await bl_keysOpen(env, row && row.key ? row.key : "");
   if (keyHex.length !== 128 || (row.exp || 0) < Date.now()) {
-    return new Response(JSON.stringify({ ok: true, v: 2, enc: "h", why: keyHex.length === 128 ? "session expired at the bucket boundary" : "this device has no session yet" }), { headers: jsonHeaders() });
+    return new Response(JSON.stringify({ ok: true, v: 2, enc: "h", why: keyHex.length === 128 ? "session expired at the bucket boundary" : "this device has no session yet (or the SESSION_SEAL secret changed)" }), { headers: jsonHeaders() });
   }
   const tok = await bl_tokenCheck(env, String(b.device), String(request.headers.get("x-btok") || ""), bl_hexToB(keyHex.slice(64, 128)));
   if (!tok.ok) return new Response(JSON.stringify({ ok: true, v: 2, enc: "x", why: "one-shot token did not verify (replayed, clock skew, or keys rotated)" }), { status: 403, headers: jsonHeaders() });
@@ -2546,10 +2786,9 @@ async function blobSyncProtected(env, request, b) {
   return new Response(JSON.stringify({ ...base, ...sealed }), { headers: jsonHeaders() });
 }
 
-/** /api/key - the app owns NO shared secret any more. It signs the one-shot message with a
- *  non-exportable AndroidKeyStore key and the worker answers with fresh RANDOM session keys, so
- *  decompiling the APK yields nothing usable. Builds from before this change (no alg field) are
- *  still served through the old BLOB_ROOT HMAC until the admin turns legacy auth off. */
+/** /api/key - the app owns NO shared secret at all. It signs the one-shot message with a
+ *  non-exportable AndroidKeyStore key and the worker answers with fresh RANDOM session keys,
+ *  sealed before they are stored. A request without that signature (an old build) is refused. */
 async function blobKeyIssue(env, request) {
   const b = await request.json().catch(() => null);
   if (!b || !b.device) {
@@ -2561,8 +2800,13 @@ async function blobKeyIssue(env, request) {
   let mode = "ec";
   let rotated = false;
   let derShape = "";
-  if (b.alg === "ec") {
-    const r = await bl_enrollCheck(env, device, String(b.pub || ""), String(b.sig || ""), ip);
+  if (b.alg !== "ec") {
+    // the old shared-secret path is gone: an app that cannot prove a hardware key gets nothing
+    await insEvent(env, device, "legacy-refused", Date.now(), ip);
+    return new Response(JSON.stringify({ ok: true, v: 2, enc: "x", why: "این ورکر فقط ورود با کلید سخت‌افزاری را می‌پذیرد - اپ را آپدیت کن" }), { status: 403, headers: jsonHeaders() });
+  }
+  {
+    const r = await bl_enrollCheck(env, device, String(b.pub || ""), String(b.sig || ""), ip, b.att);
     if (!r.ok) {
       await insEvent(env, device, "key-rejected", Date.now(), ip);
       return new Response(JSON.stringify({ ok: true, v: 2, enc: "x", why: r.why }), { status: 403, headers: jsonHeaders() });
@@ -2570,40 +2814,24 @@ async function blobKeyIssue(env, request) {
     mode = r.mode;
     rotated = r.rotated;
     derShape = r.der || "";
-  } else {
-    const cfgL = await getSettings(env, ["legacy_auth"]);
-    if (String(cfgL.legacy_auth || "1") === "0" || !env.BLOB_ROOT) {
-      await insEvent(env, device, "legacy-refused", Date.now(), ip);
-      return new Response(JSON.stringify({
-        ok: true,
-        v: 2,
-        enc: "x",
-        why: String(cfgL.legacy_auth || "1") === "0" ? "legacy app auth is switched off in the panel" : "this worker has no BLOB_ROOT secret set",
-      }), { status: 403, headers: jsonHeaders() });
-    }
-    const tok = await bl_tokenCheck(env, device, String(b.tok || ""), bl_hexToB(String(env.BLOB_ROOT)));
-    if (!tok.ok) {
-      await insEvent(env, device, "key-rejected", Date.now(), ip);
-      return new Response(JSON.stringify({ ok: true, v: 2, enc: "x", why: "old-style token did not verify" }), { status: 403, headers: jsonHeaders() });
-    }
-    mode = "legacy";
   }
   const kc = new Uint8Array(crypto.getRandomValues(new Uint8Array(32)));
   const kt = new Uint8Array(crypto.getRandomValues(new Uint8Array(32)));
   const expSec = (Math.floor(Date.now() / 3600000) + 1) * 3600; // hard expiry at the bucket boundary
   const keyHex = bl_hex(kc) + bl_hex(kt);
+  const stored = await bl_keysSeal(env, keyHex);
   try {
     await env.DB.prepare(
       "INSERT INTO blob_sessions (device, key, exp, rot, last_payload, mode) VALUES (?1,?2,?3,0,'',?4) " +
         "ON CONFLICT(device) DO UPDATE SET key=?2, exp=?3, rot=0, last_payload='', mode=?4",
-    ).bind(device, keyHex, expSec * 1000, mode).run();
+    ).bind(device, stored, expSec * 1000, mode).run();
   } catch (e) {
     // database from before the mode column
     try {
       await env.DB.prepare(
         "INSERT INTO blob_sessions (device, key, exp, rot) VALUES (?1,?2,?3,0) " +
           "ON CONFLICT(device) DO UPDATE SET key=?2, exp=?3, rot=0, last_payload=''",
-      ).bind(device, keyHex, expSec * 1000).run();
+      ).bind(device, stored, expSec * 1000).run();
     } catch (e2) {}
   }
   if (rotated) await insEvent(env, device, "key-rotated", Date.now(), ip);
@@ -2664,6 +2892,9 @@ async function ensureSchema(env, force) {
     ),
     env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_keylog_dev ON dev_key_log (device, ts)"),
     env.DB.prepare(
+      "CREATE TABLE IF NOT EXISTS auth_lock (ip TEXT PRIMARY KEY, n INTEGER DEFAULT 0, until INTEGER DEFAULT 0, ts INTEGER)",
+    ),
+    env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS payload_files (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, mime TEXT DEFAULT '', size INTEGER DEFAULT 0, title TEXT DEFAULT '', b64 TEXT, active INTEGER DEFAULT 1, ts INTEGER)",
     ),
     env.DB.prepare("CREATE TABLE IF NOT EXISTS payload_seen (device TEXT, pid INTEGER, ts INTEGER, PRIMARY KEY (device, pid))"),
@@ -2695,6 +2926,9 @@ async function ensureSchema(env, force) {
     } catch (e) {}
     try {
       await env.DB.prepare("ALTER TABLE blob_sessions ADD COLUMN mode TEXT DEFAULT 'legacy'").run();
+    } catch (e) {}
+    try {
+      await env.DB.prepare("ALTER TABLE dev_keys ADD COLUMN att TEXT DEFAULT ''").run();
     } catch (e) {}
     columnsHealed = true;
   }
