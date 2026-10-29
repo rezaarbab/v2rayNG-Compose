@@ -50,6 +50,11 @@ class XrayVpnService : VpnService() {
     private var tunFd = -1
     private var lastUp = 0L
     private var lastDown = 0L
+    private var connectedSince = 0L
+    private var lastNotifiedSec = -1L
+    private var shownLink: ProxyLink? = null
+    @Volatile private var lastBig: android.graphics.Bitmap? = null
+    private var notifManager: android.app.NotificationManager? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val statsRunnable = object : Runnable {
         override fun run() {
@@ -77,6 +82,7 @@ class XrayVpnService : VpnService() {
                 } catch (_: Exception) {
                 }
             }
+            tickNotification()
             mainHandler.postDelayed(this, 1000L)
         }
     }
@@ -187,6 +193,8 @@ class XrayVpnService : VpnService() {
 
     private fun startForegroundCompat(link: ProxyLink) {
         val manager = getSystemService(android.app.NotificationManager::class.java)
+        notifManager = manager
+        shownLink = link
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             val channel = android.app.NotificationChannel("blob_vpn", "Blob VPN", android.app.NotificationManager.IMPORTANCE_LOW)
             manager?.createNotificationChannel(channel)
@@ -205,6 +213,7 @@ class XrayVpnService : VpnService() {
                 big = stickerBitmap(SettingsStore(applicationContext).load())
             } catch (_: Exception) {
             }
+            lastBig = big
             try {
                 manager?.notify(1001, notification(link, big).build())
             } catch (_: Exception) {
@@ -212,12 +221,29 @@ class XrayVpnService : VpnService() {
         }
     }
 
+    /** The ongoing notification carries the same running clock the connect screen shows. */
+    private fun tickNotification() {
+        if (connectedSince <= 0L) return
+        val link = shownLink ?: return
+        val sec = (System.currentTimeMillis() - connectedSince) / 1000L
+        if (sec == lastNotifiedSec) return
+        lastNotifiedSec = sec
+        try {
+            notifManager?.notify(1001, notification(link, lastBig).build())
+        } catch (_: Exception) {
+        }
+    }
+
     private fun notification(link: ProxyLink, big: android.graphics.Bitmap?): NotificationCompat.Builder {
+        val base = link.name.ifBlank { "Connected - ${link.address}" }
+        val text = if (connectedSince > 0L)
+            "$base · ${ir.v2rayng.compose.data.TimeKit.clock(System.currentTimeMillis() - connectedSince)}"
+        else base
         val b = NotificationCompat.Builder(this, "blob_vpn")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentTitle("Blob")
             .setOngoing(true)
-            .setContentText(link.name.ifBlank { "Connected - ${link.address}" })
+            .setContentText(text)
         big?.let {
             b.setLargeIcon(it)
             b.setColor(it.getPixel(128, 128))
@@ -272,6 +298,8 @@ class XrayVpnService : VpnService() {
             controller = Libv2ray.newCoreController(callback)
             controller?.startLoop(buildXrayConfig(link), tunFd)
             tunnelUp = true
+            connectedSince = System.currentTimeMillis()
+            lastNotifiedSec = -1L
             XrayBridge.addLog("INFO", "Core loop entered")
             mainHandler.removeCallbacks(statsRunnable)
             mainHandler.postDelayed(statsRunnable, 1200L)
@@ -283,6 +311,9 @@ class XrayVpnService : VpnService() {
 
     private fun stopCore() {
         tunnelUp = false
+        connectedSince = 0L
+        lastNotifiedSec = -1L
+        shownLink = null
         mainHandler.removeCallbacks(statsRunnable)
         mainHandler.removeCallbacks(stateSetter)
         try {
