@@ -31,22 +31,22 @@ internal fun openUrl(ctx: android.content.Context, url: String) {
 fun RemotePopupDialog(p: Remote.PopupCfg, vm: AppViewModel) {
     val ctx = LocalContext.current
     AlertDialog(
-        onDismissRequest = { if (p.cancelEnabled) vm.ackPopup(p.id) },
+        onDismissRequest = { if (p.cancelEnabled) vm.ackPopup(p.id, p.nonce) },
         title = { Text(p.title, fontWeight = FontWeight.Bold) },
         text = { Text(p.body) },
         confirmButton = {
             if (p.btnEnabled && p.btnText.isNotBlank()) {
                 TextButton(onClick = {
                     if (p.btnUrl.isNotBlank()) openUrl(ctx, p.btnUrl)
-                    vm.ackPopup(p.id)
+                    vm.ackPopup(p.id, p.nonce)
                 }) { Text(p.btnText) }
             } else {
-                TextButton(onClick = { vm.ackPopup(p.id) }) { Text(S.POPUP_BTN_CLOSE) }
+                TextButton(onClick = { vm.ackPopup(p.id, p.nonce) }) { Text(S.POPUP_BTN_CLOSE) }
             }
         },
         dismissButton = {
             if (p.cancelEnabled) {
-                TextButton(onClick = { vm.ackPopup(p.id) }) { Text(S.CANCEL) }
+                TextButton(onClick = { vm.ackPopup(p.id, p.nonce) }) { Text(S.CANCEL) }
             }
         },
     )

@@ -104,6 +104,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private var lastNetToast: Long = 0L
     @Volatile
     private var popupDismissed: Long = 0L
+    private var popupNonce: Long = 0L
+    private var updateLogged = false
     @Volatile
     private var updateDismiss: Long = 0L
     @Volatile
@@ -521,6 +523,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         try {
             val o = JSONObject(store.loadRemote())
             popupDismissed = o.optLong("pd", 0L)
+            popupNonce = o.optLong("pn", 0L)
             updateDismiss = o.optLong("ud", 0L)
             notifSeen = o.optLong("ns", 0L)
             o.optJSONObject("rt")?.let { rt ->
@@ -536,6 +539,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             store.saveRemote(
                 JSONObject()
                     .put("pd", popupDismissed)
+                    .put("pn", popupNonce)
                     .put("ud", updateDismiss)
                     .put("ns", notifSeen)
                     .put("rt", routingJson())
@@ -771,6 +775,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun applyRemote(r: Remote.Result) {
         if (r.unchanged) return // worker says payload unchanged - keep local state untouched
         adminFlags = r.flags
+        // one line per process: "اجباری نمیاد" is either the server not sending it or this app not
+        // showing it, and without this the two look identical from the phone
+        r.update?.let {
+            if (!updateLogged) {
+                updateLogged = true
+                log("INFO", if (it.forced) "سرور اپدیت اجباری خواسته" else "سرور اپدیت پیشنهاد داده")
+            }
+        }
         if (r.dataFile != null) deliverRemoteData(r.dataFile)
         put { s ->
             val upd = r.update?.let {
@@ -778,7 +790,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             }
             s.copy(
                 appDisabled = !r.enabled,
-                remotePopup = r.popup?.takeIf { it.id != popupDismissed },
+                // A worker that sends a nonce may ask the same message again until its per-device
+                // ceiling runs out, so suppress only the exact show that was dismissed. A nonce-less
+                // payload comes from an older deployed worker, which counts shows globally - there
+                // the old "once per id" rule is the only one that does not re-open the dialog every
+                // two minutes forever.
+                remotePopup = r.popup?.takeIf { p ->
+                    if (p.nonce > 0L) !(p.id == popupDismissed && p.nonce == popupNonce) else p.id != popupDismissed
+                },
                 remoteUpdate = upd,
                 remoteNotif = r.notifications.firstOrNull()?.takeIf { it.id > notifSeen },
                 routing = r.routing ?: s.routing,
@@ -840,8 +859,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         return out.absolutePath
     }
 
-    fun ackPopup(id: Long) {
+    fun ackPopup(id: Long, nonce: Long = 0L) {
         popupDismissed = id
+        popupNonce = nonce
         put { s -> s.copy(remotePopup = null) }
         Remote.queueAck("popup", id)
         saveRemoteState()

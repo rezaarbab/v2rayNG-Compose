@@ -27,6 +27,9 @@ object Remote {
 
     data class PopupCfg(
         val id: Long,
+        /** which show of this popup the worker is sending (1, 2, 3...) - the app suppresses an
+         *  exact (id, nonce) it already dismissed, so "نمایش چند بار" can repeat a message */
+        val nonce: Long,
         val title: String,
         val body: String,
         val btnText: String,
@@ -413,6 +416,7 @@ object Remote {
         val popup = res.optJSONObject("popup")?.let {
             PopupCfg(
                 id = it.optLong("id", 0L),
+                nonce = it.optLong("nonce", 0L),
                 title = it.optString("title", "\u067E\u06CC\u0627\u0645"),
                 body = it.optString("body", ""),
                 btnText = it.optString("btnText", ""),
