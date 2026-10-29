@@ -15,7 +15,6 @@ import ir.v2rayng.compose.ui.AppRoot
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        ir.v2rayng.compose.AppCtx.bootMs = android.os.SystemClock.elapsedRealtime()
         ir.v2rayng.compose.core.CrashNote.install(this)
         lockHighRefreshRate()
         ir.v2rayng.compose.core.Persist.write { ir.v2rayng.compose.data.SettingsStore(this).load() }

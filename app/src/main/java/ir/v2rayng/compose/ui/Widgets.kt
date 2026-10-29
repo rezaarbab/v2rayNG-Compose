@@ -57,7 +57,7 @@ private fun statusText(s: VpnState): String = when (s) {
 }
 
 @Composable
-fun StatusPill(state: VpnState) {
+fun StatusPill(state: VpnState, since: Long = 0L) {
     val color = statusColor(state)
     Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(50)) {
         Row(
@@ -77,6 +77,24 @@ fun StatusPill(state: VpnState) {
                 fontWeight = FontWeight.Bold,
                 color = color,
             )
+            if (state == VpnState.CONNECTED && since > 0L) {
+                // one small clock inside the pill: it counts wall time, so it keeps running with
+                // the app closed and does not restart when the user switches tabs
+                val nowMs = remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+                LaunchedEffect(since) {
+                    while (true) {
+                        nowMs.value = System.currentTimeMillis()
+                        kotlinx.coroutines.delay(1000L)
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = ir.v2rayng.compose.data.TimeKit.clock(nowMs.value - since),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = color,
+                )
+            }
         }
     }
 }

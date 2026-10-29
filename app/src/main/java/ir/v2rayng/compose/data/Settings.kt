@@ -366,21 +366,19 @@ class SettingsStore(context: Context) {
 
     private fun uiPrefs() = ctx.getSharedPreferences(UI_PREFS, android.content.Context.MODE_PRIVATE)
 
-    /* ---- log tail, kept in plaintext so it survives what it is diagnosing -------------------
-     * The reproduction is "change the sticker, close the app, open it again" - which also kills the
-     * log. The last lines are therefore parked in the plain prefs file and shown again under a
-     * "previous run" header. Temporary instrument, no secrets in it (LogSanitize already ran). */
-    fun saveLogTail(text: String) {
+    /** The moment the tunnel came up. Outside the settings blob on purpose: it changes on every
+     *  connect and must not drag the whole blob through the keystore with it. */
+    fun saveConnSince(ms: Long) {
         try {
-            uiPrefs().edit().putString("logtail", text.take(12000)).apply()
+            uiPrefs().edit().putLong("connSince", ms).apply()
         } catch (_: Exception) {
         }
     }
 
-    fun loadLogTail(): String = try {
-        uiPrefs().getString("logtail", "").orEmpty()
+    fun loadConnSince(): Long = try {
+        uiPrefs().getLong("connSince", 0L)
     } catch (_: Exception) {
-        ""
+        0L
     }
 
     private fun setSelectedIdFast(id: String) {

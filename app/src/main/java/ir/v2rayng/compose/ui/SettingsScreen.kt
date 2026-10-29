@@ -329,6 +329,13 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             }
         }
 
+        Text(
+            text = versionLine(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 4.dp),
+        )
         Spacer(Modifier.height(10.dp))
     }
 
@@ -582,8 +589,7 @@ private val NotifPalette = longArrayOf(
 )
 
 @Composable
-private fun NotifColorDialog(current: Long, vm: AppViewModel, onDismiss: () -> Unit) {
-    var hex by remember { mutableStateOf(if (current >= 0) String.format("%08X", current) else "#FF8CDDB2") }
+private fun NotifColorDialog(current: Long, vm: AppViewModel, onDismiss: () -> Unit) {    var hex by remember { mutableStateOf(if (current >= 0) String.format("%08X", current) else "#FF8CDDB2") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(S.NOTIF_COLOR) },
@@ -650,3 +656,15 @@ fun SimpleHexColorDialog(title: String, current: Long, onSet: (Long) -> Unit, on
     )
 }
 
+
+/** "Blob 1.2 (12)" - what is installed, for the one user who asks. Outside composition so the
+ *  package lookup cannot sit in a try around a composable call. */
+private fun versionLine(): String {
+    val ctx = ir.v2rayng.compose.AppCtx.app
+    return try {
+        val pk = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        "Blob " + (pk.versionName ?: "?") + " (" + pk.longVersionCode + ")"
+    } catch (_: Exception) {
+        "Blob"
+    }
+}

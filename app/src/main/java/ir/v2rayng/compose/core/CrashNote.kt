@@ -60,6 +60,11 @@ object CrashNote {
                     }
                     cause = cause.cause
                 }
+                ir.v2rayng.compose.core.NotifyKit.alarm(
+                    app,
+                    "Blob بسته شد",
+                    e.javaClass.simpleName + ": " + (e.message ?: "").take(140),
+                )
                 app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                     .putString(KEY, sb.toString().take(1800))
                     .commit()

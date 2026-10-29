@@ -47,6 +47,8 @@ data class AppState(
     val servers: List<ServerProfile> = emptyList(),
     val selectedId: String = "",
     val vpnState: VpnState = VpnState.IDLE,
+    /** when the tunnel came up (0 = not connected) - the connect clock in the status pill */
+    val connSince: Long = 0L,
     val traffic: TrafficStat = TrafficStat(),
     val logs: List<LogLine> = emptyList(),
     val ipCountry: String = "",
@@ -68,6 +70,16 @@ data class AppState(
 
 object TimeKit {
     fun now(): String = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+
+    /** elapsed wall time as h:mm:ss (mm:ss under an hour) - the connect clock */
+    fun clock(ms: Long): String {
+        val t = if (ms > 0L) ms / 1000L else 0L
+        val h = t / 3600L
+        val m = (t % 3600L) / 60L
+        val s = t % 60L
+        return if (h > 0L) String.format(Locale.US, "%d:%02d:%02d", h, m, s)
+        else String.format(Locale.US, "%02d:%02d", m, s)
+    }
 
     fun human(b: Long): String = when {
         b < 1024L -> "$b B"

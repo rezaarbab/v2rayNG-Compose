@@ -48,8 +48,6 @@ object AppCtx {
     @Volatile
     lateinit var app: android.content.Context
 
-    @Volatile
-    var bootMs: Long = 0L
 }
 
 /** delay probes: https is the honest one, plain http survives anti-bot TLS blocks, tcp is the last resort */
@@ -81,7 +79,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private var lastTrafficPersist = 0L
 
-    private var logCount = 0
 
     @Volatile
     private var settingsLoaded = false
@@ -150,41 +147,38 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         ) {
             ir.v2rayng.compose.core.XrayBridge.setState(ir.v2rayng.compose.core.RealState.IDLE)
         }
+        if (ir.v2rayng.compose.core.XrayVpnService.tunnelUp &&
+            ir.v2rayng.compose.core.XrayBridge.status.value.state == ir.v2rayng.compose.core.RealState.CONNECTED
+        ) {
+            val back = store.loadConnSince()
+            if (back > 0L) put { s -> s.copy(connSince = back) }
+        }
         try {
-            val pkg = AppCtx.app.packageManager.getPackageInfo(AppCtx.app.packageName, 0)
-            log("INFO", "build " + (pkg.versionName ?: "?"))
-            CrashNote.take(AppCtx.app)?.let { log("ERROR", "Crash on last run - " + it) }
-            CrashNote.exitReasons(AppCtx.app)?.let { log("WARN", "Last process exits - " + it) }
+            // a crash nobody sees unless they open a log page is not a report
+            CrashNote.take(AppCtx.app)?.let {
+                ir.v2rayng.compose.core.NotifyKit.alarm(AppCtx.app, "Blob در اجرای قبلی بسته شد", it)
+            }
         } catch (_: Exception) {
         }
         // every stored value is behind a StrongBox unseal, so none of it may run while the first
         // frame is being composed - the UI paints from the plaintext theme mirror and the rest
         // lands as soon as the unseals are done
-        restorePreviousLog()
         viewModelScope.launch(Dispatchers.IO) {
-            val tLoad0 = android.os.SystemClock.elapsedRealtime()
-            log("INFO", "load begin (build " + (try { AppCtx.app.packageManager.getPackageInfo(AppCtx.app.packageName, 0).versionName } catch (e: Exception) { "?" }) + ")")
             val s = store.load()
-            log("INFO", "settings unsealed in " + (android.os.SystemClock.elapsedRealtime() - tLoad0) + "ms: " + describe(s))
             settingsLoaded = true
             // palette, stickers and wallpaper are what the eye notices, so they are applied before
             // the server list is unsealed; anything the user changed in the meantime is replayed on
             // top of the stored values instead of replacing them
             var merged = s
-            var replayed = 0
             while (true) {
                 val edit = pendingEdits.poll() ?: break
                 merged = edit(merged)
-                replayed++
             }
             _settings.value = merged
-            if (replayed > 0) log("INFO", "Merged " + replayed + " change(s) made while settings were loading")
             queueSave()
-            val tSrv = android.os.SystemClock.elapsedRealtime()
             val saved = store.loadServers()
             val sel = store.loadSelectedId()
             val base = store.loadRemoteBase()
-            log("INFO", "server list read in " + (android.os.SystemClock.elapsedRealtime() - tSrv) + "ms: " + (saved?.size ?: -1) + " entries, sel=" + sel)
             // A stored server list and the admin URL are data, not an edit. A running tunnel writes
             // server state (flag, traffic) while this read is still in flight, and treating that as
             // an edit is what made the whole app look reset when it was reopened.
@@ -203,18 +197,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             }
             Remote.BASE = base
             storedListLoaded = true
-            log(
-                "INFO",
-                "restored: " + _state.value.servers.size + " servers, style " + _settings.value.stickerStyle +
-                    ", traffic " + ir.v2rayng.compose.data.TimeKit.human(appUp) + "/" +
-                    ir.v2rayng.compose.data.TimeKit.human(appDown) +
-                    if (SettingsStore.lastSaveVerified == false) " (last save NOT verified)" else ""
-            )
             SecurePrefs.unreadableReport()?.let { log("ERROR", "Stored values this device cannot decrypt (keystore key changed): " + it) }
             SecurePrefs.sealFailureReport()?.let { log("ERROR", "Keystore refused to write: " + it) }
             ir.v2rayng.compose.core.sec.BlobVault.recoveryNote?.let { log("ERROR", "Keystore recovery: " + it) }
             loadRemoteState()
-            log("INFO", "startup: stored data in " + (android.os.SystemClock.elapsedRealtime() - tLoad0) + "ms")
             if (_state.value.servers.isNotEmpty() && effPingStart()) {
                 pingServers(null, effFlagStart())
             }
@@ -248,6 +234,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                 // the app can also arrive here without ever seeing CONNECTING: the
                                 // tunnel kept running while the app was closed
                                 captureTrafficBase(st.up, st.down)
+                                if (_state.value.connSince == 0L) {
+                                    val since = System.currentTimeMillis()
+                                    put { s -> s.copy(connSince = since) }
+                                    store.saveConnSince(since)
+                                }
                                 log("INFO", S.LOG_CONNECTED)
                                 Remote.queueAck("event", name = "connect")
                                 // tunnel watchdog: only trust CONNECTED when real internet passes through it
@@ -269,14 +260,21 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                             log("ERROR", "Failed to connect to server")
                                         } else if (!ok2) {
                                             log("INFO", S.LOG_DISCONNECTED)
-                                        } else {
-                                            log("WARN", "Tunnel slow but OK")
                                         }
                                     }
                                 }
                             }
                             ir.v2rayng.compose.core.RealState.BROKEN -> {
                                 watchdogJob?.cancel()
+                                clearConnSince()
+                                // the tunnel dying with the app closed is exactly the event the user
+                                // must hear about without opening anything
+                                ir.v2rayng.compose.core.NotifyKit.alarm(
+                                    AppCtx.app,
+                                    "اتصال قطع شد",
+                                    (if (st.message.isNotBlank()) st.message else "تونل از کار افتاد") +
+                                        " - برای وصل شدن دوباره اپ را باز کن.",
+                                )
                                 Remote.queueAck("event", name = "disconnect")
                                 persistTraffic("tunnel broke")
                                 log("ERROR", "${S.LOG_FAILED}${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
@@ -285,6 +283,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                 // a probe from a session that already ended must not paint the
                                 // idle app red
                                 watchdogJob?.cancel()
+                                clearConnSince()
                                 if (lastRealState == ir.v2rayng.compose.core.RealState.CONNECTED) {
                                     Remote.queueAck("event", name = "disconnect")
                                 }
@@ -416,13 +415,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      * the MIUI one in the APP_SCOUT_HANG trace - never do it on the click thread. A burst of
      * toggles also collapses into a single write instead of queueing dozens of full saves.
      */
-    /** The fields this bug hunt cares about - enough to compare what was read with what was written. */
-    private fun describe(s: Settings): String =
-        "style=" + s.stickerStyle + " dark=" + s.dark + " accent=" + s.accent +
-            " custom=" + s.customAccent + " mainIdx=" + s.mainIndex + " mainPack=" + s.mainPack +
-            " wallStyle=" + s.wallpaperStyle + " wallIdx=" + s.wallpaperIndex +
-            " flagAvatars=" + s.flagAvatars + " bubble=" + s.bubbleOn
-
     private fun queueSave() {
         // nothing may be sealed before the stored settings were read: the in-memory object is still
         // a default-filled placeholder at that point. The load itself calls this once it is done,
@@ -431,22 +423,15 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         saveJob?.cancel()
         saveJob = viewModelScope.launch(Dispatchers.IO) {
             delay(120)
-            val t0 = android.os.SystemClock.elapsedRealtime()
-            val cur = _settings.value
-            store.save(cur)
-            val ok = SettingsStore.lastSaveVerified
-            val verdict = when (ok) {
-                true -> "VERIFIED"
-                false -> "NOT VERIFIED"
-                else -> "skipped, nothing changed"
+            store.save(_settings.value)
+            if (SettingsStore.lastSaveVerified == false) {
+                log("ERROR", "تنظیمات ذخیره نشد - دستگاه نوشت را تأیید نکرد")
+                ir.v2rayng.compose.core.NotifyKit.alarm(
+                    AppCtx.app,
+                    "تنظیمات ذخیره نشد",
+                    "اپ نوشت ولی همان مقدار از دیسک برنگشت؛ اگر تنظیماتت پریده، علت همین است.",
+                )
             }
-            log(
-                if (ok == false) "ERROR" else "INFO",
-                "settings save " + verdict +
-                    " in " + (android.os.SystemClock.elapsedRealtime() - t0) + "ms: " + describe(cur)
-            )
-            drainJournal("after save")
-            flushLogTail()
         }
     }
 
@@ -454,7 +439,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      *  thread, because the queue's worker is a daemon and dies with the process. */
     override fun onCleared() {
         persistServers(now = true)
-        flushLogTail()
         super.onCleared()
     }
 
@@ -497,10 +481,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setDark(v: Boolean) = setSettings { it.copy(dark = v) }
     fun setAccent(i: Int) = setSettings { it.copy(accent = i) }
     fun setCustomAccent(v: Long) = setSettings { it.copy(customAccent = v) }
-    fun setStickerStyle(i: Int) {
-        setSettings { it.copy(stickerStyle = i) }
-        log("INFO", "Sticker style set to " + i + " -> now " + describe(_settings.value))
-    }
+    fun setStickerStyle(i: Int) = setSettings { it.copy(stickerStyle = i) }
     fun setWallpaperStyle(i: Int) = setSettings { it.copy(wallpaperStyle = i) }
     fun setWallpaper(i: Int) = setSettings { it.copy(wallpaperIndex = i) }
     fun setWallpaperColor(v: Long) = setSettings { it.copy(wallpaperColor = v) }
@@ -579,9 +560,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     /** announce=true only for an explicit user action - a background refresh must never pop
      *  "Fetching settings…" over the list the user already has on screen. */
     fun syncNow(announce: Boolean = true) {
-        val tSync = android.os.SystemClock.elapsedRealtime()
         val dev = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
-        log("INFO", "sync request start (device " + dev.take(8) + "…)")
         if (announce) infoToast(S.SYNC_FETCHING)
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -591,9 +570,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     val n = res.servers.size
                     val msg = if (res.unchanged) "Server list unchanged" else "Found " + n + " server" + (if (n == 1) "" else "s")
                     infoToast(msg)
-                    log("INFO", "Sync OK in " + (android.os.SystemClock.elapsedRealtime() - tSync) + "ms - " + msg)
                 } else {
-                    log("WARN", "Sync failed in " + (android.os.SystemClock.elapsedRealtime() - tSync) + "ms: " + (Remote.lastFail ?: "unknown"))
                     handleSyncFail()
                 }
             } catch (e: Exception) {
@@ -706,18 +683,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             // first sync right away, then every two minutes - and silent, because the user is
             // already looking at everything that was stored on the device
             try {
-                val t0 = android.os.SystemClock.elapsedRealtime()
                 val dev0 = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
                 val r0 = Remote.sync(dev0, "sync", _state.value.vpnState == VpnState.CONNECTED)
                 if (r0 != null) {
                     applyRemote(r0)
-                    log("INFO", "startup sync OK in " + (android.os.SystemClock.elapsedRealtime() - t0) + "ms - " + r0.servers.size + " servers")
                     infoToast(if (r0.unchanged) "Server list unchanged" else "Found " + r0.servers.size + " servers")
                 } else {
-                    log("WARN", "startup sync failed in " + (android.os.SystemClock.elapsedRealtime() - t0) + "ms: " + (Remote.lastFail ?: "unknown"))
+                    log("WARN", "لیست سرور گرفته نشد: " + (Remote.lastFail ?: "unknown"))
                 }
-                drainJournal("after startup sync")
-                flushLogTail()
             } catch (e: Exception) {
                 log("WARN", "Sync failed - " + (e.javaClass.simpleName))
             }
@@ -741,7 +714,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private fun mergeRemoteServers(list: List<Remote.ServerEntry>) {
         if (list.isEmpty() && _state.value.servers.any { it.id.startsWith("rem-") }) {
             // an empty answer must never blank the list the user is looking at
-            log("WARN", "Admin list came back empty - keeping the current servers")
             return
         }
         val knownBefore = _state.value.servers.filter { it.id.startsWith("rem-") }.map { it.id }.toSet()
@@ -785,7 +757,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         val newIds = list.map { it.id }.filter { !knownBefore.contains(it) }.toSet()
         if (newIds.isNotEmpty()) {
             if (effAutoPingNew()) {
-                log("INFO", "Auto ping ${newIds.size} new server(s)")
                 pingServers(newIds, effAutoFlagNew())
             } else {
                 log("INFO", "${newIds.size} new server(s) arrived")
@@ -1006,7 +977,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun resetServerIcon(id: String) {
         put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(pack = -1) else it }) }
         persistServers()
-        log("INFO", "Server sticker reset - detecting country...")
         viewModelScope.launch {
             val connectedSel = _state.value.vpnState == VpnState.CONNECTED && _state.value.selectedId == id
             val host = _state.value.servers.firstOrNull { it.id == id }?.host?.substringBefore(":")
@@ -1020,9 +990,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 if (connectedSel) {
                     applyFlag(code)
                 }
-                log("INFO", "Server country: $code")
-            } else {
-                log("WARN", S.LOG_IP_FAIL)
             }
         }
     }
@@ -1071,52 +1038,23 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     fun setHomeOrder(order: List<Int>) = setSettings { it.copy(homeOrder = packList(order)) }
 
+    /** An open tunnel keeps its clock across an app restart; a closed one has none. */
+    private fun clearConnSince() {
+        if (_state.value.connSince != 0L) put { s -> s.copy(connSince = 0L) }
+        store.saveConnSince(0L)
+    }
+
     private fun log(level: String, msg: String) {
         // the log is shown on screen and pasted around: it must never carry an endpoint
         val clean = ir.v2rayng.compose.core.LogSanitize.clean(msg)
         val line = LogLine(TimeKit.now(), level, clean)
-        logCount++
         put { s -> s.copy(logs = (s.logs + line).takeLast(400)) }
-        // every sixth line and every error: the repro ("change sticker, close app, reopen")
-        // otherwise deletes the very log that would explain it
-        if (level == "ERROR" || logCount % 6 == 0) flushLogTail()
-    }
-
-    private fun flushLogTail() {
-        val text = _state.value.logs.joinToString("\n") { it.time + "|" + it.level + "|" + it.msg }
-        // plaintext and cheap, so it goes straight through: this write must not sit in the daemon
-        // queue, because the exact thing being diagnosed is the process being swiped away
-        store.saveLogTail(text)
-    }
-
-    /** Shows what the previous run left behind, then clears the journal into the visible log. */
-    private fun restorePreviousLog() {
-        val tail = store.loadLogTail()
-        if (tail.isBlank()) return
-        val lines = tail.split('\n').filter { it.isNotBlank() }.takeLast(80)
-        put { s -> s.copy(logs = (s.logs + LogLine("--", "INFO", "---- previous run (" + lines.size + " lines) ----")).takeLast(400)) }
-        for (l in lines) {
-            val a = l.indexOf('|'); val b = l.indexOf('|', a + 1)
-            if (a < 0 || b < 0) continue
-            put { s -> s.copy(logs = (s.logs + LogLine(l.substring(0, a), l.substring(a + 1, b), l.substring(b + 1))).takeLast(400)) }
-        }
-        drainJournal("end of previous run")
-    }
-
-    /** Dumps the keystore journal - timings and failures - into the on-screen log. */
-    private fun drainJournal(phase: String) {
-        val lines = ir.v2rayng.compose.core.sec.SecJournal.drain()
-        if (lines.isEmpty()) return
-        log("DEBUG", "keystore journal @ " + phase + " (" + lines.size + ")")
-        for (l in lines) log("DEBUG", "  " + l)
-    }
-
-    /** Once the first frame is drawn: what the user actually feels as "the app takes long to open". */
-    fun logStartup() {
-        val boot = AppCtx.bootMs
-        if (boot > 0L) {
-            AppCtx.bootMs = 0L
-            log("INFO", "startup: first frame in " + (android.os.SystemClock.elapsedRealtime() - boot) + "ms")
+        // the keystore timings stay out of the user's log but not out of reach: an error dumps
+        // them to logcat, where they are one adb command away instead of one screenshot away
+        if (level == "ERROR") {
+            for (j in ir.v2rayng.compose.core.sec.SecJournal.drain()) {
+                ir.v2rayng.compose.core.sec.blog("journal: " + j)
+            }
         }
     }
 
@@ -1254,7 +1192,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 libv2ray.Libv2ray.initCoreEnv(d.absolutePath, "")
             } catch (_: Exception) {
             }
-            log("INFO", S.LOG_PING_START)
             infoToast(S.PING_TEST + "…")
             val targets = if (ids == null) _state.value.servers else _state.value.servers.filter { ids.contains(it.id) }
             // country probe uses a temporary core - never touch it while the tunnel owns the tun fd
@@ -1271,7 +1208,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             val (ms, msErr) = when {
                                 parsed != null -> probePing(parsed, srv.name)
                                 srv.link != null -> {
-                                    log("WARN", "Ping failed to parse: ${srv.name}")
                                     null to "config"
                                 }
                                 else -> {
@@ -1284,7 +1220,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             if (doFlags && ms != null && msErr == null && parsed != null) {
                                 val code = probeFlag(parsed, 21000 + portSeq.getAndIncrement() % 60)
                                 if (code != null) {
-                                    log("INFO", "Flag ${srv.name}: $code")
                                     put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(country = code) else it }) }
                                 }
                             }
@@ -1292,7 +1227,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     }
                 }
             }
-            log("INFO", S.LOG_PING_DONE)
         }
     }
 

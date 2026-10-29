@@ -123,7 +123,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
             when (section) {
                 0 -> {
                     Spacer(Modifier.height(10.dp))
-                    StatusPill(state.vpnState)
+                    StatusPill(state.vpnState, state.connSince)
                     Spacer(Modifier.height(6.dp))
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         val flagCode = state.ipCountry.uppercase()

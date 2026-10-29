@@ -48,13 +48,18 @@ fun LogScreen(state: AppState, vm: AppViewModel) {
     val listState: LazyListState = rememberLazyListState()
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
+    // the list is short now that only what matters is written to it; this is for the one case a
+    // user actually opens the page for
+    var onlyIssues by remember { mutableStateOf(false) }
 
-    LaunchedEffect(state.logs.size) {
-        if (state.logs.isNotEmpty()) {
-            listState.animateScrollToItem(state.logs.size - 1)
+    val shown = if (onlyIssues) state.logs.filter { it.level == "ERROR" || it.level == "WARN" } else state.logs
+
+    LaunchedEffect(shown.size) {
+        if (shown.isNotEmpty()) {
+            listState.animateScrollToItem(shown.size - 1)
         }
     }
-    val empty by remember { derivedStateOf { state.logs.isEmpty() } }
+    val empty = shown.isEmpty()
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -79,6 +84,11 @@ fun LogScreen(state: AppState, vm: AppViewModel) {
             ) {
                 Text(if (copied) "Copied!" else "Copy")
             }
+            androidx.compose.material3.FilterChip(
+                selected = onlyIssues,
+                onClick = { onlyIssues = !onlyIssues },
+                label = { Text("فقط خطاها", style = MaterialTheme.typography.labelSmall) },
+            )
             TipIconButton(Icons.Filled.Delete, S.CLEAR) { vm.clearLogs() }
         }
         Spacer(Modifier.height(10.dp))
@@ -96,7 +106,7 @@ fun LogScreen(state: AppState, vm: AppViewModel) {
                 state = listState,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                itemsIndexed(state.logs) { _, line ->
+                itemsIndexed(shown) { _, line ->
                     LogRow(line)
                 }
             }
