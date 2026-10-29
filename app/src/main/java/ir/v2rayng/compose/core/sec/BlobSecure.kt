@@ -1,13 +1,18 @@
 package ir.v2rayng.compose.core.sec
 
-import android.util.Log
 import ir.v2rayng.compose.AppCtx
 import ir.v2rayng.compose.core.NativeKit
 import org.json.JSONObject
 
-/** debug tag - visible with: adb logcat -s BlobSec */
+/**
+ * Debug funnel for the secure channel. Writes NOTHING: logcat on a handset is readable by any app
+ * with the permission granted, and anything this function was ever given (endpoint status, reply
+ * fragments, key fingerprints) is exactly the kind of detail that must not survive the process.
+ * Kept as a single no-op so the call sites stay in one place if a wired, user-approved debug build
+ * is ever wanted again - until then, nothing about this protocol leaves the app.
+ */
 fun blog(msg: String) {
-    try { Log.d("BlobSec", msg) } catch (_: Exception) {}
+    // deliberately empty
 }
 
 /**

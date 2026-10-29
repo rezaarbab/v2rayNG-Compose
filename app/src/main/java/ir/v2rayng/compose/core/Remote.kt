@@ -362,20 +362,19 @@ object Remote {
         val secure = try {
             BlobSecure.syncSecure(BASE, body)
         } catch (e: Exception) {
-            try { android.util.Log.d("BlobSec", "secure path exception: " + e.javaClass.simpleName) } catch (_: Exception) {}
             BlobSecure.fail("request failed (network)")
             null
         }
         if (secure == null) {
+            // nothing about this is written to logcat: the outcome is already on the log page as a
+            // sentence the user can act on, and the reason string is protocol detail
             lastFail = BlobSecure.lastReason ?: "server unreachable (network)"
-            try { android.util.Log.d("BlobSec", "secure path failed -> keeping local state, retry next sync") } catch (_: Exception) {}
             return null
         }
         lastFail = null
         if (!BlobSecure.lastPayloadSecure) {
             // never apply admin/server data that was not opened with this session's key
             lastFail = "rejected: payload did not arrive through the encrypted channel"
-            try { android.util.Log.d("BlobSec", "unencrypted payload rejected") } catch (_: Exception) {}
             return null
         }
         clearAckQueue() // worker consumed the acks (idempotent, safe to re-send on loss)

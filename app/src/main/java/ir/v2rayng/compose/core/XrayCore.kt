@@ -63,15 +63,14 @@ object XrayBridge {
         _logs.value = (_logs.value + line).takeLast(60)
     }
 
-    /** Anything the user cannot act on (core status text, internal counters, raw exception
-     *  messages that may carry an address) goes to logcat under this tag and never into the log
-     *  page - the page is only what happened to his connection. Read with: adb logcat -s BlobCore */
+    /**
+     * Anything the user cannot act on (core status text, internal counters, raw exception messages
+     * that may carry an address) is dropped here and never written anywhere - not the log page and
+     * not logcat, because a log file on the handset is a leak waiting to happen. The core's own
+     * state still reaches the user as the sentences in the log page.
+     */
     fun trace(msg: String) {
-        if (msg.isBlank()) return
-        try {
-            android.util.Log.d("BlobCore", LogSanitize.clean(msg).take(400))
-        } catch (_: Exception) {
-        }
+        // deliberately empty
     }
 
     fun setState(s: RealState, msg: String = "") {
