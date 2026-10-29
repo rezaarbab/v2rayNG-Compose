@@ -51,6 +51,8 @@ class XrayVpnService : VpnService() {
     private var lastUp = 0L
     private var lastDown = 0L
     private var connectedSince = 0L
+    private var rateUp = 0L
+    private var rateDown = 0L
     private var lastNotifiedSec = -1L
     private var shownLink: ProxyLink? = null
     @Volatile private var lastBig: android.graphics.Bitmap? = null
@@ -64,6 +66,8 @@ class XrayVpnService : VpnService() {
                     if (XrayBridge.takeCounterReset()) {
                         lastUp = 0
                         lastDown = 0
+                        rateUp = 0
+                        rateDown = 0
                         zeroStreak = 0
                         XrayBridge.setTraffic(0, 0, 0.0, 0.0)
                     }
@@ -72,8 +76,12 @@ class XrayVpnService : VpnService() {
                     if (d.up > 0 || d.down > 0) {
                         lastUp += d.up
                         lastDown += d.down
+                        rateUp = d.up
+                        rateDown = d.down
                         XrayBridge.setTraffic(lastUp, lastDown, d.up.toDouble(), d.down.toDouble())
                     } else {
+                        rateUp = 0
+                        rateDown = 0
                         zeroStreak++
                         if (zeroStreak == 8 && c.getIsRunning()) {
                             XrayBridge.addLog("CORE", "stats empty after 8s; isRunning=${c.getIsRunning()}")
@@ -221,7 +229,7 @@ class XrayVpnService : VpnService() {
         }
     }
 
-    /** The ongoing notification carries the same running clock the connect screen shows. */
+    /** The ongoing notification carries the connect screen's clock and live up/down speed. */
     private fun tickNotification() {
         if (connectedSince <= 0L) return
         val link = shownLink ?: return
@@ -235,15 +243,26 @@ class XrayVpnService : VpnService() {
     }
 
     private fun notification(link: ProxyLink, big: android.graphics.Bitmap?): NotificationCompat.Builder {
-        val base = link.name.ifBlank { "Connected - ${link.address}" }
-        val text = if (connectedSince > 0L)
-            "$base · ${ir.v2rayng.compose.data.TimeKit.clock(System.currentTimeMillis() - connectedSince)}"
-        else base
+        val title = link.name.ifBlank { "Connected - ${link.address}" }
+        val parts = mutableListOf<String>()
+        if (connectedSince > 0L) {
+            parts += ir.v2rayng.compose.data.TimeKit.clock(System.currentTimeMillis() - connectedSince)
+            parts += "↑ " + ir.v2rayng.compose.data.TimeKit.speed(rateUp.toDouble())
+            parts += "↓ " + ir.v2rayng.compose.data.TimeKit.speed(rateDown.toDouble())
+        } else {
+            // no clock and no counters until the tunnel is actually up
+            parts += "connecting"
+        }
+        val live = parts.joinToString(" · ")
+        val totals = "↑ " + ir.v2rayng.compose.data.TimeKit.human(lastUp) +
+            "  ↓ " + ir.v2rayng.compose.data.TimeKit.human(lastDown)
         val b = NotificationCompat.Builder(this, "blob_vpn")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle("Blob")
+            .setContentTitle(title)
             .setOngoing(true)
-            .setContentText(text)
+            .setContentText(live)
+        // pulling the notification down shows what the connect screen shows under each arrow
+        b.setStyle(NotificationCompat.BigTextStyle().setBigContentTitle(title).bigText("$totals\n$live"))
         big?.let {
             b.setLargeIcon(it)
             b.setColor(it.getPixel(128, 128))
