@@ -82,6 +82,18 @@ public final class NativeSec {
         }
     }
 
+    private static native byte[] gcmOpen(byte[] cipher, byte[] key, byte[] aad);
+
+    /** iv(12) || AES-256-GCM ciphertext+tag, opened with the session key - null on any failure. */
+    public static byte[] gcmDecrypt(byte[] cipher, byte[] key, byte[] aad) {
+        if (!READY || cipher == null || key == null || cipher.length < 29 || key.length != 32) return null;
+        try {
+            return gcmOpen(cipher, key, aad);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     public static String note() {
         return READY ? "sec ok" : "sec library failed its self test";
     }

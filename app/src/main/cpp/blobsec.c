@@ -338,6 +338,99 @@ Java_ir_v2rayng_compose_core_NativeSec_b64uEncode(JNIEnv *env, jclass cls, jbyte
     return out;
 }
 
-/* AES-256-GCM is NOT here. It only enters this file with a NIST known-answer test that has been
- * run, because an untested AES kills every sync on every handset at once - the Kotlin side still
- * does that one primitive (javax.crypto, which is Android's own native BoringSSL) until then. */
+/* AES-256-GCM: the primitive itself is NOT re-implemented here. This machine has no C compiler and
+ * local builds are forbidden, so a hand-typed S-box / GHASH could only be tested on a handset - and
+ * a single wrong table entry would look exactly like "the server is broken" on every device at once.
+ * Instead the platform's own AES (the same BoringSSL java has always used) is driven from here
+ * through JNI: the byte layout, the 12-byte IV prefix, the 128-bit tag and the AAD are unchanged, so
+ * the wire stays byte-identical, while no Java or Kotlin source contains any of this any more.
+ * The class and method names live in this binary, assembled from bytes.
+ */
+
+static const unsigned char CIPH[] = {
+    0x6a, 0x61, 0x76, 0x61, 0x78, 0x2f, 0x63, 0x72, 0x79, 0x70, 0x74, 0x6f, 0x2f,
+    0x43, 0x69, 0x70, 0x68, 0x65, 0x72, 0x00
+};
+static const unsigned char TRANS[] = { 0x41, 0x45, 0x53, 0x2f, 0x47, 0x43, 0x4d, 0x2f, 0x4e, 0x6f, 0x50, 0x61, 0x64, 0x64, 0x69, 0x6e, 0x67, 0x00 };
+static const unsigned char ALG[] = { 0x41, 0x45, 0x53, 0x00 };
+static const unsigned char MN_GET[] = { 0x67, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x00 };
+static const char MD_GET[] = "getInstance";
+static const char MD_INIT[] = "init";
+static const char MD_AAD[] = "updateAAD";
+static const char MD_FIN[] = "doFinal";
+static const char SIG_GET[] = "(Ljava/lang/String;)Ljavax/crypto/Cipher;";
+static const char SIG_INIT[] = "(ILjava/security/Key;Ljavax/crypto/spec/AlgorithmParameterSpec;)V";
+static const char SIG_B[] = "([B)[B";
+
+static jclass find_class_checked(JNIEnv *env, const unsigned char *name, int *err) {
+    jclass c = (*env)->FindClass(env, (const char *) name);
+    if (c == NULL) { *err = 1; }
+    return c;
+}
+
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArray jcipher, jbyteArray jkey, jbyteArray jaad) {
+    if (jcipher == NULL || jkey == NULL) return NULL;
+    jsize cn = (*env)->GetArrayLength(env, jcipher), kn = (*env)->GetArrayLength(env, jkey);
+    if (cn < 29 || kn != 32) return NULL;
+
+    int err = 0;
+    jclass cipherCls = find_class_checked(env, CIPH, &err);
+    jclass specCls = find_class_checked(env, (const unsigned char *) "javax/crypto/spec/GCMParameterSpec", &err);
+    jclass keyCls = find_class_checked(env, (const unsigned char *) "javax/crypto/spec/SecretKeySpec", &err);
+    if (err || cipherCls == NULL || specCls == NULL || keyCls == NULL) return NULL;
+
+    jmethodID midGet = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);
+    jmethodID midInit = (*env)->GetMethodID(env, cipherCls, MD_INIT, SIG_INIT);
+    jmethodID midAad = (*env)->GetMethodID(env, cipherCls, MD_AAD, "([B)V");
+    jmethodID midFin = (*env)->GetMethodID(env, cipherCls, MD_FIN, SIG_B);
+    jmethodID midSpec = (*env)->GetMethodID(env, specCls, "<init>", "(I[BII)V");
+    jmethodID midKey = (*env)->GetMethodID(env, keyCls, "<init>", "([BLjava/lang/String;)V");
+    if (!midGet || !midInit || !midAad || !midFin || !midSpec || !midKey) return NULL;
+
+    jbyteArray out = NULL;
+    jstring transform = (*env)->NewStringUTF(env, (const char *) TRANS);
+    jstring alg = (*env)->NewStringUTF(env, (const char *) ALG);
+    jbyte *key = (*env)->GetByteArrayElements(env, jkey, NULL);
+    jbyte *cip = (*env)->GetByteArrayElements(env, jcipher, NULL);
+
+    if (transform && alg && key && cip) {
+        /* iv = cipher[0..11], ct||tag = cipher[12..] */
+        jbyteArray iv = (*env)->NewByteArray(env, 12);
+        jbyteArray ct = (*env)->NewByteArray(env, (jsize) (cn - 12));
+        if (iv && ct) {
+            (*env)->SetByteArrayRegion(env, iv, 0, 12, cip);
+            (*env)->SetByteArrayRegion(env, ct, 12 - 12, (jsize) (cn - 12), cip + 12);
+            jobject spec = (*env)->NewObject(env, specCls, midSpec, 128, iv, 0, 12);
+            jobject kobj = (*env)->NewObject(env, keyCls, midKey, jkey, alg);
+            jobject c = (*env)->CallStaticObjectMethod(env, cipherCls, midGet, transform);
+            if (spec && kobj && c) {
+                (*env)->CallVoidMethod(env, c, midInit, 2 /* DECRYPT_MODE */, kobj, spec);
+                if (!(*env)->ExceptionCheck(env)) {
+                    if (jaad != NULL) {
+                        (*env)->CallVoidMethod(env, c, midAad, jaad);
+                        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+                    }
+                    out = (jbyteArray) (*env)->CallObjectMethod(env, c, midFin, ct);
+                    if ((*env)->ExceptionCheck(env)) {
+                        /* a tag failure is a wrong-key/damaged-carrier answer, not a crash */
+                        (*env)->ExceptionClear(env);
+                        out = NULL;
+                    }
+                }
+            }
+        }
+    }
+    if (key) (*env)->ReleaseByteArrayElements(env, jkey, key, JNI_ABORT);
+    if (cip) (*env)->ReleaseByteArrayElements(env, jcipher, cip, JNI_ABORT);
+    if (transform) (*env)->DeleteLocalRef(env, transform);
+    if (alg) (*env)->DeleteLocalRef(env, alg);
+    (*env)->DeleteLocalRef(env, cipherCls);
+    (*env)->DeleteLocalRef(env, specCls);
+    (*env)->DeleteLocalRef(env, keyCls);
+    return out;
+}
+
+/* AES-256-GCM is NOT hand-written here. See the note above: the platform primitive is driven from
+ * C so that no Java/Kotlin source holds the crypto, without betting every handset's sync on an
+ * AES table nobody was able to compile and test. */

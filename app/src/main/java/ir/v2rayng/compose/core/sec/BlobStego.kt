@@ -1,10 +1,6 @@
 package ir.v2rayng.compose.core.sec
 
-import java.security.SecureRandom
 import ir.v2rayng.compose.core.NativeSec
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 /**
  * Blob secure layer - app side. Wire format MUST stay byte-identical with
@@ -89,19 +85,13 @@ object BlobStego {
         return null
     }
 
-    /** cipher = iv(12) || GCM-ct ; key = random session bytes */
+    /**
+     * cipher = iv(12) || GCM-ct||tag ; key = the random session bytes. The opening itself is in
+     * blobsec.c - this file only checks the shape and hands the bytes over.
+     */
     fun blobOpen(cipher: ByteArray, key: ByteArray): ByteArray? {
         if (cipher.size < 29 || key.size != 32) return null
-        val iv = cipher.copyOfRange(0, 12)
-        val ct = cipher.copyOfRange(12, cipher.size)
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))
-        c.updateAAD(AAD)
-        return try {
-            c.doFinal(ct)
-        } catch (_: Exception) {
-            null
-        }
+        return NativeSec.gcmDecrypt(cipher, key, AAD)
     }
 
     /**

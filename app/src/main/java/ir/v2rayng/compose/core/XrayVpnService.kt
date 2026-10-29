@@ -244,7 +244,8 @@ class XrayVpnService : VpnService() {
     }
 
     private fun notification(link: ProxyLink, big: android.graphics.Bitmap?): NotificationCompat.Builder {
-        val title = link.name.ifBlank { "Connected - ${link.address}" }
+        // no address in the notification: it is drawn on the lock screen where anyone can read it
+        val title = link.name.ifBlank { "Blob VPN" }
         val parts = mutableListOf<String>()
         if (connectedSince > 0L) {
             parts += ir.v2rayng.compose.data.TimeKit.clock(System.currentTimeMillis() - connectedSince)
