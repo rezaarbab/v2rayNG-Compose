@@ -518,8 +518,10 @@ async function setSetting(env, key, value) {
  *  so the counters live in isolate memory and the admin's settings are cached for RL_CFG_TTL.
  *  The limit is stated in the panel rather than hidden: memory is per isolate, so an attacker
  *  spread over N isolates gets N times the budget - this brakes hammering, it is not a wall. */
-const RL = { hits: new Map(), logged: new Map(), cfg: null, cfgAt: 0 };
-const RL_CFG_TTL = 15000;
+const RL = { hits: new Map(), logged: new Map(), cfg: null, cfgAt: 0, epoch: 0 };
+/** 5 s, not 15: the admin who just switched the brake off must feel it fast, and one settings read
+ *  per isolate per 5 s is nothing next to what a refused request would otherwise cost. */
+const RL_CFG_TTL = 5000;
 const RL_MAX_KEYS = 4000;
 
 function rlInt(v, d, lo, hi) {
@@ -528,19 +530,42 @@ function rlInt(v, d, lo, hi) {
 }
 
 /** off unless the admin turned it on - and a settings read that fails leaves it off, because a
- *  database hiccup must not lock every handset out of the sync that keeps its list alive. */
+ *  database hiccup must not lock every handset out of the sync that keeps its list alive.
+ *  rl_epoch is the "release now" signal: memory counters are per isolate and no isolate can reach
+ *  another one, so the panel writes a number to D1 and every isolate throws its own windows away
+ *  the first time it re-reads after it. That is the honest way to promise "freed inside 5 seconds"
+ *  instead of pretending one request can clean up every copy of the counter. */
 async function rlCfg(env) {
   const now = Date.now();
   if (RL.cfg && now - RL.cfgAt < RL_CFG_TTL) return RL.cfg;
   RL.cfgAt = now;
-  const s = await getSettings(env, ["rl_on", "rl_sec", "rl_dev", "rl_ip"]);
+  const s = await getSettings(env, ["rl_on", "rl_sec", "rl_dev", "rl_ip", "rl_epoch"]);
+  const ep = Number(s.rl_epoch || 0);
+  if (Number.isFinite(ep) && ep > RL.epoch) {
+    RL.epoch = ep;
+    RL.hits.clear();
+    RL.logged.clear();
+  }
   RL.cfg = {
     on: String(s.rl_on || "0") === "1",
     sec: rlInt(s.rl_sec, 2, 1, 60),
     dev: rlInt(s.rl_dev, 2, 1, 200),
     ip: rlInt(s.rl_ip, 8, 1, 5000),
+    epoch: RL.epoch,
   };
   return RL.cfg;
+}
+
+/** Forget every window this isolate is holding, now (the panel button also publishes the epoch
+ *  for the isolates this request did not reach). */
+async function rlClear(env) {
+  const ep = Date.now();
+  await setSetting(env, "rl_epoch", String(ep));
+  RL.epoch = ep;
+  RL.hits.clear();
+  RL.logged.clear();
+  RL.cfgAt = 0;
+  return ep;
 }
 
 /** Count one hit on this api for the device and for the IP; answer with the bucket that went over
@@ -850,6 +875,63 @@ async function adminApi(env, b, request) {
         await setSetting(env, "blocked_models", clean(b.models));
         return okJson();
       }
+      case "block.info": {
+        // the three block lists are stored as one comma string each, which is fine to enforce and
+        // useless to read: this turns them back into rows with who/when/how-many behind each entry,
+        // so "آزاد کردن" can be pressed on the thing you actually recognise instead of on a substring
+        const listOf = (v) => [...new Set(String(v || "").split(",").map((x) => x.trim()).filter(Boolean))].slice(0, 200);
+        const phFrom = (arr, start) => arr.map((_, i) => "?" + (i + start)).join(",");
+        const bl = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models"]);
+        const devs = listOf(bl.blocked_devices);
+        const ips = listOf(bl.blocked_ips);
+        const mods = listOf(bl.blocked_models);
+        const cut = Date.now() - 86400000;
+        const seen = {};
+        const errs = [];
+        if (devs.length) {
+          const rows = await qAll(env,
+            "SELECT id, model, app_ver, last_seen, ip FROM devices WHERE id IN (" + phFrom(devs, 1) + ")", devs);
+          if (rows === null) errs.push("devices");
+          for (const r of rows || []) seen[String(r.id)] = r;
+          const ev = await qAll(env,
+            "SELECT device, COUNT(*) n, MAX(ts) l FROM events WHERE ts>?1 AND device IN (" + phFrom(devs, 2) + ") GROUP BY device",
+            [cut, ...devs]);
+          if (ev === null) errs.push("events-ip");
+          for (const r of ev || []) { const t = seen[String(r.device)]; if (t) { t.req24 = Number(r.n || 0); t.lastt = Number(r.l || 0); } }
+        }
+        const ipInfo = {};
+        if (ips.length) {
+          const ev = await qAll(env,
+            "SELECT ip, COUNT(*) n, COUNT(DISTINCT device) devs, MAX(ts) l FROM events WHERE ts>?1 AND ip IN (" + phFrom(ips, 2) + ") GROUP BY ip",
+            [cut, ...ips]);
+          if (ev === null) errs.push("events-ip");
+          for (const r of ev || []) ipInfo[String(r.ip)] = { n: Number(r.n || 0), devs: Number(r.devs || 0), l: Number(r.l || 0) };
+          const holders = await qAll(env,
+            "SELECT ip, COUNT(*) n, MAX(last_seen) l FROM devices WHERE ip IN (" + phFrom(ips, 1) + ") GROUP BY ip", ips);
+          for (const r of holders || []) {
+            const k = String(r.ip);
+            ipInfo[k] = ipInfo[k] || { n: 0, devs: 0, l: 0 };
+            ipInfo[k].heldBy = Number(r.n || 0);
+            ipInfo[k].heldLast = Number(r.l || 0);
+          }
+        }
+        const modInfo = {};
+        if (mods.length) {
+          const low = mods.map((m) => String(m).toLowerCase());
+          const rows = await qAll(env,
+            "SELECT LOWER(model) m, COUNT(*) n, MAX(last_seen) l FROM devices WHERE LOWER(model) IN (" + phFrom(low, 1) + ") GROUP BY LOWER(model)",
+            low);
+          for (const r of rows || []) modInfo[String(r.m)] = { n: Number(r.n || 0), l: Number(r.l || 0) };
+        }
+        const s = await getSettings(env, ["rl_on"]);
+        return okJson({
+          devices: devs.map((d) => ({ id: d, hit: !!seen[d], ...(seen[d] || {}) })),
+          ips: ips.map((i2) => ({ ip: i2, ...(ipInfo[i2] || ipInfo[String(i2).toLowerCase()] || {}) })),
+          models: mods.map((m) => ({ model: m, ...(modInfo[String(m).toLowerCase()] || {}) })),
+          err: errs.length ? "چیزی از دیتابیس خوانده نشد: " + errs.join(", ") : "",
+          throttleOn: String(s.rl_on || "0") === "1",
+        });
+      }
       case "dev.del": {
         const one = String(b.id || "").slice(0, 128);
         await env.DB.prepare("DELETE FROM devices WHERE id=?1").bind(one).run();
@@ -1146,31 +1228,45 @@ async function adminApi(env, b, request) {
       }
       case "rl.state": {
         // the panel shows what is stored in D1, which is the source of truth; every isolate reads
-        // it within RL_CFG_TTL, so "changed 15 seconds ago" is the most anyone can promise here
-        const s = await getSettings(env, ["rl_on", "rl_sec", "rl_dev", "rl_ip"]);
+        // it within RL_CFG_TTL, so "changed 5 seconds ago" is the most anyone can promise here
+        const s = await getSettings(env, ["rl_on", "rl_sec", "rl_dev", "rl_ip", "rl_epoch"]);
         const cut = Date.now() - 86400000;
         const rows = await qAll(env,
           "SELECT device, type, ts, ip FROM events WHERE ts>?1 AND type LIKE 'throttled%' ORDER BY ts DESC LIMIT 30",
           [cut]);
         const groups = await qAll(env,
-          "SELECT type, COUNT(*) AS n FROM events WHERE ts>?1 AND type LIKE 'throttled%' GROUP BY type",
+          "SELECT device, type, ip, COUNT(*) AS n, MAX(ts) AS lastt FROM events WHERE ts>?1 AND type LIKE 'throttled%' GROUP BY device, type, ip ORDER BY lastt DESC LIMIT 40",
           [cut]);
+        // this isolate's own live windows - labelled as such in the panel, because other isolates
+        // are invisible from here and saying so beats showing a number that is only partly true
+        const live = [];
+        const lnow = Date.now();
+        for (const [k, v] of RL.hits) { if (lnow - v.t < 60000) live.push({ k, n: v.n, age: lnow - v.t }); }
+        live.sort((a, b) => b.n - a.n);
         return okJson({
           rl: {
             on: String(s.rl_on || "0"), sec: rlInt(s.rl_sec, 2, 1, 60),
             dev: rlInt(s.rl_dev, 2, 1, 200), ip: rlInt(s.rl_ip, 8, 1, 5000),
+            epoch: Number(s.rl_epoch || 0),
           },
+          live: live.slice(0, 25),
+          liveCount: live.length,
           recent: rows || [],
+          byWho: groups || [],
           refused24h: (groups || []).reduce((a, r) => a + Number(r.n || 0), 0),
           err: rows === null ? "دسترسی به جدول رویدادها خطا داد (ستون ip را بررسی کن)" : "",
         });
+      }
+      case "rl.clear": {
+        const ep = await rlClear(env);
+        return okJson({ epoch: ep });
       }
       case "rl.set": {
         await setSetting(env, "rl_on", b.on ? "1" : "0");
         await setSetting(env, "rl_sec", String(rlInt(b.sec, 2, 1, 60)));
         await setSetting(env, "rl_dev", String(rlInt(b.dev, 2, 1, 200)));
         await setSetting(env, "rl_ip", String(rlInt(b.ip, 8, 1, 5000)));
-        RL.cfgAt = 0; // this isolate re-reads immediately; the others follow inside 15 s
+        RL.cfgAt = 0; // this isolate re-reads immediately; the others follow inside 5 s
         return okJson({ saved: true });
       }
       case "canary.set": {
@@ -1229,7 +1325,30 @@ async function adminApi(env, b, request) {
           // database from before events.ip / dev_keys - take what still answers
           for (const q of QD) out2[q[0]] = (await qAll(env, q[1], ids)) || [];
         }
+        // "why is this handset refused right now" as facts, not as a guess: which of the three block
+        // lists it sits on, whether the brake is on, and when it last ate one of its requests
+        const blv = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models", "rl_on", "rl_sec", "rl_dev", "rl_ip"]);
+        const has = (csv, v) => !!v && String(csv || "").split(",").map((x) => x.trim().toLowerCase()).includes(String(v).toLowerCase());
+        const d0 = (out2.devs || [])[0] || {};
+        const sentences = [];
+        const blockedDeviceIds = ids.filter((x) => has(blv.blocked_devices, x));
+        if (blockedDeviceIds.length) sentences.push("مسدود شده به‌عنوان <b>دستگاه</b> (" + blockedDeviceIds.length + " شناسه از این گروه در لیست است)");
+        if (has(blv.blocked_models, d0.model)) sentences.push("مدلش (<b>" + esc1(String(d0.model)) + "</b>) در لیست مدل‌های مسدود است");
+        const badIps = (out2.ips || []).filter((r) => has(blv.blocked_ips, r.ip)).map((r) => String(r.ip));
+        if (has(blv.blocked_ips, d0.ip) && !badIps.includes(String(d0.ip))) badIps.unshift(String(d0.ip));
+        if (badIps.length) sentences.push("IPهایش در لیست مسدود هستند: <b>" + badIps.slice(0, 4).join("، ") + "</b>");
+        const tOn = String(blv.rl_on || "0") === "1";
+        const lastThrottled = (out2.events || []).filter((e2) => String(e2.type || "").indexOf("throttled") === 0)[0] || null;
+        if (tOn) {
+          sentences.push("دداس‌گارده <b>روشن</b> است: سقف " + rlInt(blv.rl_dev, 2, 1, 200) + " درخواست برای هر دستگاه و " +
+            rlInt(blv.rl_ip, 8, 1, 5000) + " برای هر IP در هر " + rlInt(blv.rl_sec, 2, 1, 60) + " ثانیه" +
+            (lastThrottled ? " · آخرین درخواست رد شده‌اش " + agoTxt(Number(lastThrottled.ts || 0)) + " پیش بوده (" + (String(lastThrottled.type) === "throttled-ip" ? "سقف IP" : "سقف دستگاه") + ")" : " · این دستگاه هنوز چیزی از آن خورده نگرفته"));
+        } else if (lastThrottled) {
+          sentences.push("دداس‌گارده الان <b>خاموش</b> است؛ آخرین درخواست رد شده‌اش " + agoTxt(Number(lastThrottled.ts || 0)) + " پیش بوده");
+        }
+        if (!sentences.length) sentences.push("هیچ‌چیزی جلوی این دستگاه را نگرفته: نه در لیست مسدودها هست و نه دداس‌گارده فعال است");
         return okJson({
+          refuse: { sentences, blockedDeviceIds, throttleOn: tOn },
           hist: (out2.hist || [])[0] || null,
           events: out2.events || [],
           ips: out2.ips || [],
@@ -1250,6 +1369,25 @@ async function adminApi(env, b, request) {
 
 function okJson(extra = {}) {
   return new Response(JSON.stringify({ ok: true, ...extra }), { headers: jsonHeaders() });
+}
+
+/** the verdict sentences above are HTML that the panel drops in as-is, and a model name comes from
+ *  the handset - so it gets escaped here rather than trusted */
+function esc1(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/** "3 دقیقه" style age, so a refusal reads as how long ago rather than as a raw epoch */
+function agoTxt(ts) {
+  const n = Number(ts || 0);
+  if (!n) return "؟";
+  const sec = Math.max(0, Math.round((Date.now() - n) / 1000));
+  if (sec < 60) return sec + " ثانیه";
+  const m = Math.round(sec / 60);
+  if (m < 60) return m + " دقیقه";
+  const h = Math.round(m / 60);
+  if (h < 24) return h + " ساعت";
+  return Math.round(h / 24) + " روز";
 }
 
 /* ---- srv.all cache: one 2.5s-lived snapshot so repeated panel calls are instant ---- */
@@ -1696,7 +1834,14 @@ function panelPage(env) {
 <div><div class=lbl>ایپی‌ها مسدود (با کاما)</div><textarea id=blk_i rows=2></textarea></div>
 <div><div class=lbl>مدل‌ها مسدود (با کاما)</div><textarea id=blk_m rows=2></textarea></div>
 </div>
-<button onclick=saveBlockLists() style=margin-top:10px>ذخیره لیست‌های مسدود</button></div>
+<button onclick=saveBlockLists() style=margin-top:10px>ذخیره لیست‌های مسدود</button>
+<div class=toolbar style="margin-top:10px">
+<button class="gray sm" onclick=loadBlockInfo()>🔎 فهرست و اطلاعات مسدودها</button>
+<button class="red sm" onclick='relAll("device")'>پاک کردن لیست دستگاه‌ها</button>
+<button class="red sm" onclick='relAll("ip")'>پاک کردن لیست IP</button>
+<button class="red sm" onclick='relAll("model")'>پاک کردن لیست مدل‌ها</button>
+</div>
+<div id=blk_info class=note style="margin-top:10px"></div></div>
 
 <div class=card><h2>🕵 سرورهای تله و بررسی نشتی <span class=cnt id=cy_cnt></span></h2>
 <div class=grid style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr))">
@@ -1737,8 +1882,10 @@ function panelPage(env) {
 <div class=toolbar style="margin-top:12px">
 <button onclick=saveRl()>ذخیره</button>
 <button class="gray sm" onclick=loadRl()>🔄 تازه‌سازی</button>
+<button class="gray sm" onclick=rlClearNow()>🧹 آزاد کردن شمارنده‌های محدودیت</button>
 </div>
 <div id=rl_diag class=note style="margin-top:8px"></div>
+<div id=rl_who style="margin-top:8px"></div>
 <div id=rl_recent style="margin-top:8px"></div>
 <p class=note>فقط دو آدرس اپ را می‌گیرد: <b>/api/key</b> (گرفتن کلید نشست) و <b>/api/sync</b> (لیست سرور و همهٔ داده‌ها). اگر روشن باشد و یک دستگاه یا یک IP بیشتر از سهمش درخواست بفرستد، ورکر آن درخواست را <b>بدون خواندن دیتابیس</b> رد می‌کند و تعدادش را در تاریخچهٔ همان دستگاه ثبت می‌کند. جواب رد برای همگام‌سازی یک خطای خالی ۴۲۹ است (نه «کلید نامعتبر»): اپ با جواب «کلید نامعتبر» کلیدهای نشستی‌اش را دور می‌انداخت و بلافاصله دو درخواست می‌فرستد، یعنی دقیقاً کاری که می‌خواهیم جلویش را بگیریم، و با جواب «چیزی تغییر نکرد» رسیدهای رویدادها و فایلی که ادمین فرستاده پاک می‌شد. با این خطا، دستگاهی که محدود شده فقط یک خط «سرور HTTP 429 داد» در لاگش می‌آید، لیست سرورها و کلیدهای نشستش دست‌نخورده می‌ماند و دو دقیقه بعد خودش دوباره تلاش می‌کند. یک اپ عادی هر ۲ دقیقه یک‌بار همگام‌سازی می‌کند، پس هرگز به این سقف نمی‌رسد؛ سهم ۲ برای دستگاه یعنی حتی دو بار پشت سر هم هم مجاز است. شمارش‌ها در حافظهٔ خودِ ورکر است (نه دیتابیس) و هر نسخهٔ اجرایی حافظهٔ خودش را دارد، پس اگر یک حمله‌کننده هم‌زمان از چند مسیر برود، عملاً چند برابر سهم بهش می‌رسد - این ترمزِ چکش‌زدن است، دیوار نیست؛ برای بند محکم‌تر باید از Rules دامنهٔ کلودفلر استفاده کنی.</p></div>
 
@@ -2146,6 +2293,21 @@ async function loadRl(){const j=await api({action:'rl.state'});const r=j.rl||{};
   '<br><span class=note>سقف هر دستگاه='+(r.dev||2)+' · سقف هر IP='+(r.ip||8)+' · پنجره='+(r.sec||2)+' ثانیه · فقط /api/key و /api/sync'+
   (j.err?'<br><span style="color:var(--red)">'+esc(j.err)+'</span>':'')+'</span>';
  const rows=(j.recent||[]).slice(0,20);
+ /* who is eating the brake - grouped per device/ip from the last 24h, not one row per request */
+ const by=(j.byWho||[]).slice(0,25);
+ if($('rl_who'))$('rl_who').innerHTML='<div class=lbl>کی محدود شده (۲۴ ساعت)</div>'+
+  (by.length?'<table><tr><td class=note>دستگاه / IP</td><td class=note>کدام سقف</td><td class=note>چند بار رد شده</td><td class=note>آخرین</td><td></td></tr>'+
+   by.map(function(x){const isIp=String(x.type||'')==='throttled-ip';const val=isIp?String(x.ip||''):String(x.device||'');
+    return '<tr><td style="direction:ltr;text-align:right;word-break:break-all">'+esc(isIp?val:val.slice(0,22))+'</td><td>'+(isIp?'سقف IP':'سقف دستگاه')+'</td><td>'+Number(x.n||0)+'</td><td class=note>'+fmtTs(x.lastt)+'</td>'+
+     '<td><button class="gray sm" data-rlv="'+esc(val)+'" data-rlip="'+(isIp?'1':'0')+'">'+(isIp?'پاک کردن شمارنده‌ها':'جزئیاتش')+'</button></td></tr>'}).join('')+'</table>':
+   '<span class=note>هیچ دستگاه یا IP ای در ۲۴ ساعت اخیر به سقف نخورده است</span>')+
+  '<div class=note style="margin-top:6px">شمارنده‌های زندهٔ همین نسخهٔ اجرایی: '+(Number(j.liveCount)||0)+
+  ' (هر isolate حافظهٔ خودش را دارد، پس این عدد کل ماجرا نیست؛ عدد بالا که از دیتابیس می‌آید کل ماجراست)</div>';
+ const wb=$('rl_who');
+ if(wb)wb.querySelectorAll('button[data-rlv]').forEach(function(b){b.onclick=function(){
+  const v=b.getAttribute('data-rlv')||'';const isIp=b.getAttribute('data-rlip')==='1';
+  if(isIp){api({action:'rl.clear'}).then(function(){toast('شمارنده‌ها پاک شد - اگر IP هم در لیست مسدودها هست، از همان‌جا آزادش کن');loadRl()});return}
+  devDetail({ids:[v],model:'',info:{}})}});
  if($('rl_recent'))$('rl_recent').innerHTML=rows.length?
   '<table><tr><td class=note>دستگاه</td><td class=note>کدام سقف</td><td class=note>IP</td><td class=note>کِی</td></tr>'+
   rows.map(function(x){return '<tr><td style="direction:ltr;text-align:right">'+esc(String(x.device||'').slice(0,18))+'</td><td>'+esc(evLbl(x.type))+'</td>'+
@@ -2154,7 +2316,44 @@ async function loadRl(){const j=await api({action:'rl.state'});const r=j.rl||{};
 async function saveRl(){const j=await api({action:'rl.set',on:$('rl_on').checked,sec:Number($('rl_sec').value||2),
  dev:Number($('rl_dev').value||2),ip:Number($('rl_ip').value||8)});
  if(!j||j.ok===false){toast((j&&j.error)||'خطا',1);return}
- toast($('rl_on').checked?'محدود کردن روشن شد - تا ۱۵ ثانیه دیگر روی همهٔ مسیرهای ورکر':'محدود کردن خاموش شد');loadRl()}
+ toast($('rl_on').checked?'محدود کردن روشن شد - تا ۵ ثانیه دیگر روی همهٔ مسیرهای ورکر':'محدود کردن خاموش شد');loadRl()}
+async function rlClearNow(){const j=await api({action:'rl.clear'});
+ if(!j||j.ok===false){toast((j&&j.error)||'خطا',1);return}
+ toast('شمارنده‌ها پاک شد - بقیهٔ مسیرهای ورکر تا ۵ ثانیه دیگر همان را می‌بینند');loadRl()}
+/* ---- the three block lists, as rows you can read and release ---- */
+async function loadBlockInfo(){const j=await api({action:'block.info'});
+ const box=$('blk_info');if(!box)return;
+ if(!j||j.ok===false){box.innerHTML='<span style="color:var(--red)">'+esc((j&&j.error)||'خطا')+'</span>';return}
+ const d=j.devices||[],ip=j.ips||[],md=j.models||[];
+ let h='';
+ if(j.err)h+='<div class=note style="color:var(--amber)">'+esc(j.err)+'</div>';
+ h+='<div class=lbl>دستگاه‌های مسدود ('+d.length+')</div>';
+ h+=d.length?'<table><tr><td class=note>شناسه</td><td class=note>مدل · نسخهٔ اپ</td><td class=note>آخرین دیده</td><td class=note>درخواست ۲۴h</td><td></td></tr>'+
+  d.map(function(x){return '<tr><td style="direction:ltr;text-align:right;word-break:break-all">'+esc(String(x.id||'').slice(0,22))+'</td>'+
+   '<td>'+esc(x.model||'(هرگز اپ را باز نکرده)')+' · '+esc(x.app_ver||'-')+'</td><td class=note>'+fmtTs(x.last_seen)+'</td><td>'+esc(String(x.req24==null?'-':x.req24))+'</td>'+
+   '<td><button class="gray sm" data-binfo="'+esc(x.id)+'">🔎 جزئیات</button> <button class="red sm" data-brel="device" data-bval="'+esc(x.id)+'">آزاد کردن</button></td></tr>'}).join('')+'</table>':
+  '<span class=note>خالی</span>';
+ h+='<div class=lbl style="margin-top:10px">IPهای مسدود ('+ip.length+')</div>';
+ h+=ip.length?'<table><tr><td class=note>IP</td><td class=note>دستگاه‌های این IP در ۲۴h</td><td class=note>رد شدن‌ها</td><td class=note>این IP را الان چند دستگاه دارند</td><td class=note>آخرین</td><td></td></tr>'+
+  ip.map(function(x){return '<tr><td style="direction:ltr;text-align:right">'+esc(x.ip)+'</td><td>'+Number(x.devs||0)+'</td><td>'+Number(x.n||0)+'</td><td>'+Number(x.heldBy||0)+'</td><td class=note>'+fmtTs(x.l||x.heldLast)+'</td>'+
+   '<td><button class="red sm" data-brel="ip" data-bval="'+esc(x.ip)+'">آزاد کردن</button></td></tr>'}).join('')+'</table>':
+  '<span class=note>خالی</span>';
+ h+='<div class=lbl style="margin-top:10px">مدل‌های مسدود ('+md.length+')</div>';
+ h+=md.length?'<table><tr><td class=note>مدل</td><td class=note>چند دستگاه با این مدل ثبت شده</td><td class=note>آخرین</td><td></td></tr>'+
+  md.map(function(x){return '<tr><td>'+esc(x.model)+'</td><td>'+Number(x.n||0)+'</td><td class=note>'+fmtTs(x.l)+'</td>'+
+   '<td><button class="red sm" data-brel="model" data-bval="'+esc(x.model)+'">آزاد کردن</button></td></tr>'}).join('')+'</table>':
+  '<span class=note>خالی</span>';
+ if(!d.length&&!ip.length&&!md.length)h+='<div class=note style="margin-top:6px">هیچ‌کس مسدود نیست، پس هیچ دستگاهی هم به خاطر لیست مسدودها نمی‌تواند لیست بگیرد. اگر دستگاهی خطا می‌دهد و اینجا چیزی نیست، علت یا دداس‌گارده است (کارت 🚦) یا خودِ اپ - جزئیات دستگاه را باز کن، بالای پنجره می‌گوید چرا رد می‌شود.</div>';
+ box.innerHTML=h;
+ box.querySelectorAll('button[data-brel]').forEach(function(b){b.onclick=function(){relOne(b.getAttribute('data-brel'),b.getAttribute('data-bval'))}});
+ box.querySelectorAll('button[data-binfo]').forEach(function(b){b.onclick=function(){devDetail({ids:[b.getAttribute('data-binfo')||''],model:'',info:{}})}})}
+async function relOne(kind,val){if(!val)return;
+ const j=await api({action:'dev.block',kind:kind,id:val,on:false});
+ if(!j||j.ok===false){toast((j&&j.error)||'خطا',1);return}
+ toast('آزاد شد - دستگاه در همگام‌سازی بعدی‌اش (حداکثر دو دقیقه دیگر) لیست را می‌گیرد');loadBlockInfo();loadDevices()}
+async function relAll(kind){const map={device:'blk_d',ip:'blk_i',model:'blk_m'};const el=$(map[kind]);if(!el)return;
+ if(!confirm('همهٔ entries این لیست آزاد شوند؟'))return;
+ el.value='';await saveBlockLists();loadBlockInfo()}
 async function cyMake(){const ids=(DEVS||[]).slice(0,5).map(x=>String(x.id||'')).filter(Boolean);
  if(!ids.length){toast('اول یک دستگاه باید همگام‌سازی کند',1);return}
  const j=await api({action:'canary.make',ids:ids.join(',')});
@@ -2187,7 +2386,11 @@ async function devDetail(e){toast('در حال دریافت جزئیات...');
  if(!j||j.ok===false){toast((j&&j.error)||'خطا',1);return}
  const info=e.info||{};const ks=j.keys||[];const ss=j.sessions||[];
  const md=String((ss[0]&&ss[0].mode)||'');
- let h='<div style="margin-bottom:8px">'+devVerdict(info)+'</div>';
+ /* first line of the modal = why this handset is refused right now, from the worker's own state */
+ const rf=j.refuse||{};const rfs=(rf.sentences||[]);
+ let h='<div class=lbl>چرا الان رد می‌شود؟</div><div class=note style="margin-bottom:8px;line-height:1.7">'+
+  (rfs.length?rfs.map(function(x){return '• '+x}).join('<br>'):'• ؟')+'</div>'+
+  '<div style="margin-bottom:8px">'+devVerdict(info)+'</div>';
  h+='<div class=lbl>هویت و کلید</div><table>';
  h+=kv('مدل',e.model||'-');
  h+=kv('شناسه اندروید',info.android_id||'(ندارد)');
