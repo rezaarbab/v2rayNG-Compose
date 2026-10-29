@@ -47,8 +47,11 @@ CREATE TABLE IF NOT EXISTS servers (
 );
 
 CREATE TABLE IF NOT EXISTS popup_seen (
-  device TEXT,
-  popup  INTEGER,
+  device  TEXT,
+  popup   INTEGER,
+  -- how many times THIS handset dismissed THIS popup; the ceiling is per device, not global
+  count   INTEGER DEFAULT 0,
+  last_ts INTEGER DEFAULT 0,
   PRIMARY KEY (device, popup)
 );
 

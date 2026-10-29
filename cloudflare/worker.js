@@ -152,6 +152,33 @@ async function blockWhy(env, device, ip, model) {
   return "";
 }
 
+/** One row per (handset, popup): how many times it has been dismissed there. A database from
+ *  before the count column degrades to 0/1, which is exactly the old "once per device". */
+async function bumpPopupShow(env, device, pid, ts) {
+  try {
+    await env.DB.prepare(
+      "INSERT INTO popup_seen (device, popup, count, last_ts) VALUES (?1,?2,1,?3) " +
+        "ON CONFLICT(device, popup) DO UPDATE SET count=count+1, last_ts=?3",
+    ).bind(device, pid, ts).run();
+    return;
+  } catch (e) {}
+  try {
+    await env.DB.prepare("INSERT OR IGNORE INTO popup_seen (device, popup) VALUES (?1,?2)").bind(device, pid).run();
+  } catch (e2) {}
+}
+
+async function popupShowCount(env, device, pid) {
+  try {
+    const r = await env.DB.prepare("SELECT count FROM popup_seen WHERE device=?1 AND popup=?2").bind(device, pid).first();
+    return Number((r && r.count) || 0);
+  } catch (e) {
+    try {
+      const r2 = await env.DB.prepare("SELECT 1 AS hit FROM popup_seen WHERE device=?1 AND popup=?2").bind(device, pid).first();
+      return r2 ? 1 : 0;
+    } catch (e2) { return 0; }
+  }
+}
+
 /** Core device registration + admin payload. Used by the encrypted v2 sync only -
  *  ack receipts arrive inside the encrypted body (b.acks). */
 async function syncPayloadObj(env, request, b) {
@@ -184,11 +211,16 @@ async function syncPayloadObj(env, request, b) {
       } else if ((kind === "popup" || kind === "notif") && a.id) {
         const ins = await env.DB.prepare("INSERT OR IGNORE INTO acks (device, popup, kind, ts) VALUES (?1,?2,?3,?4)")
           .bind(String(b.device), String(a.id), kind, now).run();
-        // count popup shows once per device (INSERT OR IGNORE + changes check = idempotent on retry)
+        // popup_shows counts DEVICES that have seen the message (the acks table is unique per
+        // device, so a resync cannot double it) - it is the panel's total, not the gate any more
         if (kind === "popup" && ((ins.meta && ins.meta.changes) || 0) === 1) {
           const cur = Number((await getSettings(env, ["popup_shows"])).popup_shows || 0);
           await setSetting(env, "popup_shows", String(cur + 1));
         }
+        // "چند بار نشون بده" means per handset, so every dismissal of this popup bumps that
+        // handset's own counter - the old code never wrote popup_seen at all, which is why the
+        // ceiling was a global budget and a device saw the message exactly once ever
+        if (kind === "popup") await bumpPopupShow(env, String(b.device), Number(a.id), now);
       } else if (kind === "payload" && a.id) {
         await env.DB.prepare("INSERT OR IGNORE INTO payload_seen (device, pid, ts) VALUES (?1,?2,?3)")
           .bind(String(b.device), Number(a.id), now).run();
@@ -242,12 +274,14 @@ async function syncPayloadObj(env, request, b) {
   }
   const pid = Number(cfg.popup_id || 0);
   if (cfg.popup_active === "1" && pid > 0) {
-    const max = Number(cfg.popup_max_shows || 999999);
-    const shown = Number(cfg.popup_shows || 0);
-    const seen = await env.DB.prepare("SELECT 1 FROM popup_seen WHERE device=?1 AND popup=?2").bind(String(b.device), pid).first();
-    if (shown < max && !seen) {
+    // per handset, not a shared budget: max=3 means "ask this phone three times"
+    const max = Math.max(1, Math.min(1000, Number(cfg.popup_max_shows || 1)));
+    const shownTo = await popupShowCount(env, devId, pid);
+    if (shownTo < max) {
       out.popup = {
         id: pid,
+        nonce: shownTo + 1,
+        left: max - shownTo,
         title: cfg.popup_title || "پیام",
         body: cfg.popup_body || "",
         btnText: cfg.popup_btn_text || "",
@@ -569,15 +603,25 @@ async function rlClear(env) {
 }
 
 /** Count one hit on this api for the device and for the IP; answer with the bucket that went over
- *  its budget (and how many seconds are left in the window), or null when the request may proceed. */
+ *  its budget (and how many seconds are left in the window), or null when the request may proceed.
+ *  One request is counted ONCE: withDb() re-runs the whole handler after a schema error, and without
+ *  the memo a database hiccup would spend two of every handset's budget per try - which is how a
+ *  throttle ends up refusing the innocent users of a sick database. */
 async function rlCheck(env, api, request, device) {
   const cfg = await rlCfg(env);
   if (!cfg.on) return null;
+  let memo = null;
+  try {
+    if (!request.__rl) request.__rl = {};
+    memo = request.__rl;
+    if (memo[api] !== undefined) return memo[api];
+  } catch (e) {}
   const now = Date.now();
   const win = cfg.sec * 1000;
-  const ip = clientIp(request);
+  const ip = String(clientIp(request) || "").toLowerCase();
+  const dev = String(device || "").toLowerCase();
   const want = [];
-  if (device) want.push({ k: api + "|d|" + device, budget: cfg.dev, kind: "device" });
+  if (dev) want.push({ k: api + "|d|" + dev, budget: cfg.dev, kind: "device" });
   if (ip) want.push({ k: api + "|i|" + ip, budget: cfg.ip, kind: "ip" });
   let over = null;
   for (const w of want) {
@@ -595,6 +639,7 @@ async function rlCheck(env, api, request, device) {
       };
     }
   }
+  if (memo) memo[api] = over;
   // unbounded keys would be the attack itself: drop windows that closed, and if that was not
   // enough (thousands of fresh device ids a second) forget the oldest half so memory stays flat
   if (RL.hits.size > RL_MAX_KEYS) {
@@ -710,6 +755,63 @@ async function countSrv(env, base, wantTraps) {
       return 0;
     }
   }
+}
+
+/** The three block lists are stored as one comma string each, which is fine to enforce and useless
+ *  to read: this turns them back into rows with who/when/how-many behind each entry, so "آزاد کردن"
+ *  gets pressed on something the admin recognises instead of on a substring of a text box. */
+async function blockRows(env) {
+  const listOf = (v) => [...new Set(String(v || "").split(",").map((x) => x.trim()).filter(Boolean))].slice(0, 200);
+  const phFrom = (arr, start) => arr.map((_, i) => "?" + (i + start)).join(",");
+  const bl = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models", "rl_on"]);
+  const devs = listOf(bl.blocked_devices);
+  const ips = listOf(bl.blocked_ips);
+  const mods = listOf(bl.blocked_models);
+  const cut = Date.now() - 86400000;
+  const seen = {};
+  const errs = [];
+  if (devs.length) {
+    const rows = await qAll(env,
+      "SELECT id, model, app_ver, last_seen, ip FROM devices WHERE id IN (" + phFrom(devs, 1) + ")", devs);
+    if (rows === null) errs.push("devices");
+    for (const r of rows || []) seen[String(r.id)] = r;
+    const ev = await qAll(env,
+      "SELECT device, COUNT(*) n, MAX(ts) l FROM events WHERE ts>?1 AND device IN (" + phFrom(devs, 2) + ") GROUP BY device",
+      [cut, ...devs]);
+    if (ev === null) errs.push("events");
+    for (const r of ev || []) { const t = seen[String(r.device)]; if (t) { t.req24 = Number(r.n || 0); t.lastt = Number(r.l || 0); } }
+  }
+  const ipInfo = {};
+  if (ips.length) {
+    const ev = await qAll(env,
+      "SELECT ip, COUNT(*) n, COUNT(DISTINCT device) devs, MAX(ts) l FROM events WHERE ts>?1 AND ip IN (" + phFrom(ips, 2) + ") GROUP BY ip",
+      [cut, ...ips]);
+    if (ev === null) errs.push("events-ip");
+    for (const r of ev || []) ipInfo[String(r.ip)] = { n: Number(r.n || 0), devs: Number(r.devs || 0), l: Number(r.l || 0) };
+    const holders = await qAll(env,
+      "SELECT ip, COUNT(*) n, MAX(last_seen) l FROM devices WHERE ip IN (" + phFrom(ips, 1) + ") GROUP BY ip", ips);
+    for (const r of holders || []) {
+      const k = String(r.ip);
+      ipInfo[k] = ipInfo[k] || { n: 0, devs: 0, l: 0 };
+      ipInfo[k].heldBy = Number(r.n || 0);
+      ipInfo[k].heldLast = Number(r.l || 0);
+    }
+  }
+  const modInfo = {};
+  if (mods.length) {
+    const low = mods.map((m) => String(m).toLowerCase());
+    const rows = await qAll(env,
+      "SELECT LOWER(model) m, COUNT(*) n, MAX(last_seen) l FROM devices WHERE LOWER(model) IN (" + phFrom(low, 1) + ") GROUP BY LOWER(model)",
+      low);
+    for (const r of rows || []) modInfo[String(r.m)] = { n: Number(r.n || 0), l: Number(r.l || 0) };
+  }
+  return {
+    devices: devs.map((d) => ({ id: d, hit: !!seen[d], ...(seen[d] || {}) })),
+    ips: ips.map((i2) => ({ ip: i2, ...(ipInfo[i2] || ipInfo[String(i2).toLowerCase()] || {}) })),
+    models: mods.map((m) => ({ model: m, ...(modInfo[String(m).toLowerCase()] || {}) })),
+    err: errs.length ? "چیزی از دیتابیس خوانده نشد: " + errs.join(", ") : "",
+    throttleOn: String(bl.rl_on || "0") === "1",
+  };
 }
 
 async function adminApi(env, b, request) {
@@ -875,61 +977,38 @@ async function adminApi(env, b, request) {
         await setSetting(env, "blocked_models", clean(b.models));
         return okJson();
       }
-      case "block.info": {
-        // the three block lists are stored as one comma string each, which is fine to enforce and
-        // useless to read: this turns them back into rows with who/when/how-many behind each entry,
-        // so "آزاد کردن" can be pressed on the thing you actually recognise instead of on a substring
-        const listOf = (v) => [...new Set(String(v || "").split(",").map((x) => x.trim()).filter(Boolean))].slice(0, 200);
-        const phFrom = (arr, start) => arr.map((_, i) => "?" + (i + start)).join(",");
-        const bl = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models"]);
-        const devs = listOf(bl.blocked_devices);
-        const ips = listOf(bl.blocked_ips);
-        const mods = listOf(bl.blocked_models);
+      case "block.info":
+        return okJson(await blockRows(env));
+      case "blocked.all": {
+        // one table for every kind of "this thing is not getting data": the three manual lists and
+        // the handsets/IPs the brake is currently refusing, so the admin never has to know which
+        // subsystem produced the symptom
+        const base = await blockRows(env);
         const cut = Date.now() - 86400000;
-        const seen = {};
-        const errs = [];
-        if (devs.length) {
-          const rows = await qAll(env,
-            "SELECT id, model, app_ver, last_seen, ip FROM devices WHERE id IN (" + phFrom(devs, 1) + ")", devs);
-          if (rows === null) errs.push("devices");
-          for (const r of rows || []) seen[String(r.id)] = r;
-          const ev = await qAll(env,
-            "SELECT device, COUNT(*) n, MAX(ts) l FROM events WHERE ts>?1 AND device IN (" + phFrom(devs, 2) + ") GROUP BY device",
-            [cut, ...devs]);
-          if (ev === null) errs.push("events-ip");
-          for (const r of ev || []) { const t = seen[String(r.device)]; if (t) { t.req24 = Number(r.n || 0); t.lastt = Number(r.l || 0); } }
+        const rows = await qAll(env,
+          "SELECT device, type, ip, COUNT(*) AS n, MAX(ts) AS l FROM events WHERE ts>?1 AND (type LIKE 'throttled%' OR type LIKE 'blocked-%' OR type='key-rejected' OR type='legacy-refused') GROUP BY device, type, ip ORDER BY l DESC LIMIT 120",
+          [cut]);
+        const items = [];
+        for (const d of base.devices || []) {
+          items.push({ kind: "device", scope: "block-list", value: String(d.id), model: d.model || "", app_ver: d.app_ver || "", last_seen: d.last_seen || 0, req24: d.req24 || 0, seen: !!d.hit });
         }
-        const ipInfo = {};
-        if (ips.length) {
-          const ev = await qAll(env,
-            "SELECT ip, COUNT(*) n, COUNT(DISTINCT device) devs, MAX(ts) l FROM events WHERE ts>?1 AND ip IN (" + phFrom(ips, 2) + ") GROUP BY ip",
-            [cut, ...ips]);
-          if (ev === null) errs.push("events-ip");
-          for (const r of ev || []) ipInfo[String(r.ip)] = { n: Number(r.n || 0), devs: Number(r.devs || 0), l: Number(r.l || 0) };
-          const holders = await qAll(env,
-            "SELECT ip, COUNT(*) n, MAX(last_seen) l FROM devices WHERE ip IN (" + phFrom(ips, 1) + ") GROUP BY ip", ips);
-          for (const r of holders || []) {
-            const k = String(r.ip);
-            ipInfo[k] = ipInfo[k] || { n: 0, devs: 0, l: 0 };
-            ipInfo[k].heldBy = Number(r.n || 0);
-            ipInfo[k].heldLast = Number(r.l || 0);
-          }
+        for (const i2 of base.ips || []) {
+          items.push({ kind: "ip", scope: "block-list", value: String(i2.ip), devices: i2.devs || 0, req24: i2.n || 0, heldBy: i2.heldBy || 0, last_seen: i2.l || i2.heldLast || 0 });
         }
-        const modInfo = {};
-        if (mods.length) {
-          const low = mods.map((m) => String(m).toLowerCase());
-          const rows = await qAll(env,
-            "SELECT LOWER(model) m, COUNT(*) n, MAX(last_seen) l FROM devices WHERE LOWER(model) IN (" + phFrom(low, 1) + ") GROUP BY LOWER(model)",
-            low);
-          for (const r of rows || []) modInfo[String(r.m)] = { n: Number(r.n || 0), l: Number(r.l || 0) };
+        for (const m of base.models || []) {
+          items.push({ kind: "model", scope: "block-list", value: String(m.model), devices: m.n || 0, last_seen: m.l || 0 });
         }
-        const s = await getSettings(env, ["rl_on"]);
+        for (const r of rows || []) {
+          const t = String(r.type || "");
+          const isIp = t === "throttled-ip";
+          items.push({
+            kind: isIp ? "ip" : "device", scope: "refused", value: String(isIp ? (r.ip || "") : (r.device || "")),
+            why: t, n: Number(r.n || 0), last_seen: Number(r.l || 0),
+          });
+        }
         return okJson({
-          devices: devs.map((d) => ({ id: d, hit: !!seen[d], ...(seen[d] || {}) })),
-          ips: ips.map((i2) => ({ ip: i2, ...(ipInfo[i2] || ipInfo[String(i2).toLowerCase()] || {}) })),
-          models: mods.map((m) => ({ model: m, ...(modInfo[String(m).toLowerCase()] || {}) })),
-          err: errs.length ? "چیزی از دیتابیس خوانده نشد: " + errs.join(", ") : "",
-          throttleOn: String(s.rl_on || "0") === "1",
+          items, blockedCount: (base.devices || []).length + (base.ips || []).length + (base.models || []).length,
+          refusedCount: (rows || []).length, throttleOn: base.throttleOn, err: base.err,
         });
       }
       case "dev.del": {
@@ -942,11 +1021,37 @@ async function adminApi(env, b, request) {
         return okJson();
       }
       case "set.update":
-        await setSetting(env, "min_version", String(Number(b.minVersion || 0)));
-        await setSetting(env, "latest_version", String(Number(b.latestVersion || 0)));
+        await setSetting(env, "min_version", String(rlInt(b.minVersion, 0, 0, 1000000)));
+        await setSetting(env, "latest_version", String(rlInt(b.latestVersion, 0, 0, 1000000)));
         await setSetting(env, "latest_url", String(b.latestUrl || "").slice(0, 512));
         srvAllInvalidate();
         return okJson();
+      case "upd.state": {
+        // The gate is compared against the number the app REPORTS (longVersionCode), which is not
+        // the versionName printed on the phone ("1.2" on screen, 12 on the wire) - that mismatch is
+        // why "اپدیت اجباری نمی‌آید" is nearly always a wrong number in this box, not a broken
+        // pipeline. This reads the real reported values back so the panel can say who is below them.
+        const s2 = await getSettings(env, ["min_version", "latest_version", "latest_url"]);
+        const rows = await qAll(env, "SELECT app_ver, COUNT(*) n FROM devices GROUP BY app_ver ORDER BY n DESC LIMIT 30");
+        const hist = (rows || [])
+          .map((r) => ({ v: rlInt(r.app_ver, 0, 0, 1000000), n: Number(r.n || 0) }))
+          .filter((x) => x.n > 0)
+          .sort((a, b) => b.v - a.v);
+        const min = rlInt(s2.min_version, 0, 0, 1000000);
+        const latest = rlInt(s2.latest_version, 0, 0, 1000000);
+        const hasUrl = String(s2.latest_url || "") !== "";
+        let forced = 0;
+        let optional = 0;
+        let total = 0;
+        let top = 0;
+        for (const h of hist) {
+          total += h.n;
+          if (min > 0 && h.v < min) forced += h.n;
+          else if (hasUrl && latest > h.v && latest > 0) optional += h.n;
+          if (h.v > top) top = h.v;
+        }
+        return okJson({ min, latest, hasUrl, hist, total, forced, optional, top, err: rows === null ? "جدول devices خوانده نشد" : "" });
+      }
       case "set.route": {
         // one blob of HTML, sent to every device inside the encrypted sync payload
         await setSetting(env, "route_html", String(b.html || "").slice(0, 40000));
@@ -1327,7 +1432,7 @@ async function adminApi(env, b, request) {
         }
         // "why is this handset refused right now" as facts, not as a guess: which of the three block
         // lists it sits on, whether the brake is on, and when it last ate one of its requests
-        const blv = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models", "rl_on", "rl_sec", "rl_dev", "rl_ip"]);
+        const blv = await getSettings(env, ["blocked_devices", "blocked_ips", "blocked_models", "rl_on", "rl_sec", "rl_dev", "rl_ip", "min_version", "latest_version", "latest_url"]);
         const has = (csv, v) => !!v && String(csv || "").split(",").map((x) => x.trim().toLowerCase()).includes(String(v).toLowerCase());
         const d0 = (out2.devs || [])[0] || {};
         const sentences = [];
@@ -1347,6 +1452,15 @@ async function adminApi(env, b, request) {
           sentences.push("دداس‌گارده الان <b>خاموش</b> است؛ آخرین درخواست رد شده‌اش " + agoTxt(Number(lastThrottled.ts || 0)) + " پیش بوده");
         }
         if (!sentences.length) sentences.push("هیچ‌چیزی جلوی این دستگاه را نگرفته: نه در لیست مسدودها هست و نه دداس‌گارده فعال است");
+        // the update gate in the same box: "نمیاد" is either the server not sending it or the app
+        // not showing it, and this line separates the two
+        const uMin = rlInt(blv.min_version, 0, 0, 1000000);
+        const uLatest = rlInt(blv.latest_version, 0, 0, 1000000);
+        const dVer = rlInt(d0.app_ver, -1, -1, 1000000);
+        if (dVer < 0) sentences.push("اپدیت: این دستگاه هیچ نسخه‌ای گزارش نکرده (اپ قدیمی) - در جدول دستگاه‌ها نسخه‌اش ثبت نشده");
+        else if (uMin > 0 && dVer < uMin) sentences.push("اپدیت: نسخه‌اش <b>" + dVer + "</b> و سقف اجباری <b>" + uMin + "</b> است → ورکر همین حالا اپدیت اجباری برایش می‌فرستد");
+        else if (uMin > 0) sentences.push("اپدیت: نسخه‌اش <b>" + dVer + "</b>، سقف اجباری <b>" + uMin + "</b> → بالاتر از سقف است، پس اجباری نمی‌گیرد");
+        else sentences.push("اپدیت: سقف اجباری <b>۰</b> است (خاموش) - هر عددی اینجا بنویسی بزرگ‌تر از نسخه‌ی دستگاه (= " + dVer + ") همان لحظه اجباری می‌شود");
         return okJson({
           refuse: { sentences, blockedDeviceIds, throttleOn: tOn },
           hist: (out2.hist || [])[0] || null,
@@ -1768,10 +1882,16 @@ function panelPage(env) {
 <!-- ================= MESSAGES ================= -->
 <div class=tab id=tab_msg>
 <div class=card><h2>🔔 اپدیت</h2>
-<div class=row2><div><div class=lbl>حداقل نسخه (کمتر = اجباری)</div><input id=u_min type=number value=0></div>
+<div class=row2><div><div class=lbl>حداقل نسخه (کمتر از این = اجباری)</div><input id=u_min type=number value=0></div>
 <div><div class=lbl>آخرین نسخه (اختیاری)</div><input id=u_latest type=number value=0></div></div>
 <div class=lbl>لینک دانلود</div><input id=u_url>
-<button onclick=saveUpdate() style=margin-top:10px>ذخیره</button></div>
+<div class=toolbar style="margin-top:10px">
+<button onclick=saveUpdate()>ذخیره</button>
+<button class="gray sm" onclick=loadUpd()>🔎 ببین چه کسانی می‌گیرند</button>
+<button class="gray sm" onclick=forceAll()>⬆ اجباری برای همهٔ اپ‌های فعلی</button>
+</div>
+<div id=upd_diag class=note style="margin-top:8px"></div>
+<p class=note>این عدد با <b>شمارهٔ نسخه‌ای که اپ گزارش می‌کند (versionCode)</b> مقایسه می‌شود، نه با متنی که روی گوشی نشان داده می‌شود: اپی که پایین صفحه «1.2» نوشته روی سِرور عدد <b>12</b> را می‌فرستد. برای همین اگر اینجا ۲ بنویسی هیچ‌کس اجباری نمی‌گیرد - ۱۲ از ۲ بزرگ‌تر است. «اجباری برای همهٔ اپ‌های فعلی» خودش درست‌ترین عدد را می‌گذارد: بالاترین نسخه‌ای که دستگاه‌ها گزارش کرده‌اند + ۱.</p></div>
 
 <div class=card><h2>💬 پیام پاپ‌اپ</h2>
 <div class=toolbar>
@@ -1784,7 +1904,7 @@ function panelPage(env) {
 <div><div class=lbl>متن</div><input id=p_body></div></div>
 <div class=row2><div><div class=lbl>متن دکمه (خالی = بدون دکمه)</div><input id=p_btn></div>
 <div><div class=lbl>لینک دکمه</div><input id=p_url></div></div>
-<div class=row2><div><div class=lbl>حداکثر دفعات نمایش (کلی)</div><input id=p_max type=number value=100></div>
+<div class=row2><div><div class=lbl>دفعات نمایش به هر دستگاه</div><input id=p_max type=number value=3></div>
 <div style=display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap>
 <label><input type=checkbox id=p_onbtn style=width:auto checked> دکمه لینک فعال</label>
 <label><input type=checkbox id=p_oncancel style=width:auto checked> دکمه کنسل فعال</label>
@@ -1842,6 +1962,15 @@ function panelPage(env) {
 <button class="red sm" onclick='relAll("model")'>پاک کردن لیست مدل‌ها</button>
 </div>
 <div id=blk_info class=note style="margin-top:10px"></div></div>
+
+<div class=card><h2>🚫 همهٔ محدودیت‌ها <span class=cnt id=ba_cnt></span></h2>
+<div class=toolbar>
+<input id=ba_q placeholder="جست‌وجو: شناسه، IP یا مدل" style="flex:1;min-width:180px" oninput=renderBlockedAll()>
+<button class="gray sm" onclick=loadBlockedAll()>🔄 تازه‌سازی</button>
+<span class=note id=ba_note></span>
+</div>
+<div id=ba_list style="margin-top:10px"></div>
+<p class=note>یک جا هر چیزی که الان داده‌ای به آن نمی‌رسد: دستگاه/IP/مدلی که خودت مسدود کردی، و دستگاه یا IP ای که دداس‌گارده رد می‌کند. برای رد شده‌ها «آزاد کردن» شمارنده‌ها را پاک می‌کند و «مسدود کردن» وارد لیست مسدودها می‌کند؛ برای مسدودشده‌ها «آزاد کردن» از لیست بیرونشان می‌آورد. هر ردیف «جزئیات» همان پنجرهٔ «چرا الان رد می‌شود؟» را باز می‌کند.</p></div>
 
 <div class=card><h2>🕵 سرورهای تله و بررسی نشتی <span class=cnt id=cy_cnt></span></h2>
 <div class=grid style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr))">
@@ -2048,13 +2177,28 @@ async function loadUpdate(){
  const j=await api({action:'cfg.load'});const c=j.cfg||{};
  $('u_min').value=Number(c.min_version||0);$('u_latest').value=Number(c.latest_version||0);$('u_url').value=c.latest_url||''}
 async function saveUpdate(){await api({action:'set.update',minVersion:Number($('u_min').value||0),latestVersion:Number($('u_latest').value||0),latestUrl:$('u_url').value})}
+async function loadUpd(){const j=await api({action:'upd.state'});const el=$('upd_diag');if(!el)return;
+ if(!j||j.ok===false){el.innerHTML='<span style="color:var(--red)">'+esc((j&&j.error)||'خطا')+'</span>';return}
+ const h=(j.hist||[]).map(function(x){return x.v+' ('+x.n+' دستگاه)'}).join(' · ')||'هیچ دستگاهی هنوز نسخه گزارش نکرده';
+ let s='<b>نسخه‌هایی که روی خط می‌آیند (versionCode):</b> '+esc(h)+'<br>';
+ const min=Number(j.min||0);
+ if(min>0){s+='سقف اجباری <b>'+min+'</b> → <b>'+Number(j.forced||0)+'</b> از '+Number(j.total||0)+' دستگاه همین حالا اپدیت اجباری می‌گیرد';
+  if(Number(j.forced||0)===0)s+=' — <b style="color:var(--red)">یعنی این عدد را هیچ اپی پایین‌تر ندارد، پس اجباری برای کسی نمی‌فرستد</b>';
+ }else s+='<b style="color:var(--red)">سقف اجباری صفر است = خاموش. هر عددی بزرگ‌تر از نسخهٔ دستگاه (= '+Number(j.top||0)+') اجباری می‌کند</b>';
+ s+='<br>'+(Number(j.latest||0)>0&&j.hasUrl?('اختیاری: سقف '+Number(j.latest)+' با لینک → '+Number(j.optional||0)+' دستگاه پیشنهاد اپدیت می‌گیرند')
+  :'اختیاری: بی‌اثر است، چون هم عدد «آخرین نسخه» و هم «لینک دانلود» باید پر شود');
+ el.innerHTML=s}
+async function forceAll(){const j=await api({action:'upd.state'});const top=Number((j&&j.top)||0);
+ if(!top){toast('هیچ دستگاهی نسخه گزارش نکرده؛ اول بگذار یکی همگام‌سازی کند',1);return}
+ $('u_min').value=top+1;await saveUpdate();await loadUpd();
+ toast('حداقل نسخه شد '+(top+1)+' - همهٔ اپهای فعلی ('+top+') اجباری می‌گیرند')}
 async function loadPopup(){const j=await api({action:'popup.state'});const p=j.popup||{};
 $('p_active').checked=p.popup_active==='1';$('p_title').value=p.popup_title||'';$('p_body').value=p.popup_body||'';
 $('p_btn').value=p.popup_btn_text||'';$('p_url').value=p.popup_btn_url||'';
 $('p_onbtn').checked=p.popup_btn_enabled!=='0';$('p_oncancel').checked=p.popup_cancel_enabled!=='0';
-$('p_max').value=Number(p.popup_max_shows||100);popupState(p)}
+$('p_max').value=Number(p.popup_max_shows||3);popupState(p)}
 function popupState(p){p=p||{};const on=$('p_active').checked;
-$('popup_state').innerHTML=on?'<span class="badge b-on">در حال ارسال — '+Number(p.popup_shows||0)+' نمایش از سقف '+Number(p.popup_max_shows||0)+'</span>':'<span class="badge b-off">متوقف</span>'}
+$('popup_state').innerHTML=on?'<span class="badge b-on">در حال ارسال — به هر دستگاه تا '+Number(p.popup_max_shows||3)+' بار · '+Number(p.popup_shows||0)+' دستگاه آن را دید</span>':'<span class="badge b-off">متوقف</span>'}
 async function loadRoute(){const j=await api({action:'route.get'});const r=j.route||{};
  const el=$('rt_html');if(el)el.value=r.route_html||'';rtSize()}
 function rtSize(){const v=($('rt_html').value||'');const c=$('rt_size');
@@ -2354,6 +2498,47 @@ async function relOne(kind,val){if(!val)return;
 async function relAll(kind){const map={device:'blk_d',ip:'blk_i',model:'blk_m'};const el=$(map[kind]);if(!el)return;
  if(!confirm('همهٔ entries این لیست آزاد شوند؟'))return;
  el.value='';await saveBlockLists();loadBlockInfo()}
+/* ---- everything that is currently refused, in one table ---- */
+let BA=[];
+const BAKIND={device:'دستگاه',ip:'IP',model:'مدل'};
+async function loadBlockedAll(){const j=await api({action:'blocked.all'});
+ if(!j||j.ok===false){const n2=$('ba_note');if(n2)n2.innerHTML='<span style="color:var(--red)">'+esc((j&&j.error)||'خطا')+'</span>';return}
+ BA=j.items||[];
+ const n2=$('ba_note');if(n2)n2.innerHTML=esc(String(Number(j.blockedCount)||0))+' مورد در لیست مسدودها · '+
+  (Number(j.refusedCount)||0)+' مورد رد شدهٔ دداس‌گارده (۲۴ ساعت) · دداس‌گارده '+(j.throttleOn?'روشن':'خاموش');
+ const c=$('ba_cnt');if(c)c.textContent=BA.length+' ردیف';
+ renderBlockedAll()}
+function baWhy(x){if(x.scope==='block-list')return 'خودت مسدودش کرده‌ای';
+ const t=String(x.why||'');
+ if(t==='key-rejected')return 'کلید سخت‌افزاری این دستگاه رد شده (امضای اپ عوض شده؟)';
+ if(t==='legacy-refused')return 'اپ قدیمی است - این ورکر فقط کلید سخت‌افزاری را می‌پذیرد';
+ if(t.indexOf('blocked-')===0)return 'ورکر آن را به عنوان «'+({device:'دستگاه',ip:'IP',model:'مدل'}[t.slice(8)]||t.slice(8))+' مسدود» رد می‌کند';
+ if(t==='throttled-ip')return 'سقف درخواست IP را خورده (دداس‌گارده)';
+ if(t==='throttled-device')return 'سقف درخواست خودش را خورده (دداس‌گارده)';
+ return t}
+function renderBlockedAll(){const el=$('ba_list');if(!el)return;
+ const q=String(($('ba_q')||{}).value||'').trim().toLowerCase();
+ const rows=BA.filter(function(x){return !q||String(x.value||'').toLowerCase().indexOf(q)>=0||String(x.kind||'').indexOf(q)>=0});
+ if(!rows.length){el.innerHTML='<span class=note>'+(BA.length?'هیچ ردیفی با این جست‌وجو نیست':'هیچ‌چیز مسدود یا محدود نیست')+'</span>';return}
+ let h='<table><tr><td class=note>نوع</td><td class=note>مقدار</td><td class=note>چرا اینجاست</td><td class=note>دستگاه/تعداد</td><td class=note>آخرین فعالیت</td><td>عملیات</td></tr>';
+ for(const x of rows){
+  const refused=x.scope==='refused';
+  const cnt=refused?Number(x.n||0):(Number(x.devices||0)||Number(x.req24||0));
+  let ops='<button class="red sm" data-ba="0" data-k="'+esc(x.kind)+'" data-v="'+esc(x.value)+'" data-on="0">آزاد کردن</button>';
+  if(refused&&x.kind==='device')ops+='<button class="red sm" data-ba="1" data-k="device" data-v="'+esc(x.value)+'" data-on="1">مسدود کردن</button>';
+  if(refused&&x.kind==='ip')ops+='<button class="red sm" data-ba="1" data-k="ip" data-v="'+esc(x.value)+'" data-on="1">مسدود کردن</button>';
+  if(x.kind==='device')ops+=' <button class="gray sm" data-bi="'+esc(x.value)+'">🔎 جزئیات</button>';
+  h+='<tr><td>'+(BAKIND[x.kind]||esc(x.kind))+'</td><td style="direction:ltr;text-align:right;word-break:break-all">'+esc(String(x.value||'').slice(0,26))+'</td>'+
+   '<td class=note>'+esc(baWhy(x))+(x.model?' · '+esc(x.model):'')+'</td><td>'+cnt+'</td><td class=note>'+fmtTs(x.last_seen||0)+'</td><td>'+ops+'</td></tr>';
+ }
+ el.innerHTML=h+'</table>';
+ el.querySelectorAll('button[data-ba]').forEach(function(b2){b2.onclick=function(){
+  const k=b2.getAttribute('data-k'),v=b2.getAttribute('data-v'),on=b2.getAttribute('data-on')==='1';
+  // dev.block is the one place membership changes - the textareas are re-read from D1 afterwards
+  api({action:'dev.block',kind:k,id:v,on:on}).then(function(){loadBlockedAll();loadDevices();if(window.loadBlockInfo)loadBlockInfo()});
+  toast(on?'مسدود شد':'آزاد شد - دستگاه تا همگام‌سازی بعدی (حداکثر دو دقیقه) لیست می‌گیرد')}});
+ el.querySelectorAll('button[data-bi]').forEach(function(b2){b2.onclick=function(){
+  devDetail({ids:[b2.getAttribute('data-bi')||''],model:'',info:{}})}})}
 async function cyMake(){const ids=(DEVS||[]).slice(0,5).map(x=>String(x.id||'')).filter(Boolean);
  if(!ids.length){toast('اول یک دستگاه باید همگام‌سازی کند',1);return}
  const j=await api({action:'canary.make',ids:ids.join(',')});
@@ -2445,6 +2630,8 @@ async function loadAll(){
    loadDevices(),
    loadCanary(),
    loadRl(),
+   loadBlockedAll(),
+   loadUpd(),
    loadRoute(),
   ])}
 (()=>{logout()})();
@@ -3261,7 +3448,7 @@ async function ensureSchema(env, force) {
     env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, address TEXT, port INTEGER DEFAULT 443, link TEXT DEFAULT '', category TEXT DEFAULT '', ord INTEGER DEFAULT 99, active INTEGER DEFAULT 1, msg TEXT DEFAULT '', owner TEXT DEFAULT '')",
     ),
-    env.DB.prepare("CREATE TABLE IF NOT EXISTS popup_seen (device TEXT, popup INTEGER, PRIMARY KEY (device, popup))"),
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS popup_seen (device TEXT, popup INTEGER, count INTEGER DEFAULT 0, last_ts INTEGER DEFAULT 0, PRIMARY KEY (device, popup))"),
     env.DB.prepare("INSERT OR IGNORE INTO popup_seen (device, popup) VALUES ('__init__', 1)"),
     env.DB.prepare(
       "CREATE TABLE IF NOT EXISTS notifs (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, body TEXT, ts INTEGER, active INTEGER DEFAULT 1)",
@@ -3318,6 +3505,13 @@ async function ensureSchema(env, force) {
     } catch (e) {}
     try {
       await env.DB.prepare("ALTER TABLE dev_keys ADD COLUMN att TEXT DEFAULT ''").run();
+    } catch (e) {}
+    // the popup repeat count is per handset, and popup_seen used to be a table nothing ever wrote
+    try {
+      await env.DB.prepare("ALTER TABLE popup_seen ADD COLUMN count INTEGER DEFAULT 0").run();
+    } catch (e) {}
+    try {
+      await env.DB.prepare("ALTER TABLE popup_seen ADD COLUMN last_ts INTEGER DEFAULT 0").run();
     } catch (e) {}
     columnsHealed = true;
   }
