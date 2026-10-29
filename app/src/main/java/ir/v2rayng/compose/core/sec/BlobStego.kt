@@ -1,8 +1,8 @@
 package ir.v2rayng.compose.core.sec
 
 import java.security.SecureRandom
+import ir.v2rayng.compose.core.NativeSec
 import javax.crypto.Cipher
-import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
@@ -41,11 +41,8 @@ object BlobStego {
     }
     val PRIMARY: Set<Char> = PAIRS.map { it.first }.toSet()
 
-    fun hmac(key: ByteArray, msg: ByteArray): ByteArray {
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(key, "HmacSHA256"))
-        return mac.doFinal(msg)
-    }
+    /** HMAC-SHA256 is in C (blobsec.c) behind a known-answer self test; null = library not usable. */
+    fun hmac(key: ByteArray, msg: ByteArray): ByteArray = NativeSec.hmacSha256(key, msg) ?: ByteArray(0)
 
     /** stego bit-stream seed: HMAC-SHA256(key=Kc, msg="BLB1") first 8 bytes big endian. */
     fun orderSeed(kc: ByteArray): Long {
@@ -325,60 +322,20 @@ fun keyShuffle(count: Int, rnd: KeyedRandom): IntArray {
 }
 
 object BlobZip {
+    /**
+     * The envelope byte (0 raw, 1 raw-deflate, 2 zlib) and the inflate itself are done in C with
+     * the system zlib; if the native side cannot answer, the envelope is returned stripped rather
+     * than guessed, so the caller fails on the payload instead of silently mis-reading it.
+     */
     fun open(envelope: ByteArray): ByteArray {
         if (envelope.isEmpty()) return envelope
-        return when (envelope[0].toInt()) {
-            0 -> envelope.copyOfRange(1, envelope.size)
-            1 -> try { decompressFixed(envelope.copyOfRange(1, envelope.size)) } catch (_: Exception) { envelope }
-            2 -> try { decompress(envelope.copyOfRange(1, envelope.size)) } catch (_: Exception) { envelope }
-            else -> envelope.copyOfRange(1, envelope.size)
-        }
-    }
-
-    private fun decompress(bytes: ByteArray): ByteArray {
-        val i = java.util.zip.Inflater(false)
-        i.setInput(bytes)
-        val out = java.io.ByteArrayOutputStream(if (bytes.size > 128) bytes.size * 3 else 64)
-        val buf = ByteArray(8192)
-        try {
-            while (!i.finished()) {
-                val n = i.inflate(buf)
-                if (n == 0 && i.needsInput()) break
-                if (n > 0) out.write(buf, 0, n)
-            }
-        } finally {
-            i.end()
-        }
-        return out.toByteArray()
-    }
-
-    private fun decompressFixed(bytes: ByteArray): ByteArray {
-        val i = java.util.zip.Inflater(true)
-        i.setInput(bytes)
-        val out = java.io.ByteArrayOutputStream(if (bytes.size > 128) bytes.size * 3 else 64)
-        val buf = ByteArray(8192)
-        try {
-            while (!i.finished()) {
-                val n = i.inflate(buf)
-                if (n == 0 && i.needsInput()) break
-                if (n > 0) out.write(buf, 0, n)
-            }
-        } finally {
-            i.end()
-        }
-        return out.toByteArray()
+        return NativeSec.openEnv(envelope) ?: envelope.copyOfRange(1, envelope.size)
     }
 }
 
-/** hex helpers shared with blob code on this platform. */
+/** base64url helpers, also in C - one alphabet, one padding rule, no java.util.Base64 left here. */
 object BlobB64 {
-    fun decode(s: String): ByteArray? = try {
-        val t = s.replace('-', '+').replace('_', '/').trim()
-        val padded = t + "=".repeat((4 - t.length % 4) % 4)
-        java.util.Base64.getDecoder().decode(padded)
-    } catch (_: Exception) {
-        null
-    }
+    fun decode(s: String): ByteArray? = NativeSec.b64decode(s)?.takeIf { it.isNotEmpty() || s.isEmpty() }
 
-    fun encode(b: ByteArray): String = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(b)
+    fun encode(b: ByteArray): String = NativeSec.b64url(b) ?: ""
 }
