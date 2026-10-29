@@ -115,6 +115,18 @@ async function appAuthOk(env, request) {
 
 async function appSync(env, request) {
   const b = await request.json().catch(() => null);
+  // Throttled before any database read, and answered with an EMPTY 429 body on purpose.
+  // enc:"n" (unchanged) would look smoother, but the app clears its queued acks on that path, so a
+  // refused sync would silently drop the receipts for "connect"/"disconnect" and the admin's file
+  // delivery; enc:"x" makes the app throw its session keys away and call /api/key immediately,
+  // turning one refused request into two. A body the app cannot parse is the only answer that
+  // costs a legit handset nothing but one log line - it keeps its session, keeps its acks and
+  // retries on its own next cycle (2 minutes, far outside the window).
+  const rSync = await rlCheck(env, "sync", request, b && b.device ? String(b.device).slice(0, 128) : "");
+  if (rSync) {
+    await rlNote(env, "sync", rSync, request, b && b.device ? String(b.device).slice(0, 128) : "");
+    return new Response(null, { status: 429, headers: jsonHeaders(["Retry-After", String(rSync.wait)]) });
+  }
   if (!b || !b.device) return new Response(JSON.stringify({ ok: false, error: "need device" }), { status: 400, headers: jsonHeaders() });
   if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
   // encrypted protocol ONLY - servers/admin data never cross the wire in plaintext.
@@ -498,6 +510,87 @@ async function setSetting(env, key, value) {
   await env.DB.prepare(
     "INSERT INTO settings (key, value, updated_at) VALUES (?1,?2,?3) ON CONFLICT(key) DO UPDATE SET value=?2, updated_at=?3",
   ).bind(key, value, Date.now()).run();
+}
+
+/* ============================ api throttle ============================ */
+
+/** A flood on /api/key or /api/sync has to cost this worker a memory read, not a database read,
+ *  so the counters live in isolate memory and the admin's settings are cached for RL_CFG_TTL.
+ *  The limit is stated in the panel rather than hidden: memory is per isolate, so an attacker
+ *  spread over N isolates gets N times the budget - this brakes hammering, it is not a wall. */
+const RL = { hits: new Map(), logged: new Map(), cfg: null, cfgAt: 0 };
+const RL_CFG_TTL = 15000;
+const RL_MAX_KEYS = 4000;
+
+function rlInt(v, d, lo, hi) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= lo && n <= hi ? n : d;
+}
+
+/** off unless the admin turned it on - and a settings read that fails leaves it off, because a
+ *  database hiccup must not lock every handset out of the sync that keeps its list alive. */
+async function rlCfg(env) {
+  const now = Date.now();
+  if (RL.cfg && now - RL.cfgAt < RL_CFG_TTL) return RL.cfg;
+  RL.cfgAt = now;
+  const s = await getSettings(env, ["rl_on", "rl_sec", "rl_dev", "rl_ip"]);
+  RL.cfg = {
+    on: String(s.rl_on || "0") === "1",
+    sec: rlInt(s.rl_sec, 2, 1, 60),
+    dev: rlInt(s.rl_dev, 2, 1, 200),
+    ip: rlInt(s.rl_ip, 8, 1, 5000),
+  };
+  return RL.cfg;
+}
+
+/** Count one hit on this api for the device and for the IP; answer with the bucket that went over
+ *  its budget (and how many seconds are left in the window), or null when the request may proceed. */
+async function rlCheck(env, api, request, device) {
+  const cfg = await rlCfg(env);
+  if (!cfg.on) return null;
+  const now = Date.now();
+  const win = cfg.sec * 1000;
+  const ip = clientIp(request);
+  const want = [];
+  if (device) want.push({ k: api + "|d|" + device, budget: cfg.dev, kind: "device" });
+  if (ip) want.push({ k: api + "|i|" + ip, budget: cfg.ip, kind: "ip" });
+  let over = null;
+  for (const w of want) {
+    let e = RL.hits.get(w.k);
+    if (!e || now - e.t >= win) {
+      e = { t: now, n: 1 };
+      RL.hits.set(w.k, e);
+    } else {
+      e.n++;
+    }
+    if (e.n > w.budget && !over) {
+      over = {
+        key: w.k, kind: w.kind, budget: w.budget, n: e.n,
+        wait: Math.max(1, Math.ceil((e.t + win - now) / 1000)),
+      };
+    }
+  }
+  // unbounded keys would be the attack itself: drop windows that closed, and if that was not
+  // enough (thousands of fresh device ids a second) forget the oldest half so memory stays flat
+  if (RL.hits.size > RL_MAX_KEYS) {
+    for (const [k, v] of RL.hits) { if (now - v.t > win * 4) RL.hits.delete(k); }
+    if (RL.hits.size > RL_MAX_KEYS) {
+      let i = 0;
+      for (const k of RL.hits.keys()) { RL.hits.delete(k); if (++i >= RL_MAX_KEYS / 2) break; }
+    }
+  }
+  if (RL.logged.size > RL_MAX_KEYS) RL.logged.clear();
+  return over;
+}
+
+/** One events row per bucket per minute, never one per refused request - otherwise the flood the
+ *  throttle survives becomes the flood that fills D1. */
+async function rlNote(env, api, r, request, device) {
+  const key = api + "|" + r.key;
+  const now = Date.now();
+  if (now - (RL.logged.get(key) || 0) < 60000) return;
+  RL.logged.set(key, now);
+  await insEvent(env, device || "anon", "throttled-" + r.kind, now, clientIp(request));
 }
 
 async function getCategories(env) {
@@ -1050,6 +1143,35 @@ async function adminApi(env, b, request) {
       case "login.reset": {
         await loginClear(env, clientIp(request));
         return okJson({ cleared: true });
+      }
+      case "rl.state": {
+        // the panel shows what is stored in D1, which is the source of truth; every isolate reads
+        // it within RL_CFG_TTL, so "changed 15 seconds ago" is the most anyone can promise here
+        const s = await getSettings(env, ["rl_on", "rl_sec", "rl_dev", "rl_ip"]);
+        const cut = Date.now() - 86400000;
+        const rows = await qAll(env,
+          "SELECT device, type, ts, ip FROM events WHERE ts>?1 AND type LIKE 'throttled%' ORDER BY ts DESC LIMIT 30",
+          [cut]);
+        const groups = await qAll(env,
+          "SELECT type, COUNT(*) AS n FROM events WHERE ts>?1 AND type LIKE 'throttled%' GROUP BY type",
+          [cut]);
+        return okJson({
+          rl: {
+            on: String(s.rl_on || "0"), sec: rlInt(s.rl_sec, 2, 1, 60),
+            dev: rlInt(s.rl_dev, 2, 1, 200), ip: rlInt(s.rl_ip, 8, 1, 5000),
+          },
+          recent: rows || [],
+          refused24h: (groups || []).reduce((a, r) => a + Number(r.n || 0), 0),
+          err: rows === null ? "دسترسی به جدول رویدادها خطا داد (ستون ip را بررسی کن)" : "",
+        });
+      }
+      case "rl.set": {
+        await setSetting(env, "rl_on", b.on ? "1" : "0");
+        await setSetting(env, "rl_sec", String(rlInt(b.sec, 2, 1, 60)));
+        await setSetting(env, "rl_dev", String(rlInt(b.dev, 2, 1, 200)));
+        await setSetting(env, "rl_ip", String(rlInt(b.ip, 8, 1, 5000)));
+        RL.cfgAt = 0; // this isolate re-reads immediately; the others follow inside 15 s
+        return okJson({ saved: true });
       }
       case "canary.set": {
         await setSetting(env, "canary_on", b.on ? "1" : "0");
@@ -1605,6 +1727,21 @@ function panelPage(env) {
 <div id=lk_out class=note style="margin-top:8px"></div></div>
 </div>
 
+<div class=card><h2>🚦 محدود کردن درخواست‌های API (ضد دداس) <span class=cnt id=rl_cnt></span></h2>
+<div class=grid style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr))">
+<div><div class=lbl>محدود کردن فعال باشد</div><label class=switch><input type=checkbox id=rl_on><span></span></label> <span class=note>خاموش = بدون هیچ محدودیتی</span></div>
+<div><div class=lbl>پنجره زمانی (ثانیه، ۱ تا ۶۰)</div><input id=rl_sec type=number min=1 max=60 value=2></div>
+<div><div class=lbl>سهم هر دستگاه در پنجره</div><input id=rl_dev type=number min=1 max=200 value=2></div>
+<div><div class=lbl>سهم هر IP در پنجره</div><input id=rl_ip type=number min=1 max=5000 value=8></div>
+</div>
+<div class=toolbar style="margin-top:12px">
+<button onclick=saveRl()>ذخیره</button>
+<button class="gray sm" onclick=loadRl()>🔄 تازه‌سازی</button>
+</div>
+<div id=rl_diag class=note style="margin-top:8px"></div>
+<div id=rl_recent style="margin-top:8px"></div>
+<p class=note>فقط دو آدرس اپ را می‌گیرد: <b>/api/key</b> (گرفتن کلید نشست) و <b>/api/sync</b> (لیست سرور و همهٔ داده‌ها). اگر روشن باشد و یک دستگاه یا یک IP بیشتر از سهمش درخواست بفرستد، ورکر آن درخواست را <b>بدون خواندن دیتابیس</b> رد می‌کند و تعدادش را در تاریخچهٔ همان دستگاه ثبت می‌کند. جواب رد برای همگام‌سازی یک خطای خالی ۴۲۹ است (نه «کلید نامعتبر»): اپ با جواب «کلید نامعتبر» کلیدهای نشستی‌اش را دور می‌انداخت و بلافاصله دو درخواست می‌فرستد، یعنی دقیقاً کاری که می‌خواهیم جلویش را بگیریم، و با جواب «چیزی تغییر نکرد» رسیدهای رویدادها و فایلی که ادمین فرستاده پاک می‌شد. با این خطا، دستگاهی که محدود شده فقط یک خط «سرور HTTP 429 داد» در لاگش می‌آید، لیست سرورها و کلیدهای نشستش دست‌نخورده می‌ماند و دو دقیقه بعد خودش دوباره تلاش می‌کند. یک اپ عادی هر ۲ دقیقه یک‌بار همگام‌سازی می‌کند، پس هرگز به این سقف نمی‌رسد؛ سهم ۲ برای دستگاه یعنی حتی دو بار پشت سر هم هم مجاز است. شمارش‌ها در حافظهٔ خودِ ورکر است (نه دیتابیس) و هر نسخهٔ اجرایی حافظهٔ خودش را دارد، پس اگر یک حمله‌کننده هم‌زمان از چند مسیر برود، عملاً چند برابر سهم بهش می‌رسد - این ترمزِ چکش‌زدن است، دیوار نیست؛ برای بند محکم‌تر باید از Rules دامنهٔ کلودفلر استفاده کنی.</p></div>
+
 </main>
 </div></div>
 
@@ -1973,7 +2110,8 @@ box.querySelectorAll('button[data-info]').forEach(b=>b.onclick=()=>{
 function fmtTs(t){if(!t)return '-';try{return new Date(Number(t)).toLocaleString('fa-IR')}catch(e){return String(t)}}
 function kv(k,v){return '<tr><td class=note style="white-space:nowrap">'+esc(k)+'</td><td style="direction:ltr;text-align:right;word-break:break-all">'+esc(String(v))+'</td></tr>'}
 const EVID={sync:'همگام‌سازی',connect:'اتصال',disconnect:'قطع',ping:'پینگ',app_open:'باز کردن اپ',
-'key-rotated':'کلید دستگاه عوض شد','key-rejected':'کلید نامعتبر - درخواست رد شد','legacy-refused':'اپ قدیمی رد شد'};
+'key-rotated':'کلید دستگاه عوض شد','key-rejected':'کلید نامعتبر - درخواست رد شد','legacy-refused':'اپ قدیمی رد شد',
+'throttled-device':'به سقف درخواست خودش خورد (دداس‌گارده)','throttled-ip':'به سقف درخواست IP خورد (دداس‌گارده)'};
 function evLbl(t){return EVID[String(t)]||String(t||'?')}
 async function loadCanary(){const j=await api({action:'canary.state'});const c=j.canary||{};
  if($('cy_on'))$('cy_on').checked=String(c.on)==='1';
@@ -1996,6 +2134,27 @@ async function purgeData(){const n=Number($('pr_days').value||30);
  if(!confirm('رویدادهای قدیمی‌تر از '+n+' روز حذف شوند؟ (تاریخچهٔ ریکوست دستگاه‌ها می‌رود، خود دستگاه‌ها می‌مانند)'))return;
  const j=await api({action:'data.purge',days:n});if(j&&j.deleted!=null)toast(j.deleted+' رویداد حذف شد');else toast((j&&j.error)||'خطا',1)}
 async function unlockIp(){await api({action:'login.reset'});toast('قفل IP این دستگاه باز شد')}
+/* ---- api throttle (anti-ddos) ---- */
+async function loadRl(){const j=await api({action:'rl.state'});const r=j.rl||{};
+ if($('rl_on'))$('rl_on').checked=String(r.on)==='1';
+ if($('rl_sec'))$('rl_sec').value=String(r.sec||2);
+ if($('rl_dev'))$('rl_dev').value=String(r.dev||2);
+ if($('rl_ip'))$('rl_ip').value=String(r.ip||8);
+ if($('rl_cnt'))$('rl_cnt').textContent=(Number(j.refused24h)||0)+' درخواست رد شده در ۲۴ ساعت';
+ const on=String(r.on)==='1';
+ if($('rl_diag'))$('rl_diag').innerHTML='<b>وضعیت:</b> '+(on?'<span class="badge b-on">فعال</span>':'<span class="badge b-off">خاموش - ورکر هیچ درخواستی را محدود نمی‌کند</span>')+
+  '<br><span class=note>سقف هر دستگاه='+(r.dev||2)+' · سقف هر IP='+(r.ip||8)+' · پنجره='+(r.sec||2)+' ثانیه · فقط /api/key و /api/sync'+
+  (j.err?'<br><span style="color:var(--red)">'+esc(j.err)+'</span>':'')+'</span>';
+ const rows=(j.recent||[]).slice(0,20);
+ if($('rl_recent'))$('rl_recent').innerHTML=rows.length?
+  '<table><tr><td class=note>دستگاه</td><td class=note>کدام سقف</td><td class=note>IP</td><td class=note>کِی</td></tr>'+
+  rows.map(function(x){return '<tr><td style="direction:ltr;text-align:right">'+esc(String(x.device||'').slice(0,18))+'</td><td>'+esc(evLbl(x.type))+'</td>'+
+   '<td style="direction:ltr;text-align:right">'+esc(x.ip||'-')+'</td><td class=note>'+fmtTs(x.ts)+'</td></tr>'}).join('')+'</table>':
+  '<span class=note>هیچ درخواست رد شده‌ای در ۲۴ ساعت اخیر ثبت نشده</span>'}
+async function saveRl(){const j=await api({action:'rl.set',on:$('rl_on').checked,sec:Number($('rl_sec').value||2),
+ dev:Number($('rl_dev').value||2),ip:Number($('rl_ip').value||8)});
+ if(!j||j.ok===false){toast((j&&j.error)||'خطا',1);return}
+ toast($('rl_on').checked?'محدود کردن روشن شد - تا ۱۵ ثانیه دیگر روی همهٔ مسیرهای ورکر':'محدود کردن خاموش شد');loadRl()}
 async function cyMake(){const ids=(DEVS||[]).slice(0,5).map(x=>String(x.id||'')).filter(Boolean);
  if(!ids.length){toast('اول یک دستگاه باید همگام‌سازی کند',1);return}
  const j=await api({action:'canary.make',ids:ids.join(',')});
@@ -2082,6 +2241,7 @@ async function loadAll(){
    loadUpdate(),
    loadDevices(),
    loadCanary(),
+   loadRl(),
    loadRoute(),
   ])}
 (()=>{logout()})();
@@ -2806,6 +2966,16 @@ async function blobKeyIssue(env, request) {
   if (!(await appAuthOk(env, request))) return new Response("unauthorized", { status: 401, headers: jsonHeaders() });
   const device = String(b.device).slice(0, 128);
   const ip = clientIp(request);
+  // same brake as the sync, and here enc:"x" is the right answer: there is no session to destroy,
+  // the app just reports the refusal and comes back on its next sync cycle (2 minutes), far after
+  // the window has closed
+  const rKey = await rlCheck(env, "key", request, device);
+  if (rKey) {
+    await rlNote(env, "key", rKey, request, device);
+    return new Response(JSON.stringify({
+      ok: true, v: 2, enc: "x", why: "درخواست‌های پشت سر هم زیاد است - " + rKey.wait + " ثانیه بعد دوباره",
+    }), { status: 429, headers: jsonHeaders(["Retry-After", String(rKey.wait)]) });
+  }
   // a blocked handset is refused here already, so it never holds session keys and the encrypted
   // channel cannot carry anything to it at all
   const why0 = await blockWhy(env, device, ip, String(b.model || ""));
