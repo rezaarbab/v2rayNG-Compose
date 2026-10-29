@@ -14,6 +14,20 @@ android {
         targetSdk = 35
         versionCode = 12
         versionName = "1.2"
+        // the server identity is assembled in C (src/main/cpp/blobgate.c) and handed over JNI
+        externalNativeBuild {
+            cmake {
+                arguments += listOf("-DANDROID_STL=none")
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     signingConfigs {

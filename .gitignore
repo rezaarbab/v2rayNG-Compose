@@ -9,3 +9,6 @@ captures/
 ci-release.jks
 *.jks
 app/libs/
+
+# decoy source list - stays local, never shipped or committed
+txtjsis.txt
