@@ -129,6 +129,64 @@ public final class NativeSec {
         return READY && vaultDrop(which) == 1;
     }
 
+    private static native int idEnsure(byte[] challenge);
+
+    private static native byte[] idSign(byte[] msg);
+
+    private static native byte[] idSpki();
+
+    private static native int idDrop();
+
+    private static native String[] idChain();
+
+    private static native byte[] sha(byte[] in);
+
+    /** the device identity key: attested first, plain second, never exportable */
+    public static boolean idOk(byte[] challenge) {
+        return READY && idEnsure(challenge) == 1;
+    }
+
+    public static byte[] sign(byte[] msg) {
+        if (!READY || msg == null) return null;
+        try {
+            return idSign(msg);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    public static byte[] spki() {
+        if (!READY) return null;
+        try {
+            return idSpki();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    public static boolean dropId() {
+        return READY && idDrop() == 1;
+    }
+
+    /** {chain length, attested, self-signed, issuer, attestation-extension} - or null */
+    public static String[] chain() {
+        if (!READY) return null;
+        try {
+            return idChain();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    public static byte[] sha256(byte[] in) {
+        if (!READY || in == null) return null;
+        try {
+            return sha(in);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     public static String note() {
         return READY ? "sec ok" : "sec library failed its self test";
     }
