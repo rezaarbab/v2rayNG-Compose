@@ -2724,3 +2724,142 @@ Java_ir_v2rayng_compose_core_NativeSec_coreWriteConfig(JNIEnv *env, jclass cls, 
     }
     return ok ? 1 : 0;
 }
+
+/* ---------------- the server list, kept here ----------------
+ * Stage 3, first piece: the decrypted payload is parsed with org.json through JNI (the same
+ * library the Kotlin used) and the rows stay in native memory - including the link, which from
+ * here on is never handed back to Kotlin as a value. Kotlin may ask for the display fields one at
+ * a time (id, name, address, port, category, msg); the link is used only by this library when it
+ * writes the core config.
+ * Sealing the rows for the next start is the following commit; until then this store lives for
+ * the process, which is exactly what the branch's stage 3 needs to wire the list through.
+ */
+#define PLR_MAX 256
+#define PLR_ID 64
+#define PLR_CAT 64
+#define PLR_LINK 2048
+
+typedef struct {
+    char id[PLR_ID];
+    char name[PL_NAME];
+    char addr[PL_ADDR];
+    int port;
+    char cat[PLR_CAT];
+    char msg[PL_MISC];
+    char link[PLR_LINK];
+} plr_t;
+
+static plr_t *g_rows;
+static int g_rows_n;
+
+static void payload_reset(void) {
+    if (g_rows) { free(g_rows); g_rows = NULL; }
+    g_rows_n = 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_payloadLoad(JNIEnv *env, jclass cls, jstring jstego, jbyteArray jkc) {
+    payload_reset();
+    set_step("payload:entered");
+    jbyteArray plain = Java_ir_v2rayng_compose_core_NativeSec_stegoOpen(env, cls, jstego, jkc);
+    if (plain == NULL) { set_step("payload:open"); return -1; }
+    jsize plen = (*env)->GetArrayLength(env, plain);
+    if (plen <= 0 || plen > 4000000) { set_step("payload:size"); return -1; }
+    jbyte *buf = (jbyte *) malloc((size_t) plen);
+    if (buf == NULL) { set_step("payload:alloc"); return -1; }
+    (*env)->GetByteArrayRegion(env, plain, 0, plen, buf);
+    /* the payload is UTF-8 JSON produced by the worker; NewStringUTF is how it becomes a String
+     * for org.json, and every byte the app has ever had in a name (Persian, ASCII) survives it */
+    jstring jjson = (*env)->NewStringUTF(env, (const char *) buf);
+    free(buf);
+    if (jjson == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); set_step("payload:string"); return -1; }
+
+    jclass jsonCls = need_class(env, "org/json/JSONObject");
+    jclass arrCls = need_class(env, "org/json/JSONArray");
+    jmethodID ctor = jsonCls ? (*env)->GetMethodID(env, jsonCls, "<init>", "(Ljava/lang/String;)V") : NULL;
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jobject root = (jsonCls && ctor) ? (*env)->NewObject(env, jsonCls, ctor, jjson) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); root = NULL; }
+    if (root == NULL) { set_step("payload:json"); return -1; }
+    jmethodID getArr = (*env)->GetMethodID(env, jsonCls, "optJSONArray", "(Ljava/lang/String;)Lorg/json/JSONArray;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jstring kServers = (*env)->NewStringUTF(env, "servers");
+    jobject arr = (getArr && kServers) ? (*env)->CallObjectMethod(env, root, getArr, kServers) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); arr = NULL; }
+    if (arr == NULL || arrCls == NULL) { set_step("payload:servers"); return 0; }
+    jmethodID arrLen = (*env)->GetMethodID(env, arrCls, "length", "()I");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID arrGet = (*env)->GetMethodID(env, arrCls, "optJSONObject", "(I)Lorg/json/JSONObject;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (!arrLen || !arrGet) { set_step("payload:array-methods"); return -1; }
+    int n = (*env)->CallIntMethod(env, arr, arrLen);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); n = 0; }
+    if (n < 0) n = 0;
+    if (n > PLR_MAX) n = PLR_MAX;
+    if (n == 0) { set_step("payload:empty"); return 0; }
+    g_rows = (plr_t *) calloc((size_t) n, sizeof(plr_t));
+    if (g_rows == NULL) { set_step("payload:alloc-rows"); return -1; }
+    int kept = 0;
+    for (int i = 0; i < n; i++) {
+        jobject o = (*env)->CallObjectMethod(env, arr, arrGet, i);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); o = NULL; }
+        if (o == NULL) continue;
+        plr_t *r = &g_rows[kept];
+        pl_json_str(env, o, jsonCls, "id", "", r->id, PLR_ID);
+        pl_json_str(env, o, jsonCls, "name", "", r->name, PL_NAME);
+        pl_json_str(env, o, jsonCls, "address", "", r->addr, PL_ADDR);
+        pl_json_str(env, o, jsonCls, "category", "", r->cat, PLR_CAT);
+        pl_json_str(env, o, jsonCls, "msg", "", r->msg, PL_MISC);
+        pl_json_str(env, o, jsonCls, "link", "", r->link, PLR_LINK);
+        r->port = pl_json_int(env, o, jsonCls, "port", 0);
+        (*env)->DeleteLocalRef(env, o);
+        if (r->addr[0] == 0 || r->port <= 0) continue;
+        kept++;
+    }
+    (*env)->DeleteLocalRef(env, arr);
+    (*env)->DeleteLocalRef(env, root);
+    if (kServers) (*env)->DeleteLocalRef(env, kServers);
+    if (jsonCls) (*env)->DeleteLocalRef(env, jsonCls);
+    if (arrCls) (*env)->DeleteLocalRef(env, arrCls);
+    g_rows_n = kept;
+    if (kept == 0) set_step("payload:no-usable-rows");
+    else set_step("payload:ok");
+    return kept;
+}
+
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_payloadCount(JNIEnv *env, jclass cls) {
+    return g_rows_n;
+}
+
+/** display fields only: 0 id, 1 name, 2 address, 3 category, 4 msg. The link is deliberately not
+ *  reachable from here - that is the whole point of the move. */
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_payloadField(JNIEnv *env, jclass cls, jint row, jint which) {
+    if (row < 0 || row >= g_rows_n) return NULL;
+    const plr_t *r = &g_rows[row];
+    const char *src = "";
+    switch (which) {
+        case 0: src = r->id; break;
+        case 1: src = r->name; break;
+        case 2: src = r->addr; break;
+        case 3: src = r->cat; break;
+        case 4: src = r->msg; break;
+        default: src = ""; break;
+    }
+    int n = (int) strlen(src);
+    jbyteArray out = (*env)->NewByteArray(env, n);
+    if (out && n) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) src);
+    return out;
+}
+
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_payloadPort(JNIEnv *env, jclass cls, jint row) {
+    if (row < 0 || row >= g_rows_n) return 0;
+    return g_rows[row].port;
+}
+
+JNIEXPORT void JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_payloadClear(JNIEnv *env, jclass cls) {
+    payload_reset();
+}

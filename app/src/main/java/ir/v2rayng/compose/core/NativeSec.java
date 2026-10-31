@@ -266,6 +266,64 @@ public final class NativeSec {
         }
     }
 
+    private static native int payloadLoad(String stego, byte[] kc);
+
+    private static native int payloadCount();
+
+    private static native byte[] payloadField(int row, int which);
+
+    private static native int payloadPort(int row);
+
+    private static native void payloadClear();
+
+    /** stage 3: decrypt, parse and keep the server list inside the library. Returns the number of
+     *  usable rows, or -1 (the step is in errInfo()). */
+    public static int payloadLoadRows(String stego, byte[] kc) {
+        if (!READY || stego == null || kc == null) return -1;
+        try {
+            return payloadLoad(stego, kc);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    public static int payloadRows() {
+        if (!READY) return 0;
+        try {
+            return payloadCount();
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** 0 id, 1 name, 2 address, 3 category, 4 msg - never the link */
+    public static String payloadText(int row, int which) {
+        if (!READY) return "";
+        try {
+            byte[] b = payloadField(row, which);
+            return b == null ? "" : new String(b, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    public static int payloadPortOf(int row) {
+        if (!READY) return 0;
+        try {
+            return payloadPort(row);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    public static void payloadForget() {
+        if (!READY) return;
+        try {
+            payloadClear();
+        } catch (Throwable t) {
+        }
+    }
+
     private static native int plParse(String link);
 
     private static native byte[] plStr(int which);
