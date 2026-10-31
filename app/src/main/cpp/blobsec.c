@@ -3249,13 +3249,19 @@ static void scr_ipv6(sbuf *o, const unsigned char *s, int n) {
              * digit, because the trailing  needs a word char before it (that is why the regex
              * leaves a trailing colon in place) */
             int r2 = (p < n && s[p] == ':') ? p + 1 : p;
-            int runStart = r2, seenDouble = 0;
+            int runStart = r2, seenDouble = 0, doubleEnd = 0;
             while (r2 < n && (scr_hex(s[r2]) || s[r2] == ':' || s[r2] == '.')) {
-                if (s[r2] == ':' && r2 > runStart && s[r2 - 1] == ':') seenDouble = 1;
+                if (s[r2] == ':' && r2 > runStart && s[r2 - 1] == ':') { seenDouble = 1; doubleEnd = r2 + 1; }
                 r2++;
             }
             int end2 = r2;
             while (end2 > runStart && !scr_hex(s[end2 - 1])) end2--;
+            /* greedy tail first; when its boundary fails the engine backtracks to the end of the
+               double colon itself, where the boundary is colon to word and therefore counts */
+            if (!(end2 > runStart + 2 && (end2 == n || !scr_word(s[end2])))) {
+                if (seenDouble && doubleEnd < n && scr_word(s[doubleEnd])) end2 = doubleEnd;
+                else end2 = 0;
+            }
             if (first >= 1 && first <= 4 && seenDouble && end2 > runStart + 2 && (end2 == n || !scr_word(s[end2]))) {
                 r2 = end2;
                 scr_put(o, s, last, i);
