@@ -108,7 +108,7 @@ object BlobVault {
         }
         val t0 = android.os.SystemClock.elapsedRealtime()
         if (!ready()) {
-            lastStage = "no key"
+            lastStage = "no key (step=" + NativeSec.errInfo() + ")"
             return null
         }
         val out = synchronized(this) { NativeSec.unseal(blob, CURRENT) }
@@ -125,7 +125,9 @@ object BlobVault {
             SecJournal.note("unseal ${viaOld.size}B with LEGACY key ${android.os.SystemClock.elapsedRealtime() - t0}ms (will be resealed)")
             return viaOld
         }
-        lastStage = "tag fail with both keys (${blob.size}B stored)"
+        // "tag fail" is only true when the step is open:cipher.doFinal; anything earlier means the
+        // call itself refused and the stored bytes were never offered to the cipher
+        lastStage = "cannot open ${blob.size}B stored [step=" + NativeSec.errInfo() + "]"
         SecJournal.note("unseal BadPadding ${android.os.SystemClock.elapsedRealtime() - t0}ms")
         return null
     }
