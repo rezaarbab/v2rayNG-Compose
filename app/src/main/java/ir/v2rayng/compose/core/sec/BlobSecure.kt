@@ -284,25 +284,47 @@ object BlobSecure {
                 session = issueKeys(base, body) ?: return null
                 continue
             }
-            val r = httpPost(
+            // A 5xx with a non-JSON body is the edge or the worker's own failure, not this device:
+            // a deploy window, or the isolate running out of CPU. Retry once here with a fresh
+            // token (the worker's ts stays monotonic, so a new one is always valid) instead of
+            // spending the user's next two minutes on something that usually clears in a second.
+            var r = httpPost(
                 base,
                 NativeKit.pathSync(),
                 JSONObject(body.toString()),
                 "v1",
                 token(body.getString("device"), sNow.kt),
             )
-            if (r.body == null) {
+            var wire = r.body
+            if (r.status >= 500) {
+                blog("sync: HTTP " + r.status + " - retrying once")
+                Thread.sleep(1500)
+                r = httpPost(
+                    base,
+                    NativeKit.pathSync(),
+                    JSONObject(body.toString()),
+                    "v1",
+                    token(body.getString("device"), sNow.kt),
+                )
+                wire = r.body
+            }
+            if (wire == null) {
                 blog("sync: no answer (status " + r.status + ")")
                 // transport failed - keep the session, let the caller retry on the next sync
                 fail(if (r.status == 0) "server unreachable (network or timeout)" else "server answered HTTP " + r.status + " with no body")
                 return null
             }
-            val wire = r.body ?: return null
             val resp = try {
                 JSONObject(wire)
             } catch (_: Exception) {
                 blog("sync: HTTP " + r.status + " body is not json: " + wire.take(60))
-                fail(if (r.status in 200..299) "unexpected server response (protocol)" else "server answered HTTP " + r.status + " and not json - old worker?")
+                fail(
+                    when {
+                        r.status in 200..299 -> "unexpected server response (protocol)"
+                        r.status >= 500 -> "server busy (HTTP " + r.status + ") - retried once; the next sync tries again"
+                        else -> "server answered HTTP " + r.status + " and not json - old worker?"
+                    },
+                )
                 return null
             }
             when (val enc = resp.optString("enc")) {
