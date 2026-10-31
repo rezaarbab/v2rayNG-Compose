@@ -252,6 +252,20 @@ public final class NativeSec {
         }
     }
 
+    private static native int coreWriteConfig(String path, int mode, int socksPort);
+
+    /** stage 2 of the server-in-C move: the Xray config is assembled from the parsed link and
+     *  written to `path` inside the library - mode 0 full tunnel, 1 ping only, 2 flag probe.
+     *  Returns false when the link was not parsed or the file could not be written. */
+    public static boolean writeCoreConfig(String path, int mode, int socksPort) {
+        if (!READY || path == null) return false;
+        try {
+            return coreWriteConfig(path, mode, socksPort) == 1;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     private static native int plParse(String link);
 
     private static native byte[] plStr(int which);

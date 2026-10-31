@@ -2342,3 +2342,192 @@ Java_ir_v2rayng_compose_core_NativeSec_plInt(JNIEnv *env, jclass cls, jint which
         default: return 0;
     }
 }
+
+/* ---------------- the Xray config, built and written here ----------------
+ * Stage 2 of the server-in-C move. The three configs the app ever needed (full tunnel, ping-only,
+ * flag probe) are assembled from the parsed link fields and written straight to a file: no config
+ * text is ever returned to Kotlin, so a method tracer has nothing to print. The shape is the one
+ * XrayCore.kt built with org.json; chkconfig.cjs compares this builder against a transcription of
+ * that Kotlin over the link corpus, parsed JSON against parsed JSON.
+ */
+
+typedef struct { char *b; int n, cap; } sbuf;
+
+static int sb_room(sbuf *s, int need) {
+    if (s->n + need + 1 <= s->cap) return 1;
+    int nc = s->cap > 0 ? s->cap : 4096;
+    while (nc < s->n + need + 1) nc *= 2;
+    char *nb = (char *) realloc(s->b, (size_t) nc);
+    if (nb == NULL) return 0;
+    s->b = nb;
+    s->cap = nc;
+    return 1;
+}
+
+static void sb_add(sbuf *s, const char *t) {
+    int n = (int) strlen(t);
+    if (!sb_room(s, n)) return;
+    memcpy(s->b + s->n, t, (size_t) n);
+    s->n += n;
+    s->b[s->n] = 0;
+}
+
+static void sb_num(sbuf *s, long v) {
+    char t[24];
+    snprintf(t, sizeof(t), "%ld", v);
+    sb_add(s, t);
+}
+
+/** a JSON string literal: quotes and backslashes escaped, control bytes as \\u00XX */
+static void sb_str(sbuf *s, const char *in) {
+    sb_add(s, "\"");
+    for (const unsigned char *p = (const unsigned char *) in; *p; p++) {
+        if (*p == '"' || *p == '\\') {
+            char t[3]; t[0] = '\\'; t[1] = (char) *p; t[2] = 0; sb_add(s, t);
+        } else if (*p < 0x20) {
+            char t[8]; snprintf(t, sizeof(t), "\\u%04x", *p); sb_add(s, t);
+        } else {
+            char t[2]; t[0] = (char) *p; t[1] = 0; sb_add(s, t);
+        }
+    }
+    sb_add(s, "\"");
+}
+
+static void sb_kv_str(sbuf *s, const char *k, const char *v) {
+    sb_str(s, k);
+    sb_add(s, ":");
+    sb_str(s, v);
+}
+
+static void sb_direct(sbuf *s) {
+    sb_add(s, "{\"tag\":\"direct\",\"protocol\":\"freedom\"}");
+}
+
+static void sb_outbound(sbuf *s) {
+    sb_add(s, "{\"tag\":\"proxy\",\"protocol\":");
+    sb_str(s, pl_kind == 0 ? "vless" : pl_kind == 1 ? "trojan" : "vless");
+    sb_add(s, ",\"settings\":");
+    if (pl_kind == 1) {
+        sb_add(s, "{\"servers\":[{\"address\":");
+        sb_str(s, pl_addr);
+        sb_add(s, ",\"port\":");
+        sb_num(s, pl_port);
+        sb_add(s, ",\"password\":");
+        sb_str(s, pl_cred);
+        sb_add(s, ",\"level\":0}]}");
+    } else {
+        sb_add(s, "{\"vnext\":[{\"address\":");
+        sb_str(s, pl_addr);
+        sb_add(s, ",\"port\":");
+        sb_num(s, pl_port);
+        sb_add(s, ",\"users\":[{\"id\":");
+        sb_str(s, pl_cred);
+        sb_add(s, ",\"encryption\":\"none\",\"level\":0");
+        if (pl_flow[0]) { sb_add(s, ",\"flow\":"); sb_str(s, pl_flow); }
+        sb_add(s, "}]}]}");
+    }
+    sb_add(s, ",\"streamSettings\":");
+    sb_add(s, "{\"network\":");
+    sb_str(s, pl_type);
+    sb_add(s, ",\"security\":");
+    sb_str(s, pl_security);
+    if (strcmp(pl_type, "ws") == 0) {
+        sb_add(s, ",\"wsSettings\":{\"path\":");
+        sb_str(s, pl_path[0] ? pl_path : "/");
+        if (pl_host[0]) { sb_add(s, ",\"host\":"); sb_str(s, pl_host); }
+        if (pl_ed > 0) {
+            sb_add(s, ",\"maxEarlyData\":");
+            sb_num(s, pl_ed);
+            if (pl_eh[0]) { sb_add(s, ",\"earlyDataHeaderName\":"); sb_str(s, pl_eh); }
+        }
+        sb_add(s, "}");
+    } else if (strcmp(pl_type, "grpc") == 0) {
+        sb_add(s, ",\"grpcSettings\":{");
+        int first = 1;
+        if (pl_path[0]) { sb_add(s, "\"serviceName\":"); sb_str(s, pl_path); first = 0; }
+        if (pl_host[0]) { if (!first) sb_add(s, ","); sb_add(s, "\"authority\":"); sb_str(s, pl_host); }
+        sb_add(s, "}");
+    } else if (strcmp(pl_type, "httpupgrade") == 0) {
+        sb_add(s, ",\"httpupgradeSettings\":{\"path\":");
+        sb_str(s, pl_path[0] ? pl_path : "/");
+        if (pl_host[0]) { sb_add(s, ",\"host\":"); sb_str(s, pl_host); }
+        sb_add(s, "}");
+    } else if (strcmp(pl_type, "xhttp") == 0) {
+        sb_add(s, ",\"xhttpSettings\":{");
+        int first = 1;
+        if (pl_path[0]) { sb_add(s, "\"path\":"); sb_str(s, pl_path); first = 0; }
+        if (pl_host[0]) { if (!first) sb_add(s, ","); sb_add(s, "\"host\":"); sb_str(s, pl_host); }
+        sb_add(s, "}");
+    }
+    if (strcmp(pl_security, "tls") == 0) {
+        sb_add(s, ",\"tlsSettings\":{");
+        int first = 1;
+        if (pl_sni[0]) { sb_add(s, "\"serverName\":"); sb_str(s, pl_sni); first = 0; }
+        if (!first) sb_add(s, ",");
+        sb_add(s, "\"fingerprint\":");
+        sb_str(s, pl_fp[0] ? pl_fp : "chrome");
+        sb_add(s, ",\"allowInsecure\":false}");
+    } else if (strcmp(pl_security, "reality") == 0) {
+        sb_add(s, ",\"realitySettings\":{\"show\":false");
+        if (pl_sni[0]) { sb_add(s, ",\"serverName\":"); sb_str(s, pl_sni); }
+        sb_add(s, ",\"fingerprint\":");
+        sb_str(s, pl_fp[0] ? pl_fp : "chrome");
+        if (pl_pbk[0]) { sb_add(s, ",\"publicKey\":"); sb_str(s, pl_pbk); }
+        if (pl_sid[0]) { sb_add(s, ",\"shortId\":"); sb_str(s, pl_sid); }
+        if (pl_spx[0]) { sb_add(s, ",\"spiderX\":"); sb_str(s, pl_spx); }
+        sb_add(s, "}");
+    }
+    sb_add(s, "}}");
+}
+
+static void sb_routing(sbuf *s) {
+    sb_add(s, "{\"domainStrategy\":\"AsIs\",\"rules\":[{\"type\":\"field\",\"outboundTag\":\"proxy\",\"network\":\"tcp,udp\"}]}");
+}
+
+static void sb_socks(sbuf *s, int port) {
+    sb_add(s, "{\"tag\":\"socks-in\",\"protocol\":\"socks\",\"listen\":\"127.0.0.1\",\"port\":");
+    sb_num(s, port);
+    sb_add(s, ",\"settings\":{\"udp\":false}}");
+}
+
+/** mode 0 = full tunnel, 1 = ping only, 2 = flag probe through a local socks port */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_coreWriteConfig(JNIEnv *env, jclass cls, jstring jpath, jint mode, jint socksPort) {
+    if (jpath == NULL || !pl_ok) return 0;
+    sbuf s;
+    s.b = NULL; s.n = 0; s.cap = 0;
+    sb_add(&s, "{\"log\":{\"loglevel\":\"warning\"}");
+    if (mode == 0) {
+        sb_add(&s, ",\"inbounds\":[{\"tag\":\"tun-in\",\"protocol\":\"tun\",\"settings\":{\"name\":\"utun42\",\"desc\":\"Blob\",\"mtu\":1500}},");
+        sb_socks(&s, 10890);
+        sb_add(&s, "]");
+    } else if (mode == 2) {
+        sb_add(&s, ",\"inbounds\":[");
+        sb_socks(&s, socksPort);
+        sb_add(&s, "]");
+    }
+    sb_add(&s, ",\"outbounds\":[");
+    sb_outbound(&s);
+    sb_add(&s, ",");
+    sb_direct(&s);
+    sb_add(&s, "],\"routing\":");
+    sb_routing(&s);
+    if (mode == 0) {
+        sb_add(&s, ",\"stats\":{},\"policy\":{\"levels\":{\"0\":{\"statsUserUplink\":true,\"statsUserDownlink\":true}}},\"system\":{\"statsOutboundUplink\":true,\"statsOutboundDownlink\":true}");
+    }
+    sb_add(&s, "}");
+    int ok = 0;
+    if (s.b != NULL) {
+        const char *path = (*env)->GetStringUTFChars(env, jpath, NULL);
+        if (path != NULL) {
+            FILE *f = fopen(path, "wb");
+            if (f != NULL) {
+                ok = fwrite(s.b, 1, (size_t) s.n, f) == (size_t) s.n;
+                fclose(f);
+            }
+            (*env)->ReleaseStringUTFChars(env, jpath, path);
+        }
+        free(s.b);
+    }
+    return ok ? 1 : 0;
+}
