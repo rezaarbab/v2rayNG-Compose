@@ -703,20 +703,130 @@ static void spec_detail(JNIEnv *env, jobject spec, int variant) {
     (*env)->DeleteLocalRef(env, sc);
 }
 
-/** one attempt at the AES key: a size, and whether the padding is named explicitly. The variant
- *  number rides along in every recorded step because the ladder below tries more than one, and
- *  "which shape did this device refuse" is the only thing that tells a bad parameter apart from a
- *  bad call. */
-static jobject aes_try(JNIEnv *env, jstring jalias, int keySize, int namePadding, int variant) {
+/* ---- the framework's own constants ----
+ * Everything this library asks the keystore for comes from KeyProperties, never from a literal
+ * typed here. On this handset the literal was wrong in a way that still creates keys: the padding
+ * string was refused at creation ("Unsupported encryption padding scheme: None"), and a key built
+ * without one exists, reads back, and then refuses every Cipher.init with INCOMPATIBLE_PADDING_MODE
+ * (keystore2's own words, read off the device with adb). The Kotlin that worked for months always
+ * used the constant. Reading the field makes the request correct on whatever framework runs. */
+static jstring kprop_str(JNIEnv *env, const char *field, const char *fallback) {
+    jclass kp = need_class(env, KP_CLS);
+    jstring out = NULL;
+    if (kp) {
+        jfieldID f = (*env)->GetStaticFieldID(env, kp, field, "Ljava/lang/String;");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (f) out = (jstring) (*env)->GetStaticObjectField(env, kp, f);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); out = NULL; }
+        (*env)->DeleteLocalRef(env, kp);
+    }
+    if (out == NULL) out = (*env)->NewStringUTF(env, fallback);
+    return out;
+}
+
+static int kprop_int(JNIEnv *env, const char *field, int fallback) {
+    jclass kp = need_class(env, KP_CLS);
+    int v = fallback;
+    if (kp) {
+        jfieldID f = (*env)->GetStaticFieldID(env, kp, field, "I");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (f) {
+            v = (*env)->GetStaticIntField(env, kp, f);
+            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); v = fallback; }
+        }
+        (*env)->DeleteLocalRef(env, kp);
+    }
+    return v;
+}
+
+/** delete one alias - only ever called on a key this same attempt just created */
+static int ks_delete(JNIEnv *env, jstring jalias) {
+    int err = 0;
+    jobject ks = keystore_open(env, &err);
+    if (err || ks == NULL) return 0;
+    jclass ksCls = (*env)->GetObjectClass(env, ks);
+    jmethodID del = (*env)->GetMethodID(env, ksCls, "deleteEntry", "(Ljava/lang/String;)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    int done = 0;
+    if (del) {
+        (*env)->CallVoidMethod(env, ks, del, jalias);
+        done = step_failed(env, "ks:deleteEntry") ? 0 : 1;
+    }
+    (*env)->DeleteLocalRef(env, ksCls);
+    (*env)->DeleteLocalRef(env, ks);
+    return done;
+}
+
+/** does this key really encrypt? create-then-use is where this ROM bit: a key without an
+ *  authorized padding exists and reads back, and refuses every Cipher.init afterwards. A variant is
+ *  accepted only if a real encrypt of four bytes goes through. */
+static int cipher_probe(JNIEnv *env, jobject key) {
+    jclass cipherCls = need_class(env, (const char *) CIPH);
+    if (!cipherCls || key == NULL) return 0;
+    jmethodID getInst = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID init = (*env)->GetMethodID(env, cipherCls, MD_INIT, "(ILjava/security/Key;)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID fin = (*env)->GetMethodID(env, cipherCls, MD_FIN, SIG_B);  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jstring tr = (*env)->NewStringUTF(env, (const char *) TRANS);
+    jobject c = (getInst && tr) ? (*env)->CallStaticObjectMethod(env, cipherCls, getInst, tr) : NULL;
+    if (step_failed(env, "probe:getInstance")) c = NULL;
+    int ok = 0;
+    if (c && init && fin) {
+        jbyteArray in = (*env)->NewByteArray(env, 4);
+        (*env)->CallVoidMethod(env, c, init, 1 /* ENCRYPT_MODE */, key);
+        if (!step_failed(env, "probe:init") && in) {
+            jobject out = (*env)->CallObjectMethod(env, c, fin, in);
+            ok = (out != NULL) && !step_failed(env, "probe:doFinal");
+        }
+    }
+    (*env)->DeleteLocalRef(env, cipherCls);
+    if (tr) (*env)->DeleteLocalRef(env, tr);
+    if (c) (*env)->DeleteLocalRef(env, c);
+    return ok;
+}
+
+/** can this identity key sign? the same create-then-use rule: a key whose purpose mask did not
+ *  match this framework reads fine and then answers INCOMPATIBLE_PURPOSE on initSign. */
+static int sig_probe(JNIEnv *env, jobject key) {
+    jclass sigCls = need_class(env, "java/security/Signature");
+    if (!sigCls || key == NULL) return 0;
+    jmethodID getInst = (*env)->GetStaticMethodID(env, sigCls, "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID init = (*env)->GetMethodID(env, sigCls, "initSign", "(Ljava/security/PrivateKey;)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jstring algo = (*env)->NewStringUTF(env, "SHA256withECDSA");
+    jobject s = (getInst && algo) ? (*env)->CallStaticObjectMethod(env, sigCls, getInst, algo) : NULL;
+    if (step_failed(env, "probe:sig.getInstance")) s = NULL;
+    int ok = 0;
+    if (s && init) {
+        (*env)->CallVoidMethod(env, s, init, key);
+        ok = !step_failed(env, "probe:initSign");
+    }
+    (*env)->DeleteLocalRef(env, sigCls);
+    if (algo) (*env)->DeleteLocalRef(env, algo);
+    if (s) (*env)->DeleteLocalRef(env, s);
+    return ok;
+}
+
+/** one AES key of the given size, with purposes, mode and padding read from this framework.
+ *  The key must encrypt four bytes before it is returned; otherwise the alias this attempt created
+ *  is removed again, so a half-authorized blob can never become the app's vault key. */
+static jobject aes_try(JNIEnv *env, jstring jalias, int keySize, int variant) {
     char where[40];
     jclass bld = need_class(env, KG_CLS);
     jclass kgc = need_class(env, KEYGEN_CLS);
     if (!bld || !kgc) return NULL;
-    jstring sAes = (*env)->NewStringUTF(env, KAES);
+    int purposes = kprop_int(env, "PURPOSE_ENCRYPT", 1) | kprop_int(env, "PURPOSE_DECRYPT", 2);
+    jstring sAes = kprop_str(env, "KEY_ALGORITHM_AES", KAES);
+    jstring gcm = kprop_str(env, "BLOCK_MODE_GCM", KGCM);
+    jstring none = kprop_str(env, "ENCRYPTION_PADDING_NONE", KNONE);
+    jstring prov = (*env)->NewStringUTF(env, PROVIDER);
     jmethodID ctor = (*env)->GetMethodID(env, bld, "<init>", "(Ljava/lang/String;I)V");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    if (!ctor) note_null("mk:ctor-method", namePadding ? "padded" : "no-padding");
-    jobject b = ctor ? (*env)->NewObject(env, bld, ctor, jalias, PURPOSE_ENC_DEC) : NULL;
+    if (!ctor) note_null("mk:ctor-method", "builder");
+    jobject b = ctor ? (*env)->NewObject(env, bld, ctor, jalias, purposes) : NULL;
     if (step_failed(env, "mk:ctor")) return NULL;
     if (b == NULL) return NULL;
     jmethodID mSize = (*env)->GetMethodID(env, bld, "setKeySize", "(I)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
@@ -729,26 +839,22 @@ static jobject aes_try(JNIEnv *env, jstring jalias, int keySize, int namePadding
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jmethodID mBuild = (*env)->GetMethodID(env, bld, "build", "()Landroid/security/keystore/KeyGenParameterSpec;");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    if (!mSize || !mMode || !mRnd || !mBuild || (namePadding && !mPad)) {
+    if (!mSize || !mMode || !mPad || !mRnd || !mBuild) {
         snprintf(where, sizeof(where), "mk:method-ids v%d", variant);
         note_null(where, "setter not found");
         return NULL;
     }
-    jstring gcm = (*env)->NewStringUTF(env, KGCM);
-    jstring none = namePadding ? (*env)->NewStringUTF(env, KNONE) : NULL;
     jclass strCls = need_class(env, "java/lang/String");
-    jobjectArray modeArr = strCls ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
-    jobjectArray padArr = (namePadding && strCls) ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
+    jobjectArray modeArr = (strCls && gcm) ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
+    jobjectArray padArr = (strCls && none) ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
     if (modeArr && gcm) (*env)->SetObjectArrayElement(env, modeArr, 0, gcm);
     if (padArr && none) (*env)->SetObjectArrayElement(env, padArr, 0, none);
-    /* a builder call that throws answers NULL, and handing that to the next call is a native crash
-     * rather than a failure - so one flag carries the refusal through the chain */
     int failed = 0;
     b = (*env)->CallObjectMethod(env, b, mSize, keySize);
     failed = step_failed(env, "mk:setKeySize");
     if (!failed) b = (*env)->CallObjectMethod(env, b, mMode, modeArr);
     if (!failed) failed = step_failed(env, "mk:setBlockModes");
-    if (!failed && namePadding) b = (*env)->CallObjectMethod(env, b, mPad, padArr);
+    if (!failed) b = (*env)->CallObjectMethod(env, b, mPad, padArr);
     if (!failed) failed = step_failed(env, "mk:setPaddings");
     if (!failed) b = (*env)->CallObjectMethod(env, b, mRnd, JNI_TRUE);
     if (!failed) failed = step_failed(env, "mk:setRandomized");
@@ -763,12 +869,11 @@ static jobject aes_try(JNIEnv *env, jstring jalias, int keySize, int namePadding
     spec_detail(env, spec, variant);
     jmethodID kgi = (*env)->GetStaticMethodID(env, kgc, "getInstance", "(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    jstring prov = (*env)->NewStringUTF(env, PROVIDER);
     jobject kg = (kgi && sAes && prov) ? (*env)->CallStaticObjectMethod(env, kgc, kgi, sAes, prov) : NULL;
     if (step_failed(env, "mk:keygen.getInstance")) kg = NULL;
     if (kg == NULL) {
         snprintf(where, sizeof(where), "mk:keygen.getInstance v%d", variant);
-        note_null(where, kgi ? "provider refused" : "no getInstance");
+        note_null(where, "provider refused");
         return NULL;
     }
     jmethodID kinit = (*env)->GetMethodID(env, kgc, "init", "(Ljava/security/spec/AlgorithmParameterSpec;)V");  //EXC-CLEARED
@@ -777,37 +882,41 @@ static jobject aes_try(JNIEnv *env, jstring jalias, int keySize, int namePadding
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     if (!kinit || !kgen) {
         snprintf(where, sizeof(where), "mk:keygen-methods v%d", variant);
-        note_null(where, kinit ? "no generateKey" : "no init");
+        note_null(where, "no init or generateKey");
         return NULL;
     }
     (*env)->CallVoidMethod(env, kg, kinit, spec);
     if (step_failed(env, "mk:keygen.init")) {
-        snprintf(where, sizeof(where), "mk:keygen.init v%d sz%d pad%d", variant, keySize, namePadding);
+        snprintf(where, sizeof(where), "mk:keygen.init v%d sz%d", variant, keySize);
         set_step(where);
         return NULL;
     }
     jobject k = (*env)->CallObjectMethod(env, kg, kgen);
-    if (step_failed(env, "mk:generateKey")) {
+    if (step_failed(env, "mk:generateKey") || k == NULL) {
         snprintf(where, sizeof(where), "mk:generateKey v%d", variant);
+        set_step(where);
+        return NULL;
+    }
+    if (!cipher_probe(env, k)) {
+        ks_delete(env, jalias);
+        (*env)->DeleteLocalRef(env, k);
+        snprintf(where, sizeof(where), "mk:unusable v%d sz%d", variant, keySize);
         set_step(where);
         return NULL;
     }
     return k;
 }
 
-/** the ladder. This framework (Android 16 on a MediaTek Xiaomi) answers the parameters this app has
- *  asked for since the beginning with "Unsupported encryption padding scheme: None", so a new
- *  install could not create a key at all - and a device with no key cannot save anything. The
- *  preferred shape goes first; any key that comes out of this seals the same iv||ct||tag bytes, so
- *  nothing downstream changes, and the step name records which shape this handset accepted. */
+/** 256 first, then 128 - the only thing that varies now, because purposes, mode and padding come
+ *  from this framework's own KeyProperties. The step name records what was accepted (mk:key-made
+ *  vN szN) and survives the later steps that overwrite g_step. */
 static jobject make_key(JNIEnv *env, jstring jalias) {
-    static const int SZ[4] = { 256, 256, 128, 128 };
-    static const int PAD[4] = { 1, 0, 1, 0 };
+    static const int SZ[2] = { 256, 128 };
     char note_buf[40];
-    for (int i = 0; i < 4; i++) {
-        jobject k = aes_try(env, jalias, SZ[i], PAD[i], i);
+    for (int i = 0; i < 2; i++) {
+        jobject k = aes_try(env, jalias, SZ[i], i);
         if (k != NULL) {
-            snprintf(note_buf, sizeof(note_buf), "mk:key-made v%d sz%d pad%d", i, SZ[i], PAD[i]);
+            snprintf(note_buf, sizeof(note_buf), "mk:key-made v%d sz%d", i, SZ[i]);
             set_step(note_buf);
             return k;
         }
@@ -1171,7 +1280,8 @@ static jobject build_spec(JNIEnv *env, jbyteArray challenge) {
     jstring jalias = id_alias(env);
     jmethodID ctor = (*env)->GetMethodID(env, bld, "<init>", "(Ljava/lang/String;I)V");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    jobject b = ctor ? (*env)->NewObject(env, bld, ctor, jalias, PURPOSE_SIGN_VERIFY) : NULL;
+    int purposes = kprop_int(env, "PURPOSE_SIGN", 1) | kprop_int(env, "PURPOSE_VERIFY", 2);
+    jobject b = ctor ? (*env)->NewObject(env, bld, ctor, jalias, purposes) : NULL;
     jobject spec = NULL;
     if (b) {
         jmethodID ecCtor = (*env)->GetMethodID(env, ec, "<init>", "(Ljava/lang/String;)V");  //EXC-CLEARED
@@ -1194,7 +1304,7 @@ static jobject build_spec(JNIEnv *env, jbyteArray challenge) {
         if (mDig) {
             jclass strCls = need_class(env, "java/lang/String");
             jobjectArray digests = strCls ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
-            jstring d = (*env)->NewStringUTF(env, ID_SHA256);
+            jstring d = kprop_str(env, "DIGEST_SHA256", ID_SHA256);
             if (digests && d) {
                 (*env)->SetObjectArrayElement(env, digests, 0, d);
                 if (b) b = (*env)->CallObjectMethod(env, b, mDig, digests);
@@ -1243,17 +1353,30 @@ JNIEXPORT jint JNICALL Java_ir_v2rayng_compose_core_NativeSec_idDrop(JNIEnv *env
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_idEnsure(JNIEnv *env, jclass cls, jbyteArray challenge) {
     set_step("id:ensure-entered");
-    if (priv_cached(env) != NULL) { set_step("id:already-there"); return 1; }
+    if (priv_cached(env) != NULL) {
+        if (sig_probe(env, cached_priv)) { set_step("id:already-there"); return 1; }
+        /* the entry reads but cannot sign: a key made by an earlier build of this library, whose
+         * purpose mask was a literal instead of this framework's constant - keystore2 answered
+         * INCOMPATIBLE_PURPOSE, "the purpose is not authorized". Replacing it is the only way this
+         * device can authenticate again, and the worker accepts the rotation by design. */
+        Java_ir_v2rayng_compose_core_NativeSec_idDrop(env, cls);
+        set_step("id:replacing-unusable");
+    }
     /* attested first, plain second: a ROM without attestation support must still get an identity */
     jbyteArray ch = challenge != NULL ? challenge : att_challenge(env);
     jobject spec = build_spec(env, ch);
-    if (spec && make_pair(env, spec)) { priv_invalidate(env); set_step("id:attested-key-made"); return 1; }
+    if (spec && make_pair(env, spec)) {
+        priv_invalidate(env);
+        jobject k = priv_cached(env);
+        if (k != NULL && sig_probe(env, k)) { set_step("id:attested-key-made"); return 1; }
+        /* an attested key that cannot sign is not an identity: it is dropped below and made again */
+    }
     /* reaching here means an entry existed and could not be signed with, so the code below
      * destroys it: 2 is that case, 1 is "nothing of yours was replaced" */
     Java_ir_v2rayng_compose_core_NativeSec_idDrop(env, cls);
     jobject plain = build_spec(env, NULL);
     int made = (plain && make_pair(env, plain)) ? 1 : 0;
-    if (made) priv_invalidate(env);
+    if (made) { priv_invalidate(env); jobject k2 = priv_cached(env); made = (k2 != NULL && sig_probe(env, k2)) ? 1 : 0; }
     set_step(made ? "id:plain-key-made" : "id:no-key-at-all");
     return made ? 2 : 0;
 }
