@@ -1,13 +1,6 @@
 package ir.v2rayng.compose.core.sec
 
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
-import java.security.KeyPairGenerator
-import java.security.KeyStore
-import java.security.MessageDigest
-import java.security.PrivateKey
-import java.security.Signature
-import java.security.spec.ECGenParameterSpec
+import ir.v2rayng.compose.core.NativeSec
 
 /**
  * Per-install device identity.
@@ -21,13 +14,13 @@ import java.security.spec.ECGenParameterSpec
  * decompiling the app plus guessing an ANDROID_ID used to be enough to authenticate as somebody
  * else's handset. Now the APK carries nothing secret, and the signing capability lives in
  * hardware that the attacker would have to physically own.
+ *
+ * The key itself is not touched here. The alias, the curve, the purposes, the digest list, the
+ * attestation challenge, the Signature instance and the certificate reading all live in
+ * blobsec.c; this file only decides what the answers mean and keeps the two things worth
+ * remembering - the public key bytes and whether this device gave up a key at all.
  */
 object BlobIdentity {
-
-    private const val ALIAS = "blob-dev-v1"
-
-    @Volatile
-    private var keyRef: PrivateKey? = null
 
     @Volatile
     private var pubRef: ByteArray? = null
@@ -37,123 +30,40 @@ object BlobIdentity {
     var note: String? = null
         private set
 
-    private fun ks(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-
-    private fun readPrivate(): PrivateKey? = try {
-        (ks().getEntry(ALIAS, null) as? KeyStore.PrivateKeyEntry)?.privateKey
-    } catch (_: Exception) {
-        null
-    }
-
-    /** X.509 SubjectPublicKeyInfo DER - exactly what the worker imports as "spki". */
-    private fun readPublic(): ByteArray? = try {
-        ks().getCertificate(ALIAS)?.publicKey?.encoded
-    } catch (_: Exception) {
-        null
-    }
-
-    private fun exists(): Boolean = try {
-        ks().containsAlias(ALIAS)
-    } catch (_: Exception) {
-        false
-    }
-
-    /** The keystore's own key-attestation extension (Kotlin/Java constant is not public, so the
-     *  OID is spelled out) - its presence is what separates an attested certificate from a
-     *  plain self-signed one. */
-    private const val ATT_OID = "1.3.6.1.4.1.11129.2.1.17"
-
-    private fun buildSpec(challenge: ByteArray?): KeyGenParameterSpec {
-        val b = KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
-            .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-            .setDigests(KeyProperties.DIGEST_SHA256)
-        if (challenge != null) b.setAttestationChallenge(challenge)
-        return b.build()
-    }
-
-    private fun makePair(spec: KeyGenParameterSpec): Boolean = try {
-        val gen = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
-        gen.initialize(spec)
-        gen.generateKeyPair()
-        true
-    } catch (_: Exception) {
-        false
-    }
-
     /**
-     * Attested first, plain second: a keystore that refuses the challenge (older framework, no
-     * attestation support in the ROM) must still get a working identity key, otherwise the device
-     * could never sync at all.
+     * Ask for a usable signing key. 1 = ready and nothing of ours was destroyed, 2 = an entry was
+     * there that could not be signed with, so it was deleted and replaced (a reinstall under a
+     * different signing certificate does exactly this, and the worker sees a key rotation),
+     * 0 = this device gives no signing key at all.
      */
-    private fun generate(): Boolean {
-        val challenge = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
-        if (makePair(buildSpec(challenge))) return true
-        try {
-            ks().deleteEntry(ALIAS)
-        } catch (_: Exception) {
-        }
-        return makePair(buildSpec(null))
-    }
-
-    /** What the certificate chain says about where this key was born - reported honestly, and the
-     *  panel states no more than that (a self-built APK cannot verify Google's root in a Worker). */
-    fun attestation(): Map<String, Any> {
-        val out = HashMap<String, Any>()
-        try {
-            val chain = ks().getCertificateChain(ALIAS)
-            val n = chain?.size ?: 0
-            out["certs"] = n
-            out["attested"] = n > 1
-            val leaf = chain?.firstOrNull() as? java.security.cert.X509Certificate
-            if (leaf != null) {
-                out["selfSigned"] = leaf.subjectX500Principal.name == leaf.issuerX500Principal.name
-                out["issuer"] = leaf.issuerX500Principal.name.take(48)
-                out["attExt"] = leaf.getExtensionValue(ATT_OID) != null
-            }
-        } catch (e: Exception) {
-            out["issuer"] = "attestation unreadable: " + e.javaClass.simpleName
-        }
-        return out
-    }
-
-    /**
-     * A key entry that cannot be read is worse than no entry: nothing can ever be signed again.
-     * That happens for real when the APK is reinstalled with a different signing certificate, so
-     * the dead entry is replaced and the worker sees it as a key rotation instead of a broken app.
-     */
-    private fun privateKey(): PrivateKey? {
-        keyRef?.let { return it }
+    private fun ensure(): Boolean {
         val t0 = android.os.SystemClock.elapsedRealtime()
-        synchronized(this) {
-            if (keyRef != null) return keyRef
-            var k = readPrivate()
-            if (k == null) {
-                val had = exists()
-                if (had) {
-                    note = "identity key unreadable (APK signed with a different certificate?) - a new one was created"
-                    try {
-                        ks().deleteEntry(ALIAS)
-                    } catch (_: Exception) {
-                    }
-                }
+        val r = NativeSec.idState()
+        when (r) {
+            2 -> {
+                note = "identity key unreadable (APK signed with a different certificate?) - a new one was created"
                 pubRef = null
-                if (generate()) k = readPrivate()
-                if (k == null) note = "this device gives no keystore signing key - the server cannot authenticate it"
             }
-            keyRef = k
-            SecJournal.note(
-                "identity key " + (if (k != null) "ok" else "UNAVAILABLE") +
-                    " ${android.os.SystemClock.elapsedRealtime() - t0}ms" +
-                    (note?.let { " - $it" } ?: "")
-            )
-            return k
+            0 -> note = "this device gives no keystore signing key - the server cannot authenticate it" +
+                    " (step=" + NativeSec.errInfo() + ")"
         }
+        SecJournal.note(
+            "identity key " + (if (r != 0) "ok" else "UNAVAILABLE") +
+                " ${android.os.SystemClock.elapsedRealtime() - t0}ms" +
+                (note?.let { " - $it" } ?: "")
+        )
+        return r != 0
     }
 
+    /** X.509 SubjectPublicKeyInfo DER, base64url - exactly what the worker imports as "spki". */
     fun publicKeyB64(): String? {
-        if (privateKey() == null) return null
         pubRef?.let { return BlobB64.encode(it) }
-        val p = readPublic() ?: return null
+        if (!ensure()) return null
+        val p = NativeSec.spki()
+        if (p == null) {
+            note = "the keystore has no certificate to read - (step=" + NativeSec.errInfo() + ")"
+            return null
+        }
         pubRef = p
         return BlobB64.encode(p)
     }
@@ -165,39 +75,54 @@ object BlobIdentity {
     fun idSeed(): String {
         // the very first call also creates the key, so the panel already has the fingerprint on the
         // first sync instead of one sync late
-        if (pubRef == null) privateKey()
-        val p = pubRef ?: readPublic()?.also { pubRef = it } ?: return ""
-        return try {
-            val d = MessageDigest.getInstance("SHA-256").digest(p)
-            val sb = StringBuilder()
-            for (i in 0 until 16) sb.append(String.format("%02x", d[i]))
-            sb.toString()
-        } catch (_: Exception) {
-            ""
+        if (pubRef == null) publicKeyB64()
+        val p = pubRef ?: return ""
+        val d = NativeSec.sha256(p) ?: return ""
+        if (d.size < 16) return ""
+        val sb = StringBuilder()
+        for (i in 0 until 16) sb.append(String.format("%02x", d[i]))
+        return sb.toString()
+    }
+
+    /** What the certificate chain says about where this key was born - reported honestly, and the
+     *  panel states no more than that (a self-built APK cannot verify Google's root in a Worker).
+     *  The chain is read in C and arrives as six strings; nothing here touches a certificate API. */
+    fun attestation(): Map<String, Any> {
+        val out = HashMap<String, Any>()
+        val c = NativeSec.chain()
+        if (c == null || c.size < 6) {
+            out["issuer"] = "attestation unreadable: " + (if (c == null) NativeSec.errInfo() else "short chain report")
+            return out
         }
+        val n = c[0].toIntOrNull() ?: 0
+        out["certs"] = n
+        out["attested"] = c[1] == "1"
+        if (n > 0) {
+            out["selfSigned"] = c[3] == "1"
+            out["issuer"] = c[4].take(48)
+            out["attExt"] = c[5] == "1"
+        }
+        return out
     }
 
     /** DER ECDSA-SHA256 signature over msg, raw bytes - null when this device cannot sign. */
     fun sign(msg: ByteArray): ByteArray? {
         val t0 = android.os.SystemClock.elapsedRealtime()
-        var k = privateKey() ?: return null
+        if (pubRef == null && !ensure()) return null
         for (attempt in 0 until 2) {
-            try {
-                // one operation at a time: some keystore backends reject concurrent use
-                val sig = synchronized(this) {
-                    val s = Signature.getInstance("SHA256withECDSA")
-                    s.initSign(k)
-                    s.update(msg)
-                    s.sign()
-                }
+            // one operation at a time: some keystore backends reject concurrent use
+            val sig = synchronized(this) { NativeSec.sign(msg) }
+            if (sig != null) {
                 SecJournal.note("identity sign ${sig.size}B ${android.os.SystemClock.elapsedRealtime() - t0}ms")
                 return sig
-            } catch (e: Exception) {
-                keyRef = null
-                pubRef = null
-                SecJournal.note("identity sign ERROR ${e.javaClass.simpleName} ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-                k = privateKey() ?: return null
             }
+            SecJournal.note(
+                "identity sign ERROR ${android.os.SystemClock.elapsedRealtime() - t0}ms " +
+                    "attempt=$attempt step=" + NativeSec.errInfo()
+            )
+            // a refusal can mean the entry moved under us; ask for a key again and try once more
+            pubRef = null
+            if (!ensure()) return null
         }
         return null
     }

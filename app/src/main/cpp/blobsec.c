@@ -612,11 +612,14 @@ static jobject make_key(JNIEnv *env, jstring jalias) {
         if (padArr && none) (*env)->SetObjectArrayElement(env, padArr, 0, none);
         jobject spec = NULL;
         if (mSize) b = (*env)->CallObjectMethod(env, b, mSize, 256);
-        if (mMode && modeArr) b = (*env)->CallObjectMethod(env, b, mMode, modeArr);
-        if (mPad && padArr) b = (*env)->CallObjectMethod(env, b, mPad, padArr);
-        if (mRnd) b = (*env)->CallObjectMethod(env, b, mRnd, JNI_TRUE);
+        if (b && mMode && modeArr) b = (*env)->CallObjectMethod(env, b, mMode, modeArr);
+        if (b && mPad && padArr) b = (*env)->CallObjectMethod(env, b, mPad, padArr);
+        if (b && mRnd) b = (*env)->CallObjectMethod(env, b, mRnd, JNI_TRUE);
+        /* see build_spec: a NULL builder handed to the next call crashes instead of failing */
+        if (step_failed(env, "mk:builder")) b = NULL;
+        if (!b) set_step("mk:builder-lost");
         if (!mBuild) set_step("mk:build-method");
-        if (mBuild) spec = (*env)->CallObjectMethod(env, b, mBuild);
+        if (b && mBuild) spec = (*env)->CallObjectMethod(env, b, mBuild);
         if (step_failed(env, "mk:spec.build")) spec = NULL;
         if (spec) {
             jmethodID kgi = (*env)->GetStaticMethodID(env, kgc, "getInstance", "(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;");  //EXC-CLEARED
@@ -917,16 +920,20 @@ static jobject read_private(JNIEnv *env, jstring jalias) {
     jclass ksCls = (*env)->GetObjectClass(env, ks);
     jmethodID getEntry = (*env)->GetMethodID(env, ksCls, "getEntry", "(Ljava/lang/String;Ljava/security/KeyStore$ProtectionParameter;)Ljava/security/KeyStore$Entry;");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    jobject entry = getEntry ? (*env)->CallObjectMethod(env, ks, getEntry, jalias, NULL) : NULL;
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); entry = NULL; }
+    if (!getEntry) { set_step("id:getEntry-method"); (*env)->DeleteLocalRef(env, ksCls); (*env)->DeleteLocalRef(env, ks); return NULL; }
+    jobject entry = (*env)->CallObjectMethod(env, ks, getEntry, jalias, NULL);
+    if (step_failed(env, "id:getEntry")) entry = NULL;
     jobject key = NULL;
     if (entry) {
         jclass pke = need_class(env, "java/security/KeyStore$PrivateKeyEntry");
+        if (!pke) set_step("id:privatekeyentry-class");
+        else if (!(*env)->IsInstanceOf(env, entry, pke)) set_step("id:entry-not-privatekey");
         if (pke && (*env)->IsInstanceOf(env, entry, pke)) {
             jmethodID g = (*env)->GetMethodID(env, pke, "getPrivateKey", "()Ljava/security/PrivateKey;");  //EXC-CLEARED
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            if (!g) set_step("id:getPrivateKey-method");
             if (g) key = (*env)->CallObjectMethod(env, entry, g);
-            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); key = NULL; }
+            if (step_failed(env, "id:getPrivateKey")) key = NULL;
         }
         if (pke) (*env)->DeleteLocalRef(env, pke);
     }
@@ -936,12 +943,60 @@ static jobject read_private(JNIEnv *env, jstring jalias) {
     return key;
 }
 
+static jobject cached_priv = NULL;   /* global ref, this process */
+static int cached_priv_valid = 0;
+
+static void priv_invalidate(JNIEnv *env) {
+    if (cached_priv) { (*env)->DeleteGlobalRef(env, cached_priv); cached_priv = NULL; }
+    cached_priv_valid = 0;
+}
+
+/** the signing key handle, kept between calls: getEntry is a binder round trip that costs seconds
+ *  on some handsets, which is why the old Kotlin held it in a field; the cache is dropped whenever
+ *  a signature fails, so the next attempt re-reads (or regenerates) instead of reusing a dead one */
+static jobject priv_cached(JNIEnv *env) {
+    if (cached_priv_valid && cached_priv != NULL) return cached_priv;
+    jstring jalias = id_alias(env);
+    if (jalias == NULL) { set_step("id:alias"); return NULL; }
+    jobject k = read_private(env, jalias);
+    if (k == NULL) return NULL;
+    priv_invalidate(env);
+    cached_priv = (*env)->NewGlobalRef(env, k);
+    (*env)->DeleteLocalRef(env, k);
+    cached_priv_valid = cached_priv != NULL;
+    set_step(cached_priv_valid ? "id:key-cached" : "id:global-ref");
+    return cached_priv_valid ? cached_priv : NULL;
+}
+
+/** 16 bytes from the platform CSPRNG for the attestation challenge. It proves liveness and is not
+ *  secret material, but Kotlin has no SecureRandom any more, so the nonce is drawn here. */
+static jbyteArray att_challenge(JNIEnv *env) {
+    jclass sr = need_class(env, SRND_CLS);
+    if (!sr) { set_step("id:rng-class"); return NULL; }
+    jmethodID srNew = (*env)->GetMethodID(env, sr, "<init>", "()V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID next = (*env)->GetMethodID(env, sr, "nextBytes", "([B)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jbyteArray buf = (*env)->NewByteArray(env, 16);
+    jobject rnd = srNew ? (*env)->NewObject(env, sr, srNew) : NULL;
+    if (step_failed(env, "id:rng-ctor")) rnd = NULL;
+    if (rnd && buf && next) {
+        (*env)->CallVoidMethod(env, rnd, next, buf);
+        if (step_failed(env, "id:rng-nextBytes")) { (*env)->DeleteLocalRef(env, buf); buf = NULL; }
+    } else {
+        set_step("id:rng-methods");
+    }
+    (*env)->DeleteLocalRef(env, sr);
+    if (rnd) (*env)->DeleteLocalRef(env, rnd);
+    return buf;
+}
+
 /** the builder chain, with or without an attestation challenge */
 static jobject build_spec(JNIEnv *env, jbyteArray challenge) {
     jclass bld = need_class(env, KG_CLS);
     jclass ec = need_class(env, "java/security/spec/ECGenParameterSpec");
     jclass kp = need_class(env, KP_CLS);
-    if (!bld || !ec || !kp) return NULL;
+    if (!bld || !ec || !kp) { set_step("id:spec-classes"); return NULL; }
     jstring jalias = id_alias(env);
     jmethodID ctor = (*env)->GetMethodID(env, bld, "<init>", "(Ljava/lang/String;I)V");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
@@ -960,26 +1015,35 @@ static jobject build_spec(JNIEnv *env, jbyteArray challenge) {
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         jmethodID mBuild = (*env)->GetMethodID(env, bld, "build", "()Landroid/security/keystore/KeyGenParameterSpec;");  //EXC-CLEARED
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        if (mEc && ecSpec) b = (*env)->CallObjectMethod(env, b, mEc, ecSpec);
+        /* a builder call that throws answers NULL, and the next CallObjectMethod would then be
+         * given a NULL object - that is a native crash, not a Java exception, so each link
+         * checks the builder survived before the following call */
+        if (step_failed(env, "id:spec-ctor")) b = NULL;
+        if (b && mEc && ecSpec) b = (*env)->CallObjectMethod(env, b, mEc, ecSpec);
         if (mDig) {
             jclass strCls = need_class(env, "java/lang/String");
             jobjectArray digests = strCls ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
             jstring d = (*env)->NewStringUTF(env, ID_SHA256);
             if (digests && d) {
                 (*env)->SetObjectArrayElement(env, digests, 0, d);
-                b = (*env)->CallObjectMethod(env, b, mDig, digests);
+                if (b) b = (*env)->CallObjectMethod(env, b, mDig, digests);
             }
         }
-        if (mAtt && challenge) b = (*env)->CallObjectMethod(env, b, mAtt, challenge);
-        if (mBuild) spec = (*env)->CallObjectMethod(env, b, mBuild);
-        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); spec = NULL; }
+        if (b && mAtt && challenge) b = (*env)->CallObjectMethod(env, b, mAtt, challenge);
+        /* a ROM with no attestation refuses here; the caller retries without a challenge, so this
+         * is a normal answer and only the step name records that it happened */
+        if (step_failed(env, "id:attestation-challenge")) b = NULL;
+        if (!b) set_step("id:builder-lost");
+        if (b && mBuild) spec = (*env)->CallObjectMethod(env, b, mBuild);
+        if (step_failed(env, "id:spec.build")) spec = NULL;
     }
     return spec;
 }
 
 static int make_pair(JNIEnv *env, jobject spec) {
     jclass kpg = need_class(env, "java/security/KeyPairGenerator");
-    if (!kpg || spec == NULL) return 0;
+    if (!kpg) { set_step("id:keygen-class"); return 0; }
+    if (spec == NULL) { set_step("id:no-spec"); return 0; }
     jmethodID getInst = (*env)->GetStaticMethodID(env, kpg, "getInstance", "(Ljava/lang/String;Ljava/lang/String;)Ljava/security/KeyPairGenerator;");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jstring ecName = (*env)->NewStringUTF(env, ID_EC);
@@ -992,10 +1056,11 @@ static int make_pair(JNIEnv *env, jobject spec) {
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         jmethodID mk = (*env)->GetMethodID(env, kpg, "generateKeyPair", "()Ljava/security/KeyPair;");  //EXC-CLEARED
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (!init) set_step("id:initialize-method");
         if (init) (*env)->CallVoidMethod(env, gen, init, spec);
-        if (!(*env)->ExceptionCheck(env) && mk) {
+        if (!step_failed(env, "id:generator.initialize") && mk) {
             jobject kp = (*env)->CallObjectMethod(env, gen, mk);
-            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); kp = NULL; }
+            if (step_failed(env, "id:generateKeyPair")) kp = NULL;
             done = kp != NULL;
         }
     }
@@ -1006,30 +1071,36 @@ JNIEXPORT jint JNICALL Java_ir_v2rayng_compose_core_NativeSec_idDrop(JNIEnv *env
 
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_idEnsure(JNIEnv *env, jclass cls, jbyteArray challenge) {
-    jstring jalias = id_alias(env);
-    if (jalias == NULL) return 0;
-    if (read_private(env, jalias) != NULL) return 1;
+    set_step("id:ensure-entered");
+    if (priv_cached(env) != NULL) { set_step("id:already-there"); return 1; }
     /* attested first, plain second: a ROM without attestation support must still get an identity */
-    jobject spec = build_spec(env, challenge);
-    if (spec && make_pair(env, spec)) return 1;
+    jbyteArray ch = challenge != NULL ? challenge : att_challenge(env);
+    jobject spec = build_spec(env, ch);
+    if (spec && make_pair(env, spec)) { priv_invalidate(env); set_step("id:attested-key-made"); return 1; }
+    /* reaching here means an entry existed and could not be signed with, so the code below
+     * destroys it: 2 is that case, 1 is "nothing of yours was replaced" */
     Java_ir_v2rayng_compose_core_NativeSec_idDrop(env, cls);
     jobject plain = build_spec(env, NULL);
-    return (plain && make_pair(env, plain)) ? 1 : 0;
+    int made = (plain && make_pair(env, plain)) ? 1 : 0;
+    if (made) priv_invalidate(env);
+    set_step(made ? "id:plain-key-made" : "id:no-key-at-all");
+    return made ? 2 : 0;
 }
 
 JNIEXPORT jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_idSign(JNIEnv *env, jclass cls, jbyteArray jmsg) {
-    if (jmsg == NULL) return NULL;
-    jstring jalias = id_alias(env);
-    jobject key = jalias ? read_private(env, jalias) : NULL;
-    if (key == NULL) return NULL;
+    set_step("id:sign-entered");
+    if (jmsg == NULL) { set_step("id:sign-null-msg"); return NULL; }
+    jobject key = priv_cached(env);
+    if (key == NULL) { set_step("id:sign-no-key"); return NULL; }
     jclass sigCls = need_class(env, "java/security/Signature");
-    if (!sigCls) return NULL;
+    if (!sigCls) { set_step("id:sign-class"); return NULL; }
     jmethodID getInst = (*env)->GetStaticMethodID(env, sigCls, "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jstring algo = (*env)->NewStringUTF(env, "SHA256withECDSA");
     jobject s = getInst && algo ? (*env)->CallStaticObjectMethod(env, sigCls, getInst, algo) : NULL;
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); s = NULL; }
+    if (step_failed(env, "id:sign.getInstance")) s = NULL;
+    if (!getInst) set_step("id:sign-method");
     jbyteArray out = NULL;
     if (s) {
         jmethodID initSign = (*env)->GetMethodID(env, sigCls, "initSign", "(Ljava/security/PrivateKey;)V");  //EXC-CLEARED
@@ -1038,34 +1109,42 @@ Java_ir_v2rayng_compose_core_NativeSec_idSign(JNIEnv *env, jclass cls, jbyteArra
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         jmethodID sign = (*env)->GetMethodID(env, sigCls, "sign", "()[B");  //EXC-CLEARED
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (!initSign || !update || !sign) set_step("id:sign-method-ids");
         if (initSign) (*env)->CallVoidMethod(env, s, initSign, key);
-        if (!(*env)->ExceptionCheck(env) && update) {
+        if (!step_failed(env, "id:sign.initSign") && update) {
             jsize n = (*env)->GetArrayLength(env, jmsg);
             (*env)->CallVoidMethod(env, s, update, jmsg, 0, n);
         }
-        if (!(*env)->ExceptionCheck(env) && sign) {
+        if (!step_failed(env, "id:sign.update") && sign) {
             out = (jbyteArray) (*env)->CallObjectMethod(env, s, sign);
-            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); out = NULL; }
+            if (step_failed(env, "id:sign.sign")) out = NULL;
         }
+        if (out) set_step("id:sign-ok");
     }
+    /* no signature is a reason to keep a handle this device may have rotated under us */
+    if (out == NULL) priv_invalidate(env);
     return out;
 }
 
 /** X.509 SubjectPublicKeyInfo DER of the certificate's public key - what the worker imports */
 JNIEXPORT jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_idSpki(JNIEnv *env, jclass cls) {
+    set_step("id:spki-entered");
     jstring jalias = id_alias(env);
     int err = 0;
     jobject ks = keystore_open(env, &err);
-    if (err || ks == NULL) return NULL;
+    if (err || ks == NULL) { set_step("id:spki-keystore"); return NULL; }
     jclass ksCls = (*env)->GetObjectClass(env, ks);
     jmethodID getCert = (*env)->GetMethodID(env, ksCls, "getCertificate", "(Ljava/lang/String;)Ljava/security/cert/Certificate;");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jobject cert = getCert && jalias ? (*env)->CallObjectMethod(env, ks, getCert, jalias) : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); cert = NULL; }
     jbyteArray out = NULL;
+    if (cert == NULL) set_step("id:no-certificate");
     if (cert) {
         jclass xcls = need_class(env, "java/security/cert/X509Certificate");
+        if (!xcls) set_step("id:x509-class");
+        else if (!(*env)->IsInstanceOf(env, cert, xcls)) set_step("id:cert-not-x509");
         if (xcls && (*env)->IsInstanceOf(env, cert, xcls)) {
             /* the certificate's own encoded form is the whole cert; the worker imports the SPKI,
              * so take getPublicKey().getEncoded() instead */
@@ -1077,8 +1156,10 @@ Java_ir_v2rayng_compose_core_NativeSec_idSpki(JNIEnv *env, jclass cls) {
                 jclass keyCls = (*env)->GetObjectClass(env, pub);
                 jmethodID enc = (*env)->GetMethodID(env, keyCls, "getEncoded", "()[B");  //EXC-CLEARED
                 if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+                if (!enc) set_step("id:getEncoded-method");
                 if (enc) out = (jbyteArray) (*env)->CallObjectMethod(env, pub, enc);
-                if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); out = NULL; }
+                if (step_failed(env, "id:getEncoded")) out = NULL;
+                if (out) set_step("id:spki-ok");
             }
         }
     }
@@ -1103,6 +1184,7 @@ Java_ir_v2rayng_compose_core_NativeSec_idDrop(JNIEnv *env, jclass cls) {
     }
     (*env)->DeleteLocalRef(env, ksCls);
     (*env)->DeleteLocalRef(env, ks);
+    if (done) priv_invalidate(env);
     return done;
 }
 
@@ -1122,10 +1204,10 @@ Java_ir_v2rayng_compose_core_NativeSec_sha(JNIEnv *env, jclass cls, jbyteArray j
     return out;
 }
 
-/** what the certificate chain says about where this key was born, as six strings:
- *  chain length, attested (1/0), self-signed (1/0), issuer name, attestation-extension (1/0), error
- *  - or null when the chain cannot be read at all. Kotlin assembles the map from this and holds no
- *  certificate API of its own. */
+/** what the certificate chain says about where this key was born, as six strings in this order:
+ *  0 chain length, 1 attested (1/0), 2 unused, 3 self-signed (1/0), 4 issuer name,
+ *  5 attestation-extension (1/0) - or null when the chain cannot be read at all. Kotlin assembles
+ *  the map from this and holds no certificate API of its own, so these indexes are the contract. */
 JNIEXPORT jobjectArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_idChain(JNIEnv *env, jclass cls) {
     jstring jalias = id_alias(env);

@@ -176,9 +176,15 @@ public final class NativeSec {
 
     private static native byte[] sha(byte[] in);
 
-    /** the device identity key: attested first, plain second, never exportable */
-    public static boolean idOk(byte[] challenge) {
-        return READY && idEnsure(challenge) == 1;
+    /** the device identity key: attested first, plain second, never exportable.
+     *  1 = ready, 2 = an unreadable entry was deleted and replaced, 0 = this device gives none. */
+    public static int idState() {
+        if (!READY) return 0;
+        try {
+            return idEnsure(null);
+        } catch (Throwable t) {
+            return 0;
+        }
     }
 
     public static byte[] sign(byte[] msg) {
