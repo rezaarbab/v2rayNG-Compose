@@ -364,30 +364,48 @@ static const char SIG_GET[] = "(Ljava/lang/String;)Ljavax/crypto/Cipher;";
 static const char SIG_INIT[] = "(ILjava/security/Key;Ljavax/crypto/spec/AlgorithmParameterSpec;)V";
 static const char SIG_B[] = "([B)[B";
 
-static jclass find_class_checked(JNIEnv *env, const unsigned char *name, int *err) {
-    jclass c = (*env)->FindClass(env, (const char *) name);
-    if (c == NULL) { *err = 1; if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); }
-    return c;
-}
-
 /* Which step of the Cipher-through-JNI path failed. The known-answer test passing proves
  * SHA/HMAC/base64 work on this device, so the only thing left is how this library drives
  * javax.crypto - and "GCM tag fail" is what the caller says for any null it gets back, which hides
  * whether Cipher.getInstance, the GCMParameterSpec constructor, init, updateAAD or doFinal was the
  * one that refused. Every step below records its name, and a real Java exception adds its class
  * name. Reported to the log page by NativeSec.err(); to be deleted once the cause is known. */
-static char g_step[40] = "ok";
-static char g_exc[96] = "";
+static char g_step[40] = "ok";    /* last named point reached, on success or failure */
+static char g_last[224] = "";      /* what refused, in one string: where | class | message */
+static char g_det[80] = "";        /* values read back from a spec that was built */
 
 static void set_step(const char *where) {
     strncpy(g_step, where, sizeof(g_step) - 1);
     g_step[sizeof(g_step) - 1] = 0;
 }
 
-static void note_exc(JNIEnv *env) {
-    jthrowable ex = (*env)->ExceptionOccurred(env);
-    if (ex == NULL) { g_exc[0] = 0; return; }
-    (*env)->ExceptionClear(env);
+/** record a refusal that involves no Java exception - a class that FindClass would not name, a
+ *  method ID that was not there, a handle the keystore did not give back */
+static void note_null(const char *where, const char *what) {
+    snprintf(g_last, sizeof(g_last), "%s: %s", where, what);
+}
+
+/** the message of a throwable, which is the part that says WHY: "Key size must be either 128 or
+ *  256 bits." is an answer, InvalidAlgorithmParameterException alone is not */
+static void read_exc_msg(JNIEnv *env, jthrowable ex, char *out, size_t n) {
+    out[0] = 0;
+    jclass oc = (*env)->GetObjectClass(env, ex);
+    jmethodID getMsg = oc ? (*env)->GetMethodID(env, oc, "getMessage", "()Ljava/lang/String;") : NULL;
+    if (getMsg && oc) {
+        jstring nm = (jstring) (*env)->CallObjectMethod(env, oc, getMsg);
+        if (nm) {
+            const char *c = (*env)->GetStringUTFChars(env, nm, NULL);
+            if (c) { strncpy(out, c, n - 1); out[n - 1] = 0; (*env)->ReleaseStringUTFChars(env, nm, c); }
+            (*env)->DeleteLocalRef(env, nm);
+        }
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (oc) (*env)->DeleteLocalRef(env, oc);
+}
+
+/** name the throwable's class without touching a hidden class or a Java-side catch */
+static void read_exc_class(JNIEnv *env, jthrowable ex, char *out, size_t n) {
+    out[0] = 0;
     jclass oc = (*env)->GetObjectClass(env, ex);
     jclass clsCls = oc ? (*env)->GetObjectClass(env, oc) : NULL;
     jmethodID getName = clsCls ? (*env)->GetMethodID(env, clsCls, "getName", "()Ljava/lang/String;") : NULL;
@@ -396,9 +414,9 @@ static void note_exc(JNIEnv *env) {
         if (nm) {
             const char *c = (*env)->GetStringUTFChars(env, nm, NULL);
             if (c) {
-                const char *short_name = strrchr(c, '.');
-                strncpy(g_exc, short_name ? short_name + 1 : c, sizeof(g_exc) - 1);
-                g_exc[sizeof(g_exc) - 1] = 0;
+                const char *dot = strrchr(c, '.');
+                strncpy(out, dot ? dot + 1 : c, n - 1);
+                out[n - 1] = 0;
                 (*env)->ReleaseStringUTFChars(env, nm, c);
             }
             (*env)->DeleteLocalRef(env, nm);
@@ -407,24 +425,49 @@ static void note_exc(JNIEnv *env) {
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     if (oc) (*env)->DeleteLocalRef(env, oc);
     if (clsCls) (*env)->DeleteLocalRef(env, clsCls);
-    (*env)->DeleteLocalRef(env, ex);
 }
 
-/* clear any pending exception and record it, returning true when one was raised */
+/* clear any pending exception and record where + class + message together, returning true when
+ * one was raised; a later set_step cannot separate them again */
 static int step_failed(JNIEnv *env, const char *where) {
     if (!(*env)->ExceptionCheck(env)) { set_step(where); return 0; }
     set_step(where);
-    note_exc(env);
+    jthrowable ex = (*env)->ExceptionOccurred(env);
+    if (ex == NULL) return 1;
+    (*env)->ExceptionClear(env);
+    char cls[48] = "", msg[128] = "";
+    read_exc_class(env, ex, cls, sizeof(cls));
+    read_exc_msg(env, ex, msg, sizeof(msg));
+    if (msg[0] != 0) snprintf(g_last, sizeof(g_last), "%s | %s | %s", where, cls, msg);
+    else snprintf(g_last, sizeof(g_last), "%s | %s", where, cls);
+    (*env)->DeleteLocalRef(env, ex);
     return 1;
+}
+
+static void note_det(const char *fmt, int a, int b, const char *c, const char *d) {
+    snprintf(g_det, sizeof(g_det), fmt, a, b, c, d);
 }
 
 JNIEXPORT jstring JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_err(JNIEnv *env, jclass cls) {
-    char buf[144];
-    if (g_exc[0] != 0) snprintf(buf, sizeof(buf), "%s | %s", g_step, g_exc);
+    char buf[352];
+    if (g_last[0] != 0 && g_det[0] != 0) snprintf(buf, sizeof(buf), "%s | last=%s | %s", g_step, g_last, g_det);
+    else if (g_last[0] != 0) snprintf(buf, sizeof(buf), "%s | last=%s", g_step, g_last);
+    else if (g_det[0] != 0) snprintf(buf, sizeof(buf), "%s | %s", g_step, g_det);
     else snprintf(buf, sizeof(buf), "%s", g_step);
-    g_exc[0] = 0;
+    g_last[0] = 0;
+    g_det[0] = 0;
     return (*env)->NewStringUTF(env, buf);
+}
+
+static jclass find_class_checked(JNIEnv *env, const unsigned char *name, int *err) {
+    jclass c = (*env)->FindClass(env, (const char *) name);
+    if (c == NULL) {
+        *err = 1;
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        note_null("class-missing", (const char *) name);
+    }
+    return c;
 }
 
 JNIEXPORT jbyteArray JNICALL
@@ -515,7 +558,11 @@ Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArr
  * fetching it from the keystore is a binder round trip that costs seconds on some handsets.
  */
 
-static const char KS_CLS[] = "android/security/keystore/KeyStore";
+/* the PUBLIC door: android/security/keystore/KeyStore is @hide, and FindClass of a hidden class
+ * answers NULL to an app process (which is what every keystore read did on API 36 - the key was
+ * there, the app just could not name the class to ask for it). java.security.KeyStore with the
+ * AndroidKeyStore provider is the supported way, and is what the Kotlin code used before. */
+static const char KS_CLS[] = "java/security/KeyStore";
 static const char KG_CLS[] = "android/security/keystore/KeyGenParameterSpec$Builder";
 static const char KP_CLS[] = "android/security/keystore/KeyProperties";
 static const char SKS_CLS[] = "java/security/KeyStore$SecretKeyEntry";
@@ -530,7 +577,12 @@ static int cached_valid = 0;
 
 static jclass need_class(JNIEnv *env, const char *name) {
     jclass c = (*env)->FindClass(env, name);
-    if (c == NULL) (*env)->ExceptionClear(env);
+    if (c == NULL) {
+        (*env)->ExceptionClear(env);
+        /* no class is a server name and no class is secret material: this is the line that tells
+         * a hidden-API refusal apart from a wrong descriptor, and without it the refusal is silent */
+        note_null("class-missing", name);
+    }
     return c;
 }
 
@@ -586,6 +638,51 @@ static jobject read_key(JNIEnv *env, jstring jalias) {
     return key;
 }
 
+/** the spec reads itself back: if the keystore rejects it, what matters is the values the object
+ *  holds, not the values this file intended to put in - keySize 0 here means a setter never ran,
+ *  keySize 256 with the same rejection means the parameters are argued about somewhere else */
+static void spec_detail(JNIEnv *env, jobject spec) {
+    if (spec == NULL) return;
+    jclass sc = (*env)->GetObjectClass(env, spec);
+    if (!sc) return;
+    jmethodID mSz = (*env)->GetMethodID(env, sc, "getKeySize", "()I");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID mPu = (*env)->GetMethodID(env, sc, "getPurposes", "()I");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID mBm = (*env)->GetMethodID(env, sc, "getBlockModes", "()[Ljava/lang/String;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID mEp = (*env)->GetMethodID(env, sc, "getEncryptionPaddings", "()[Ljava/lang/String;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    int sz = -1, pu = -1;
+    if (mSz) sz = (int) (*env)->CallIntMethod(env, spec, mSz);
+    if (mPu) pu = (int) (*env)->CallIntMethod(env, spec, mPu);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    char bm[20] = "?", ep[20] = "?";
+    jobjectArray arr = mBm ? (jobjectArray) (*env)->CallObjectMethod(env, spec, mBm) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); arr = NULL; }
+    if (arr && (*env)->GetArrayLength(env, arr) > 0) {
+        jstring first = (jstring) (*env)->GetObjectArrayElement(env, arr, 0);
+        if (first) {
+            const char *c = (*env)->GetStringUTFChars(env, first, NULL);
+            if (c) { strncpy(bm, c, sizeof(bm) - 1); bm[sizeof(bm) - 1] = 0; (*env)->ReleaseStringUTFChars(env, first, c); }
+            (*env)->DeleteLocalRef(env, first);
+        }
+    }
+    arr = mEp ? (jobjectArray) (*env)->CallObjectMethod(env, spec, mEp) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); arr = NULL; }
+    if (arr && (*env)->GetArrayLength(env, arr) > 0) {
+        jstring first = (jstring) (*env)->GetObjectArrayElement(env, arr, 0);
+        if (first) {
+            const char *c = (*env)->GetStringUTFChars(env, first, NULL);
+            if (c) { strncpy(ep, c, sizeof(ep) - 1); ep[sizeof(ep) - 1] = 0; (*env)->ReleaseStringUTFChars(env, first, c); }
+            (*env)->DeleteLocalRef(env, first);
+        }
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    note_det("spec sz=%d pu=%d bm=%s ep=%s", sz, pu, bm, ep);
+    (*env)->DeleteLocalRef(env, sc);
+}
+
 /** creates the key under the alias, then reads it back */
 static jobject make_key(JNIEnv *env, jstring jalias) {
     jclass kp = need_class(env, KP_CLS);
@@ -624,6 +721,7 @@ static jobject make_key(JNIEnv *env, jstring jalias) {
         if (!mBuild) set_step("mk:build-method");
         if (b && mBuild) spec = (*env)->CallObjectMethod(env, b, mBuild);
         if (step_failed(env, "mk:spec.build")) spec = NULL;
+        if (spec) spec_detail(env, spec);
         if (spec) {
             jmethodID kgi = (*env)->GetStaticMethodID(env, kgc, "getInstance", "(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;");  //EXC-CLEARED
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
