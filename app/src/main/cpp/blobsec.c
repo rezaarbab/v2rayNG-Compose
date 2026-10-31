@@ -431,6 +431,279 @@ Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArr
     return out;
 }
 
+/* ---------------- the local sealing vault (AndroidKeyStore AES-GCM) ----------------
+ * The whole keystore path lives here: provider name, alias handling, the key parameters, the
+ * cipher and the IV. Kotlin asks for a sealed byte string and gets plaintext back; it holds no
+ * key handle, no alias and no cipher any more. The key object is cached in this library because
+ * fetching it from the keystore is a binder round trip that costs seconds on some handsets.
+ */
+
+static const char KS_CLS[] = "android/security/keystore/KeyStore";
+static const char KG_CLS[] = "android/security/keystore/KeyGenParameterSpec$Builder";
+static const char KP_CLS[] = "android/security/keystore/KeyProperties";
+static const char SKS_CLS[] = "java/security/KeyStore$SecretKeyEntry";
+static const char KEYGEN_CLS[] = "javax/crypto/KeyGenerator";
+static const char SRND_CLS[] = "java/security/SecureRandom";
+static const char PROVIDER[] = "AndroidKeyStore";
+static const char KAES[] = "AES", KGCM[] = "GCM", KNONE[] = "None";
+#define PURPOSE_ENC_DEC 3 /* ENCRYPT | DECRYPT from KeyProperties */
+
+static jobject cached_key = NULL;      /* global ref, this process */
+static int cached_valid = 0;
+
+static jclass need_class(JNIEnv *env, const char *name) {
+    jclass c = (*env)->FindClass(env, name);
+    if (c == NULL) (*env)->ExceptionClear(env);
+    return c;
+}
+
+/** the keystore, loaded; caller deletes the local ref */
+static jobject keystore_open(JNIEnv *env, int *err) {
+    jclass ksCls = need_class(env, KS_CLS);
+    if (!ksCls) { *err = 1; return NULL; }
+    jmethodID getInstance = (*env)->GetStaticMethodID(env, ksCls, "getInstance", "(Ljava/lang/String;)Ljava/security/KeyStore;");
+    jstring prov = (*env)->NewStringUTF(env, PROVIDER);
+    jobject ks = getInstance && prov ? (*env)->CallStaticObjectMethod(env, ksCls, getInstance, prov) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); ks = NULL; *err = 1; }
+    if (ks) {
+        jmethodID load = (*env)->GetMethodID(env, ksCls, "load", "(Ljava/security/KeyStore$LoadStoreParameter;)V");
+        if (load) {
+            (*env)->CallVoidMethod(env, ks, load, NULL);
+            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); ks = NULL; *err = 1; }
+        } else { *err = 1; }
+    }
+    (*env)->DeleteLocalRef(env, ksCls);
+    if (prov) (*env)->DeleteLocalRef(env, prov);
+    return ks;
+}
+
+static jobject read_key(JNIEnv *env, jstring jalias) {
+    int err = 0;
+    jobject ks = keystore_open(env, &err);
+    if (err || ks == NULL) return NULL;
+    jclass ksCls = (*env)->GetObjectClass(env, ks);
+    jmethodID getEntry = (*env)->GetMethodID(env, ksCls, "getEntry", "(Ljava/lang/String;[Ljava/security/KeyStore$ProtectionParameter;)Ljava/security/KeyStore$Entry;");
+    jobject entry = getEntry ? (*env)->CallObjectMethod(env, ks, getEntry, jalias, NULL) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); entry = NULL; }
+    jobject key = NULL;
+    if (entry) {
+        jclass skCls = need_class(env, SKS_CLS);
+        if (skCls && (*env)->IsInstanceOf(env, entry, skCls)) {
+            jmethodID getSecret = (*env)->GetMethodID(env, skCls, "getSecretKey", "()Ljavax/crypto/SecretKey;");
+            if (getSecret) key = (*env)->CallObjectMethod(env, entry, getSecret);
+            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); key = NULL; }
+        }
+        if (skCls) (*env)->DeleteLocalRef(env, skCls);
+    }
+    (*env)->DeleteLocalRef(env, ksCls);
+    (*env)->DeleteLocalRef(env, ks);
+    if (entry) (*env)->DeleteLocalRef(env, entry);
+    return key;
+}
+
+/** creates the key under the alias, then reads it back */
+static jobject make_key(JNIEnv *env, jstring jalias) {
+    jclass kp = need_class(env, KP_CLS);
+    jclass bld = need_class(env, KG_CLS);
+    jclass kgc = need_class(env, KEYGEN_CLS);
+    if (!kp || !bld || !kgc) return NULL;
+    jmethodID mAlg = (*env)->GetStaticMethodID(env, kp, "getKeyAlgorithm", "()Ljava/lang/String;");
+    (void) mAlg; /* the AES name is spelled below; the field accessor is not needed from native */
+    jstring sAes = (*env)->NewStringUTF(env, KAES);
+    jmethodID ctor = (*env)->GetMethodID(env, bld, "<init>", "(Ljava/lang/String;I)V");
+    jobject b = ctor ? (*env)->NewObject(env, bld, ctor, jalias, PURPOSE_ENC_DEC) : NULL;
+    if (b) {
+        jmethodID mSize = (*env)->GetMethodID(env, bld, "setKeySize", "(I)Landroid/security/keystore/KeyGenParameterSpec$Builder;");
+        jmethodID mMode = (*env)->GetMethodID(env, bld, "setBlockModes", "(Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");
+        jmethodID mPad = (*env)->GetMethodID(env, bld, "setEncryptionPaddings", "(Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");
+        jmethodID mRnd = (*env)->GetMethodID(env, bld, "setRandomizedEncryptionRequired", "(Z)Landroid/security/keystore/KeyGenParameterSpec$Builder;");
+        jmethodID mBuild = (*env)->GetMethodID(env, bld, "build", "()Landroid/security/keystore/KeyGenParameterSpec;");
+        jstring gcm = (*env)->NewStringUTF(env, KGCM), none = (*env)->NewStringUTF(env, KNONE);
+        jobject spec = NULL;
+        if (mSize) b = (*env)->CallObjectMethod(env, b, mSize, 256);
+        if (mMode && gcm) b = (*env)->CallObjectMethod(env, b, mMode, gcm);
+        if (mPad && none) b = (*env)->CallObjectMethod(env, b, mPad, none);
+        if (mRnd) b = (*env)->CallObjectMethod(env, b, mRnd, JNI_TRUE);
+        if (mBuild) spec = (*env)->CallObjectMethod(env, b, mBuild);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); spec = NULL; }
+        if (spec) {
+            jmethodID kgi = (*env)->GetStaticMethodID(env, kgc, "getInstance", "(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;");
+            jstring prov = (*env)->NewStringUTF(env, PROVIDER);
+            jobject kg = kgi && sAes && prov ? (*env)->CallStaticObjectMethod(env, kgc, kgi, sAes, prov) : NULL;
+            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); kg = NULL; }
+            if (kg) {
+                jmethodID kinit = (*env)->GetMethodID(env, kgc, "init", "(Ljava/security/spec/AlgorithmParameterSpec;)V");
+                jmethodID kgen = (*env)->GetMethodID(env, kgc, "generateKey", "()Ljavax/crypto/SecretKey;");
+                if (kinit) (*env)->CallVoidMethod(env, kg, kinit, spec);
+                if (!(*env)->ExceptionCheck(env) && kgen) {
+                    jobject k = (*env)->CallObjectMethod(env, kg, kgen);
+                    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); k = NULL; }
+                    if (sAes) (*env)->DeleteLocalRef(env, sAes);
+                    if (gcm) (*env)->DeleteLocalRef(env, gcm);
+                    if (none) (*env)->DeleteLocalRef(env, none);
+                    return k;
+                }
+                (*env)->ExceptionClear(env);
+            }
+        }
+    }
+    if (sAes) (*env)->DeleteLocalRef(env, sAes);
+    return NULL;
+}
+
+/* the alias and the AAD belong to this library, not to Kotlin: which=0 is the live key,
+ * which=1 the old StrongBox key that only has to open what it sealed */
+static const char VAULT_ALIAS[] = "blob-kv-v2";
+static const char VAULT_LEGACY[] = "blob-kv-v1";
+static const unsigned char VAULT_AAD[] = { 0x42, 0x4c, 0x4b, 0x56, 0x31 }; /* BLKV1 */
+
+static jstring alias_for(JNIEnv *env, jint which) {
+    return (*env)->NewStringUTF(env, which == 1 ? VAULT_LEGACY : VAULT_ALIAS);
+}
+
+static jbyteArray aad_bytes(JNIEnv *env) {
+    jbyteArray a = (*env)->NewByteArray(env, (jsize) sizeof(VAULT_AAD));
+    if (a) (*env)->SetByteArrayRegion(env, a, 0, (jsize) sizeof(VAULT_AAD), (const jbyte *) VAULT_AAD);
+    return a;
+}
+
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_vaultReady(JNIEnv *env, jclass cls, jint which) {
+    jstring jalias = alias_for(env, which);
+    if (jalias == NULL) return 0;
+    if (which == 0 && cached_valid && cached_key) return 1;
+    jobject k = read_key(env, jalias);
+    if (k == NULL && which == 0) {
+        k = make_key(env, jalias);
+        if (k == NULL) k = read_key(env, jalias);
+    }
+    if (k == NULL) return 0;
+    if (which == 1) { (*env)->DeleteLocalRef(env, k); return 1; }
+    if (cached_key) (*env)->DeleteGlobalRef(env, cached_key);
+    cached_key = (*env)->NewGlobalRef(env, k);
+    (*env)->DeleteLocalRef(env, k);
+    cached_valid = cached_key != NULL;
+    return cached_valid ? 1 : 0;
+}
+
+/** seal: iv(12) || AES-256-GCM ciphertext+tag, with the vault's own AAD */
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_vaultSeal(JNIEnv *env, jclass cls, jbyteArray jplain) {
+    if (jplain == NULL) return NULL;
+    jbyteArray jaad = aad_bytes(env);
+    if (jaad == NULL) return NULL;
+    if (!cached_valid) { if (Java_ir_v2rayng_compose_core_NativeSec_vaultReady(env, cls, 0) == 0) return NULL; }
+    jclass cipherCls = need_class(env, (const char *) CIPH);
+    jclass srCls = need_class(env, SRND_CLS);
+    if (!cipherCls || !srCls) return NULL;
+    jmethodID getInst = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);
+    jstring tr = (*env)->NewStringUTF(env, (const char *) TRANS);
+    jobject c = getInst && tr ? (*env)->CallStaticObjectMethod(env, cipherCls, getInst, tr) : NULL;
+    jbyteArray out = NULL;
+    if (c) {
+        jmethodID initEnc = (*env)->GetMethodID(env, cipherCls, MD_INIT, "(ILjava/security/Key;)V");
+        jmethodID aad = (*env)->GetMethodID(env, cipherCls, MD_AAD, "([B)V");
+        jmethodID fin = (*env)->GetMethodID(env, cipherCls, MD_FIN, SIG_B);
+        jmethodID getIv = (*env)->GetMethodID(env, cipherCls, "getIV", "()[B");
+        if (initEnc && aad && fin && getIv) {
+            (*env)->CallVoidMethod(env, c, initEnc, 1 /* ENCRYPT_MODE */, cached_key);
+            if (!(*env)->ExceptionCheck(env)) {
+                (*env)->CallVoidMethod(env, c, aad, jaad);
+                if (!(*env)->ExceptionCheck(env)) {
+                    jbyteArray ct = (jbyteArray) (*env)->CallObjectMethod(env, c, fin, jplain);
+                    jbyteArray iv = ct ? (jbyteArray) (*env)->CallObjectMethod(env, c, getIv) : NULL;
+                    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); ct = NULL; }
+                    if (ct && iv && (*env)->GetArrayLength(env, iv) == 12) {
+                        jsize cn = (*env)->GetArrayLength(env, ct);
+                        out = (*env)->NewByteArray(env, (jsize) (12 + cn));
+                        if (out) {
+                            (*env)->SetByteArrayRegion(env, out, 0, 12, (jbyte *) (*env)->GetByteArrayElements(env, iv, NULL));
+                            (*env)->SetByteArrayRegion(env, out, 12, cn, (jbyte *) (*env)->GetByteArrayElements(env, ct, NULL));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (*env)->DeleteLocalRef(env, cipherCls);
+    (*env)->DeleteLocalRef(env, srCls);
+    return out;
+}
+
+/** open a blob made by vaultSeal; NULL on a tag failure or a wrong key */
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(JNIEnv *env, jclass cls, jbyteArray jblob, jint which) {
+    if (jblob == NULL) return NULL;
+    jbyteArray jaad = aad_bytes(env);
+    if (jaad == NULL) return NULL;
+    jsize n = (*env)->GetArrayLength(env, jblob);
+    if (n < 29) return NULL;
+    jobject key = NULL;
+    if (which == 1) {
+        jstring legacy = alias_for(env, 1);
+        key = legacy ? read_key(env, legacy) : NULL;
+    } else if (Java_ir_v2rayng_compose_core_NativeSec_vaultReady(env, cls, 0) == 1) {
+        key = cached_key;
+    }
+    if (key == NULL) return NULL;
+    jclass cipherCls = need_class(env, (const char *) CIPH);
+    jclass specCls = need_class(env, (const unsigned char *) "javax/crypto/spec/GCMParameterSpec");
+    if (!cipherCls || !specCls) return NULL;
+    jbyte *raw = (*env)->GetByteArrayElements(env, jblob, NULL);
+    jbyteArray iv = (*env)->NewByteArray(env, 12);
+    jbyteArray ct = (*env)->NewByteArray(env, (jsize) (n - 12));
+    jbyteArray out = NULL;
+    if (iv && ct && raw) {
+        memcpy((*env)->GetByteArrayElements(env, iv, NULL), raw, 12);
+        memcpy((*env)->GetByteArrayElements(env, ct, NULL), raw + 12, (size_t) (n - 12));
+        jmethodID specCtor = (*env)->GetMethodID(env, specCls, "<init>", "(I[B)V");
+        jmethodID getInst = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);
+        jstring tr = (*env)->NewStringUTF(env, (const char *) TRANS);
+        jobject spec = specCtor ? (*env)->NewObject(env, specCls, specCtor, 128, iv) : NULL;
+        jobject c = getInst && tr ? (*env)->CallStaticObjectMethod(env, cipherCls, getInst, tr) : NULL;
+        if (spec && c) {
+            jmethodID init = (*env)->GetMethodID(env, cipherCls, MD_INIT, "(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V");
+            jmethodID aad = (*env)->GetMethodID(env, cipherCls, MD_AAD, "([B)V");
+            jmethodID fin = (*env)->GetMethodID(env, cipherCls, MD_FIN, SIG_B);
+            if (init && aad && fin) {
+                (*env)->CallVoidMethod(env, c, init, 2 /* DECRYPT_MODE */, key, spec);
+                if (!(*env)->ExceptionCheck(env)) {
+                    (*env)->CallVoidMethod(env, c, aad, jaad);
+                    if (!(*env)->ExceptionCheck(env)) {
+                        out = (jbyteArray) (*env)->CallObjectMethod(env, c, fin, ct);
+                        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); out = NULL; }
+                    }
+                }
+            }
+        }
+    }
+    if (raw) (*env)->ReleaseByteArrayElements(env, jblob, raw, JNI_ABORT);
+    (*env)->DeleteLocalRef(env, cipherCls);
+    (*env)->DeleteLocalRef(env, specCls);
+    return out;
+}
+
+/** drop an entry (the recovery path uses it when the keystore holds a key it cannot read) */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_vaultDrop(JNIEnv *env, jclass cls, jint which) {
+    jstring jalias = alias_for(env, which);
+    if (jalias == NULL) return 0;
+    int err = 0;
+    jobject ks = keystore_open(env, &err);
+    if (err || ks == NULL) return 0;
+    jclass ksCls = (*env)->GetObjectClass(env, ks);
+    jmethodID del = (*env)->GetMethodID(env, ksCls, "deleteEntry", "(Ljava/lang/String;)V");
+    int done = 0;
+    if (del) {
+        (*env)->CallVoidMethod(env, ks, del, jalias);
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); else done = 1;
+    }
+    if (which == 0 && cached_key) { (*env)->DeleteGlobalRef(env, cached_key); cached_key = NULL; cached_valid = 0; }
+    (*env)->DeleteLocalRef(env, ksCls);
+    (*env)->DeleteLocalRef(env, ks);
+    return done;
+}
+
 /* AES-256-GCM is NOT hand-written here. See the note above: the platform primitive is driven from
  * C so that no Java/Kotlin source holds the crypto, without betting every handset's sync on an
  * AES table nobody was able to compile and test. */

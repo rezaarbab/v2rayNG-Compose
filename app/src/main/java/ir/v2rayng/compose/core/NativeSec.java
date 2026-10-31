@@ -94,6 +94,41 @@ public final class NativeSec {
         }
     }
 
+    private static native int vaultReady(int which);
+
+    private static native byte[] vaultSeal(byte[] plain);
+
+    private static native byte[] vaultOpen(byte[] blob, int which);
+
+    private static native int vaultDrop(int which);
+
+    /** the keystore vault: alias, AAD and cipher all live in blobsec.c; which=1 is the old key */
+    public static boolean vaultOk(int which) {
+        return READY && vaultReady(which) == 1;
+    }
+
+    public static byte[] seal(byte[] plain) {
+        if (!READY || plain == null) return null;
+        try {
+            return vaultSeal(plain);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    public static byte[] unseal(byte[] blob, int which) {
+        if (!READY || blob == null) return null;
+        try {
+            return vaultOpen(blob, which);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    public static boolean dropKey(int which) {
+        return READY && vaultDrop(which) == 1;
+    }
+
     public static String note() {
         return READY ? "sec ok" : "sec library failed its self test";
     }
