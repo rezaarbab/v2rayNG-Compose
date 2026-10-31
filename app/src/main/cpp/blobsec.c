@@ -3090,3 +3090,387 @@ Java_ir_v2rayng_compose_core_NativeSec_linkForHost(JNIEnv *env, jclass cls, jstr
     (*env)->ReleaseStringUTFChars(env, jaddr, a);
     return out;
 }
+
+/* ---------------- the log scrubber, in C ----------------
+ * Stage 1 of moving LogSanitize here: the nine rules run over UTF-8 bytes in the same order the
+ * Kotlin ran them over a String. Every pattern is ASCII, so byte scanning is equivalent - the only
+ * place a String mattered was that non-ASCII bytes are "non-word" for \b, which is exactly how the
+ * bytes behave here (>= 0x80).
+ * Not wired yet: step 2 is the oracle (a JS transcription of the Kotlin regexes against a JS
+ * transcription of this file, over thousands of generated lines) and only then clean() switches.
+ */
+
+static int scr_word(unsigned char c) {
+    return c == '_' || (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+static int scr_hex(unsigned char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+static int scr_digit(unsigned char c) { return c >= '0' && c <= '9'; }
+static int scr_space(unsigned char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; }
+static int scr_alnum_l(unsigned char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+static unsigned char scr_lower(unsigned char c) { return (c >= 'A' && c <= 'Z') ? (unsigned char) (c + 32) : c; }
+
+/** case-insensitive compare of n bytes */
+static int scr_ieq(const unsigned char *s, const char *lit, int n) {
+    for (int i = 0; i < n; i++) if (scr_lower(s[i]) != (unsigned char) lit[i]) return 0;
+    return 1;
+}
+
+/** append src[from..to) to out */
+static void scr_put(sbuf *o, const unsigned char *src, int from, int to) {
+    if (to <= from) return;
+    if (!sb_room(o, to - from)) return;
+    memcpy(o->b + o->n, src + from, (size_t) (to - from));
+    o->n += to - from;
+    o->b[o->n] = 0;
+}
+
+static const char *SCR_SCHEMES[] = { "vless", "vmess", "trojan", "ssr", "ss", "hysteria2", "hysteria", "tuic", "vaxins", "socks" };
+static const char *SCR_JSON_KEYS[] = { "address", "host", "server_name", "sni", "peer", "ip", "uuid", "password", "pass", "pbk", "sid", "user", "user_ids", "email", "remark" };
+static const char *SCR_KV_KEYS[] = { "address", "host", "server_name", "sni", "peer", "uuid", "password", "pass", "pbk", "sid", "ip" };
+static const char *SCR_TLDS[] = { "com", "net", "org", "io", "xyz", "ru", "ir", "de", "uk", "us", "ca", "au", "me", "app", "dev", "cloud", "site", "online", "live", "top", "info", "biz", "cn", "tk", "ga", "cf", "gq", "ml", "shop", "api", "proxy", "cdn", "work", "pw", "cc" };
+
+/** LINK: scheme://non-space  ->  " [link hidden] " */
+static void scr_links(sbuf *o, const unsigned char *s, int n) {
+    int i = 0, last = 0;
+    while (i < n) {
+        if ((i == 0 || !scr_word(s[i - 1]))) {
+            int hit = 0;
+            for (int k = 0; k < (int) (sizeof(SCR_SCHEMES) / sizeof(SCR_SCHEMES[0])); k++) {
+                int len = (int) strlen(SCR_SCHEMES[k]);
+                if (i + len + 3 <= n && scr_ieq(s + i, SCR_SCHEMES[k], len) &&
+                    s[i + len] == ':' && s[i + len + 1] == '/' && s[i + len + 2] == '/') {
+                    int j = i + len + 3;
+                    while (j < n && !scr_space(s[j])) j++;
+                    if (j > i + len + 3) {
+                        scr_put(o, s, last, i);
+                        sb_add(o, " [link hidden] ");
+                        i = j;
+                        last = j;
+                        hit = 1;
+                        break;
+                    }
+                }
+            }
+            if (hit) continue;
+        }
+        i++;
+    }
+    scr_put(o, s, last, n);
+}
+
+/** UUID: 8-4-4-4-12 hex at a word boundary -> "[id]" */
+static void scr_uuid(sbuf *o, const unsigned char *s, int n) {
+    int i = 0, last = 0;
+    while (i + 36 <= n) {
+        if ((i == 0 || !scr_word(s[i - 1])) && (i + 36 == n || !scr_word(s[i + 36]))) {
+            int ok = 1;
+            for (int k = 0; k < 36 && ok; k++) {
+                if (k == 8 || k == 13 || k == 18 || k == 23) ok = s[i + k] == '-';
+                else ok = scr_hex(s[i + k]);
+            }
+            if (ok) {
+                scr_put(o, s, last, i);
+                sb_add(o, "[id]");
+                i += 36;
+                last = i;
+                continue;
+            }
+        }
+        i++;
+    }
+    scr_put(o, s, last, n);
+}
+
+/** IPv4 with an optional :port -> "[ip]" */
+static void scr_ipv4(sbuf *o, const unsigned char *s, int n) {
+    int i = 0, last = 0;
+    while (i < n) {
+        if ((i == 0 || !scr_word(s[i - 1])) && scr_digit(s[i])) {
+            int p = i, ok = 1;
+            for (int part = 0; part < 4 && ok; part++) {
+                int d = 0;
+                while (p < n && scr_digit(s[p]) && d < 4) { p++; d++; }
+                if (d < 1 || d > 3) { ok = 0; break; }
+                if (part < 3) {
+                    if (p < n && s[p] == '.') p++;
+                    else { ok = 0; break; }
+                }
+            }
+            if (ok) {
+                int end = p;
+                if (end < n && s[end] == ':') {
+                    int q = end + 1, d = 0;
+                    while (q < n && scr_digit(s[q]) && d < 6) { q++; d++; }
+                    if (d >= 1 && d <= 5) end = q;
+                }
+                if (end == n || !scr_word(s[end])) {
+                    scr_put(o, s, last, i);
+                    sb_add(o, "[ip]");
+                    i = end;
+                    last = end;
+                    continue;
+                }
+            }
+        }
+        i++;
+    }
+    scr_put(o, s, last, n);
+}
+
+/** the two IPv6 shapes the Kotlin matched -> "[ip]" */
+static void scr_ipv6(sbuf *o, const unsigned char *s, int n) {
+    int i = 0, last = 0;
+    while (i < n) {
+        if ((i == 0 || !scr_word(s[i - 1])) && scr_hex(s[i])) {
+            /* long form: (1..4 hex ':' ){4,} 1..4 hex */
+            int p = i, groups = 0;
+            while (p < n && scr_hex(s[p]) && groups < 1) { p++; }   /* first group, at least 1 */
+            int first = p - i;
+            int q = p, g = 0;
+            while (q < n && s[q] == ':') {
+                int r = q + 1, d = 0;
+                while (r < n && scr_hex(s[r]) && d < 4) { r++; d++; }
+                if (d < 1) break;
+                g++;
+                q = r;
+            }
+            if (first >= 1 && first <= 4 && g >= 4 && (q == n || !scr_word(s[q]))) {
+                scr_put(o, s, last, i);
+                sb_add(o, "[ip]");
+                i = q;
+                last = q;
+                continue;
+            }
+            /* short form: hex:...::... with hex/colon/dot tail */
+            int r2 = i, seenColon = 0, seenDouble = 0;
+            while (r2 < n && (scr_hex(s[r2]) || s[r2] == ':' || s[r2] == '.')) {
+                if (s[r2] == ':') {
+                    if (seenColon && s[r2 - 1] == ':') seenDouble = 1;
+                    seenColon = 1;
+                }
+                r2++;
+            }
+            if (first >= 1 && first <= 4 && seenDouble && (r2 == n || !scr_word(s[r2]))) {
+                scr_put(o, s, last, i);
+                sb_add(o, "[ip]");
+                i = r2;
+                last = r2;
+                continue;
+            }
+        }
+        i++;
+    }
+    scr_put(o, s, last, n);
+}
+
+static int scr_tld_ok(const unsigned char *s, int from, int to) {
+    int len = to - from;
+    for (int k = 0; k < (int) (sizeof(SCR_TLDS) / sizeof(SCR_TLDS[0])); k++) {
+        if ((int) strlen(SCR_TLDS[k]) == len && scr_ieq(s + from, SCR_TLDS[k], len)) return 1;
+    }
+    return 0;
+}
+
+/** domain.tld (:port) -> "[host]" */
+static void scr_domains(sbuf *o, const unsigned char *s, int n) {
+    int i = 0, last = 0;
+    while (i < n) {
+        if ((i == 0 || !scr_word(s[i - 1])) && scr_alnum_l(s[i])) {
+            int p = i, dot = -1, labels = 0;
+            while (p < n) {
+                unsigned char c = s[p];
+                if (c == '-' || scr_alnum_l(c)) { p++; continue; }
+                if (c == '.') {
+                    if (p == i || s[p - 1] == '.') break;
+                    dot = p;
+                    labels++;
+                    p++;
+                    if (labels > 20) break;
+                    continue;
+                }
+                break;
+            }
+            if (dot > 0 && labels >= 1) {
+                int tldEnd = p;
+                if (tldEnd > dot + 1 && scr_tld_ok(s, dot + 1, tldEnd)) {
+                    int end = tldEnd;
+                    if (end < n && s[end] == ':') {
+                        int q = end + 1, d = 0;
+                        while (q < n && scr_digit(s[q]) && d < 6) { q++; d++; }
+                        if (d >= 1 && d <= 5) end = q;
+                    }
+                    if (end == n || !scr_word(s[end])) {
+                        scr_put(o, s, last, i);
+                        sb_add(o, "[host]");
+                        i = end;
+                        last = end;
+                        continue;
+                    }
+                }
+            }
+        }
+        i++;
+    }
+    scr_put(o, s, last, n);
+}
+
+/** "key" : "value"  ->  "key" : "[hidden]" */
+static void scr_json_secret(sbuf *o, const unsigned char *s, int n) {
+    int i = 0, last = 0;
+    while (i < n) {
+        if (s[i] == '"') {
+            int k0 = i + 1, k1 = k0;
+            while (k1 < n && s[k1] != '"' && k1 - k0 < 24) k1++;
+            if (k1 < n && s[k1] == '"') {
+                int matched = 0;
+                for (int k = 0; k < (int) (sizeof(SCR_JSON_KEYS) / sizeof(SCR_JSON_KEYS[0])) && !matched; k++) {
+                    int len = (int) strlen(SCR_JSON_KEYS[k]);
+                    if (k1 - k0 == len && scr_ieq(s + k0, SCR_JSON_KEYS[k], len)) matched = 1;
+                }
+                if (matched) {
+                    int p = k1 + 1;
+                    while (p < n && scr_space(s[p])) p++;
+                    if (p < n && s[p] == ':') {
+                        p++;
+                        int spacesStart = p;
+                        while (p < n && scr_space(s[p])) p++;
+                        if (p < n && s[p] == '"') {
+                            int q = p + 1;
+                            while (q < n && s[q] != '"') {
+                                if (s[q] == '\\' && q + 1 < n) q++;
+                                q++;
+                            }
+                            if (q < n) {
+                                scr_put(o, s, last, spacesStart);
+                                sb_add(o, "\"[hidden]\"");
+                                i = q + 1;
+                                last = i;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i++;
+    }
+    scr_put(o, s, last, n);
+}
+
+/** "port" : 1234 -> "port" : 0 */
+static void scr_json_port(sbuf *o, const unsigned char *s, int n) {
+    int i = 0, last = 0;
+    while (i < n) {
+        if (s[i] == '"') {
+            int k0 = i + 1, k1 = k0;
+            while (k1 < n && s[k1] != '"' && k1 - k0 < 8) k1++;
+            if (k1 - k0 == 4 && scr_ieq(s + k0, "port", 4)) {
+                int p = k1 + 1;
+                while (p < n && scr_space(s[p])) p++;
+                if (p < n && s[p] == ':') {
+                    p++;
+                    while (p < n && scr_space(s[p])) p++;
+                    int d0 = p;
+                    while (p < n && scr_digit(s[p])) p++;
+                    if (p > d0) {
+                        scr_put(o, s, last, p);
+                        sb_add(o, "0");
+                        i = p;
+                        last = p;
+                        continue;
+                    }
+                }
+            }
+        }
+        i++;
+    }
+    scr_put(o, s, last, n);
+}
+
+/** key=value -> key=[hidden] for the kv keys */
+static void scr_kv_secret(sbuf *o, const unsigned char *s, int n) {
+    int i = 0, last = 0;
+    while (i < n) {
+        if (i == 0 || !scr_word(s[i - 1])) {
+            int done = 0;
+            for (int k = 0; k < (int) (sizeof(SCR_KV_KEYS) / sizeof(SCR_KV_KEYS[0])) && !done; k++) {
+                int len = (int) strlen(SCR_KV_KEYS[k]);
+                if (i + len < n && scr_ieq(s + i, SCR_KV_KEYS[k], len) && s[i + len] == '=') {
+                    int p = i + len + 1;
+                    int v0 = p;
+                    while (p < n && !scr_space(s[p]) && s[p] != ',' && s[p] != ';') p++;
+                    if (p > v0) {
+                        scr_put(o, s, last, v0);
+                        sb_add(o, "[hidden]");
+                        i = p;
+                        last = p;
+                        done = 1;
+                    }
+                }
+            }
+            if (done) continue;
+        }
+        i++;
+    }
+    scr_put(o, s, last, n);
+}
+
+typedef void (*scr_fn)(sbuf *o, const unsigned char *s, int n);
+
+static const scr_fn SCR_PASSES[] = {
+    scr_links, scr_uuid, scr_json_secret, scr_json_port, scr_kv_secret,
+    scr_ipv4, scr_ipv6, scr_domains,
+};
+
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_scrubUtf8(JNIEnv *env, jclass cls, jbyteArray jin) {
+    if (jin == NULL) return NULL;
+    jsize n = (*env)->GetArrayLength(env, jin);
+    if (n <= 0) return (*env)->NewByteArray(env, 0);
+    unsigned char *in = (unsigned char *) malloc((size_t) n + 1);
+    if (in == NULL) return NULL;
+    (*env)->GetByteArrayRegion(env, jin, 0, n, (jbyte *) in);
+    in[n] = 0;
+
+    /* every replacement is short except the link marker, so 4x + 64 cannot truncate a log line;
+     * both buffers are allocated once and the passes alternate between them */
+    int cap = (int) (n * 4 + 64);
+    sbuf bufs[2];
+    bufs[0].b = (char *) malloc((size_t) cap);
+    bufs[1].b = (char *) malloc((size_t) cap);
+    bufs[0].n = bufs[1].n = 0;
+    bufs[0].cap = bufs[1].cap = cap;
+    if (bufs[0].b == NULL || bufs[1].b == NULL) {
+        free(bufs[0].b); free(bufs[1].b); free(in);
+        return NULL;
+    }
+    bufs[0].b[0] = 0;
+    bufs[1].b[0] = 0;
+
+    const unsigned char *cur = in;
+    int curlen = n;
+    int dstIdx = 0;
+    int ok = 1;
+    for (int k = 0; k < (int) (sizeof(SCR_PASSES) / sizeof(SCR_PASSES[0])); k++) {
+        sbuf *dst = &bufs[dstIdx];
+        dst->n = 0;
+        dst->b[0] = 0;
+        SCR_PASSES[k](dst, cur, curlen);
+        if (dst->n >= dst->cap) { ok = 0; break; }   /* sb_room refused: never ship a truncated line */
+        cur = (const unsigned char *) dst->b;
+        curlen = dst->n;
+        dstIdx = 1 - dstIdx;
+    }
+
+    jbyteArray out = NULL;
+    if (ok) {
+        out = (*env)->NewByteArray(env, curlen);
+        if (out && curlen > 0) (*env)->SetByteArrayRegion(env, out, 0, curlen, (const jbyte *) cur);
+    }
+    free(bufs[0].b);
+    free(bufs[1].b);
+    free(in);
+    return out;
+}

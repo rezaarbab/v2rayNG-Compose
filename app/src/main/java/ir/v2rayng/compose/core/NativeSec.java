@@ -266,6 +266,18 @@ public final class NativeSec {
         }
     }
 
+    private static native byte[] scrubUtf8(byte[] in);
+
+    /** the log scrubber, in C: no host, ip, uuid, link or credential leaves a line */
+    public static byte[] scrub(byte[] in) {
+        if (!READY || in == null) return null;
+        try {
+            return scrubUtf8(in);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private static native String linkForHost(String addr, int port);
 
     /** the link for one host+port, fetched at dial time; null when the store has no such server */
