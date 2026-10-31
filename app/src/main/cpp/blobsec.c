@@ -389,8 +389,12 @@ static void set_step(const char *where) {
 }
 
 /** record a refusal that involves no Java exception - a class that FindClass would not name, a
- *  method ID that was not there, a handle the keystore did not give back */
+ *  method ID that was not there, a handle the keystore did not give back. The FIRST refusal since
+ *  the last read is kept: the ones after it are usually consequences of it, and overwriting with
+ *  the consequence is what made tonight's log say "object not initialized for signing" instead of
+ *  the thing initSign actually answered. */
 static void note_null(const char *where, const char *what) {
+    if (g_last[0] != 0) return;
     snprintf(g_last, sizeof(g_last), "%s: %s", where, what);
 }
 
@@ -450,14 +454,17 @@ static int step_failed(JNIEnv *env, const char *where) {
     char cls[48] = "", msg[128] = "";
     read_exc_class(env, ex, cls, sizeof(cls));
     read_exc_msg(env, ex, msg, sizeof(msg));
-    if (msg[0] != 0) snprintf(g_last, sizeof(g_last), "%s | %s | %s", where, cls, msg);
-    else snprintf(g_last, sizeof(g_last), "%s | %s", where, cls);
+    /* same rule as note_null: keep the first failure, not the last one */
+    if (g_last[0] == 0) {
+        if (msg[0] != 0) snprintf(g_last, sizeof(g_last), "%s | %s | %s", where, cls, msg);
+        else snprintf(g_last, sizeof(g_last), "%s | %s", where, cls);
+    }
     (*env)->DeleteLocalRef(env, ex);
     return 1;
 }
 
-static void note_det(const char *fmt, int a, int b, const char *c, const char *d) {
-    snprintf(g_det, sizeof(g_det), fmt, a, b, c, d);
+static void note_det(const char *fmt, int a, int b, int c, const char *d, const char *e) {
+    snprintf(g_det, sizeof(g_det), fmt, a, b, c, d, e);
 }
 
 JNIEXPORT jstring JNICALL
@@ -538,11 +545,12 @@ Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArr
             if (spec && kobj && c) {
                 (*env)->CallVoidMethod(env, c, midInit, 2 /* DECRYPT_MODE */, kobj, spec);
                 if (!step_failed(env, "gcm:cipher.init")) {
+                    int failed = 0;
                     if (jaad != NULL) {
                         (*env)->CallVoidMethod(env, c, midAad, jaad);
-                        if (step_failed(env, "gcm:cipher.updateAAD")) out = NULL;
+                        failed = step_failed(env, "gcm:cipher.updateAAD");
                     }
-                    if (out == NULL) {
+                    if (!failed && out == NULL) {
                         out = (jbyteArray) (*env)->CallObjectMethod(env, c, midFin, ct);
                         /* AEADBadTagException here means a real key/carrier mismatch; anything else
                          * means this JNI path is wrong, and the two need different fixes */
@@ -653,7 +661,7 @@ static jobject read_key(JNIEnv *env, jstring jalias) {
 /** the spec reads itself back: if the keystore rejects it, what matters is the values the object
  *  holds, not the values this file intended to put in - keySize 0 here means a setter never ran,
  *  keySize 256 with the same rejection means the parameters are argued about somewhere else */
-static void spec_detail(JNIEnv *env, jobject spec) {
+static void spec_detail(JNIEnv *env, jobject spec, int variant) {
     if (spec == NULL) return;
     jclass sc = (*env)->GetObjectClass(env, spec);
     if (!sc) return;
@@ -691,76 +699,120 @@ static void spec_detail(JNIEnv *env, jobject spec) {
         }
     }
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    note_det("spec sz=%d pu=%d bm=%s ep=%s", sz, pu, bm, ep);
+    note_det("spec v%d sz=%d pu=%d bm=%s ep=%s", variant, sz, pu, bm, ep);
     (*env)->DeleteLocalRef(env, sc);
 }
 
-/** creates the key under the alias, then reads it back */
-static jobject make_key(JNIEnv *env, jstring jalias) {
-    jclass kp = need_class(env, KP_CLS);
+/** one attempt at the AES key: a size, and whether the padding is named explicitly. The variant
+ *  number rides along in every recorded step because the ladder below tries more than one, and
+ *  "which shape did this device refuse" is the only thing that tells a bad parameter apart from a
+ *  bad call. */
+static jobject aes_try(JNIEnv *env, jstring jalias, int keySize, int namePadding, int variant) {
+    char where[40];
     jclass bld = need_class(env, KG_CLS);
     jclass kgc = need_class(env, KEYGEN_CLS);
-    if (!kp || !bld || !kgc) { set_step("mk:find-class"); return NULL; }
+    if (!bld || !kgc) return NULL;
     jstring sAes = (*env)->NewStringUTF(env, KAES);
     jmethodID ctor = (*env)->GetMethodID(env, bld, "<init>", "(Ljava/lang/String;I)V");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (!ctor) note_null("mk:ctor-method", namePadding ? "padded" : "no-padding");
     jobject b = ctor ? (*env)->NewObject(env, bld, ctor, jalias, PURPOSE_ENC_DEC) : NULL;
-    if (b) {
-        jmethodID mSize = (*env)->GetMethodID(env, bld, "setKeySize", "(I)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        jmethodID mMode = (*env)->GetMethodID(env, bld, "setBlockModes", "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        jmethodID mPad = (*env)->GetMethodID(env, bld, "setEncryptionPaddings", "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        jmethodID mRnd = (*env)->GetMethodID(env, bld, "setRandomizedEncryptionRequired", "(Z)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        jmethodID mBuild = (*env)->GetMethodID(env, bld, "build", "()Landroid/security/keystore/KeyGenParameterSpec;");  //EXC-CLEARED
-        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        jstring gcm = (*env)->NewStringUTF(env, KGCM), none = (*env)->NewStringUTF(env, KNONE);
-        jclass strCls = need_class(env, "java/lang/String");
-        jobjectArray modeArr = strCls ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
-        jobjectArray padArr = strCls ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
-        if (modeArr && gcm) (*env)->SetObjectArrayElement(env, modeArr, 0, gcm);
-        if (padArr && none) (*env)->SetObjectArrayElement(env, padArr, 0, none);
-        jobject spec = NULL;
-        if (mSize) b = (*env)->CallObjectMethod(env, b, mSize, 256);
-        if (b && mMode && modeArr) b = (*env)->CallObjectMethod(env, b, mMode, modeArr);
-        if (b && mPad && padArr) b = (*env)->CallObjectMethod(env, b, mPad, padArr);
-        if (b && mRnd) b = (*env)->CallObjectMethod(env, b, mRnd, JNI_TRUE);
-        /* see build_spec: a NULL builder handed to the next call crashes instead of failing */
-        if (step_failed(env, "mk:builder")) b = NULL;
-        if (!b) set_step("mk:builder-lost");
-        if (!mBuild) set_step("mk:build-method");
-        if (b && mBuild) spec = (*env)->CallObjectMethod(env, b, mBuild);
-        if (step_failed(env, "mk:spec.build")) spec = NULL;
-        if (spec) spec_detail(env, spec);
-        if (spec) {
-            jmethodID kgi = (*env)->GetStaticMethodID(env, kgc, "getInstance", "(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;");  //EXC-CLEARED
-            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-            jstring prov = (*env)->NewStringUTF(env, PROVIDER);
-            jobject kg = kgi && sAes && prov ? (*env)->CallStaticObjectMethod(env, kgc, kgi, sAes, prov) : NULL;
-            if (step_failed(env, "mk:keygen.getInstance")) kg = NULL;
-            if (!kgi) set_step("mk:keygen-method");
-            if (kg) {
-                jmethodID kinit = (*env)->GetMethodID(env, kgc, "init", "(Ljava/security/spec/AlgorithmParameterSpec;)V");  //EXC-CLEARED
-                if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-                jmethodID kgen = (*env)->GetMethodID(env, kgc, "generateKey", "()Ljavax/crypto/SecretKey;");  //EXC-CLEARED
-                if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-                if (!kinit) set_step("mk:keygen-init-method");
-                if (kinit) (*env)->CallVoidMethod(env, kg, kinit, spec);
-                if (!step_failed(env, "mk:keygen.init") && kgen) {
-                    jobject k = (*env)->CallObjectMethod(env, kg, kgen);
-                    if (step_failed(env, "mk:generateKey")) k = NULL;
-                    if (sAes) (*env)->DeleteLocalRef(env, sAes);
-                    if (gcm) (*env)->DeleteLocalRef(env, gcm);
-                    if (none) (*env)->DeleteLocalRef(env, none);
-                    return k;
-                }
-                (*env)->ExceptionClear(env);
-            }
+    if (step_failed(env, "mk:ctor")) return NULL;
+    if (b == NULL) return NULL;
+    jmethodID mSize = (*env)->GetMethodID(env, bld, "setKeySize", "(I)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID mMode = (*env)->GetMethodID(env, bld, "setBlockModes", "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID mPad = (*env)->GetMethodID(env, bld, "setEncryptionPaddings", "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID mRnd = (*env)->GetMethodID(env, bld, "setRandomizedEncryptionRequired", "(Z)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID mBuild = (*env)->GetMethodID(env, bld, "build", "()Landroid/security/keystore/KeyGenParameterSpec;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (!mSize || !mMode || !mRnd || !mBuild || (namePadding && !mPad)) {
+        snprintf(where, sizeof(where), "mk:method-ids v%d", variant);
+        note_null(where, "setter not found");
+        return NULL;
+    }
+    jstring gcm = (*env)->NewStringUTF(env, KGCM);
+    jstring none = namePadding ? (*env)->NewStringUTF(env, KNONE) : NULL;
+    jclass strCls = need_class(env, "java/lang/String");
+    jobjectArray modeArr = strCls ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
+    jobjectArray padArr = (namePadding && strCls) ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
+    if (modeArr && gcm) (*env)->SetObjectArrayElement(env, modeArr, 0, gcm);
+    if (padArr && none) (*env)->SetObjectArrayElement(env, padArr, 0, none);
+    /* a builder call that throws answers NULL, and handing that to the next call is a native crash
+     * rather than a failure - so one flag carries the refusal through the chain */
+    int failed = 0;
+    b = (*env)->CallObjectMethod(env, b, mSize, keySize);
+    failed = step_failed(env, "mk:setKeySize");
+    if (!failed) b = (*env)->CallObjectMethod(env, b, mMode, modeArr);
+    if (!failed) failed = step_failed(env, "mk:setBlockModes");
+    if (!failed && namePadding) b = (*env)->CallObjectMethod(env, b, mPad, padArr);
+    if (!failed) failed = step_failed(env, "mk:setPaddings");
+    if (!failed) b = (*env)->CallObjectMethod(env, b, mRnd, JNI_TRUE);
+    if (!failed) failed = step_failed(env, "mk:setRandomized");
+    if (failed || b == NULL) {
+        snprintf(where, sizeof(where), "mk:builder v%d", variant);
+        note_null(where, "builder refused a setter");
+        return NULL;
+    }
+    jobject spec = (*env)->CallObjectMethod(env, b, mBuild);
+    if (step_failed(env, "mk:spec.build")) return NULL;
+    if (spec == NULL) return NULL;
+    spec_detail(env, spec, variant);
+    jmethodID kgi = (*env)->GetStaticMethodID(env, kgc, "getInstance", "(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jstring prov = (*env)->NewStringUTF(env, PROVIDER);
+    jobject kg = (kgi && sAes && prov) ? (*env)->CallStaticObjectMethod(env, kgc, kgi, sAes, prov) : NULL;
+    if (step_failed(env, "mk:keygen.getInstance")) kg = NULL;
+    if (kg == NULL) {
+        snprintf(where, sizeof(where), "mk:keygen.getInstance v%d", variant);
+        note_null(where, kgi ? "provider refused" : "no getInstance");
+        return NULL;
+    }
+    jmethodID kinit = (*env)->GetMethodID(env, kgc, "init", "(Ljava/security/spec/AlgorithmParameterSpec;)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID kgen = (*env)->GetMethodID(env, kgc, "generateKey", "()Ljavax/crypto/SecretKey;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (!kinit || !kgen) {
+        snprintf(where, sizeof(where), "mk:keygen-methods v%d", variant);
+        note_null(where, kinit ? "no generateKey" : "no init");
+        return NULL;
+    }
+    (*env)->CallVoidMethod(env, kg, kinit, spec);
+    if (step_failed(env, "mk:keygen.init")) {
+        snprintf(where, sizeof(where), "mk:keygen.init v%d sz%d pad%d", variant, keySize, namePadding);
+        set_step(where);
+        return NULL;
+    }
+    jobject k = (*env)->CallObjectMethod(env, kg, kgen);
+    if (step_failed(env, "mk:generateKey")) {
+        snprintf(where, sizeof(where), "mk:generateKey v%d", variant);
+        set_step(where);
+        return NULL;
+    }
+    return k;
+}
+
+/** the ladder. This framework (Android 16 on a MediaTek Xiaomi) answers the parameters this app has
+ *  asked for since the beginning with "Unsupported encryption padding scheme: None", so a new
+ *  install could not create a key at all - and a device with no key cannot save anything. The
+ *  preferred shape goes first; any key that comes out of this seals the same iv||ct||tag bytes, so
+ *  nothing downstream changes, and the step name records which shape this handset accepted. */
+static jobject make_key(JNIEnv *env, jstring jalias) {
+    static const int SZ[4] = { 256, 256, 128, 128 };
+    static const int PAD[4] = { 1, 0, 1, 0 };
+    char note_buf[40];
+    for (int i = 0; i < 4; i++) {
+        jobject k = aes_try(env, jalias, SZ[i], PAD[i], i);
+        if (k != NULL) {
+            snprintf(note_buf, sizeof(note_buf), "mk:key-made v%d sz%d pad%d", i, SZ[i], PAD[i]);
+            set_step(note_buf);
+            return k;
         }
     }
-    if (sAes) (*env)->DeleteLocalRef(env, sAes);
+    set_step("mk:no-key-any-variant");
     return NULL;
 }
 
@@ -828,7 +880,7 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultSeal(JNIEnv *env, jclass cls, jbyteA
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         jmethodID getIv = (*env)->GetMethodID(env, cipherCls, "getIV", "()[B");  //EXC-CLEARED
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        if (!initEnc || !aad || !fin || !getIv) set_step("seal:method-ids");
+        if (!initEnc || !aad || !fin || !getIv) note_null("seal:method-ids", initEnc ? (aad ? (fin ? "no getIV" : "no doFinal") : "no updateAAD") : "no init");
         if (initEnc && aad && fin && getIv) {
             (*env)->CallVoidMethod(env, c, initEnc, 1 /* ENCRYPT_MODE */, cached_key);
             if (!step_failed(env, "seal:cipher.init")) {
@@ -913,7 +965,7 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(JNIEnv *env, jclass cls, jbyteA
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             jmethodID fin = (*env)->GetMethodID(env, cipherCls, MD_FIN, SIG_B);  //EXC-CLEARED
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-            if (!init || !aad || !fin) set_step("open:method-ids");
+            if (!init || !aad || !fin) note_null("open:method-ids", init ? (aad ? "no doFinal" : "no updateAAD") : "no init");
             if (init && aad && fin) {
                 (*env)->CallVoidMethod(env, c, init, 2 /* DECRYPT_MODE */, key, spec);
                 if (!step_failed(env, "open:cipher.init")) {
@@ -1228,15 +1280,23 @@ Java_ir_v2rayng_compose_core_NativeSec_idSign(JNIEnv *env, jclass cls, jbyteArra
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         jmethodID sign = (*env)->GetMethodID(env, sigCls, "sign", "()[B");  //EXC-CLEARED
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        if (!initSign || !update || !sign) set_step("id:sign-method-ids");
-        if (initSign) (*env)->CallVoidMethod(env, s, initSign, key);
-        if (!step_failed(env, "id:sign.initSign") && update) {
+        if (!initSign || !update || !sign) {
+            note_null("id:sign-method-ids", initSign ? (update ? "no sign" : "no update") : "no initSign");
+        }
+        /* step_failed clears the exception, so each stage cannot ask "is anything pending" to learn
+         * whether the PREVIOUS one refused - the answer is gone by then. One flag carries it. */
+        int failed = 0;
+        if (!failed && initSign) (*env)->CallVoidMethod(env, s, initSign, key);
+        failed = step_failed(env, "id:sign.initSign");
+        if (!failed && update) {
             jsize n = (*env)->GetArrayLength(env, jmsg);
             (*env)->CallVoidMethod(env, s, update, jmsg, 0, n);
+            failed = step_failed(env, "id:sign.update");
         }
-        if (!step_failed(env, "id:sign.update") && sign) {
+        if (!failed && sign) {
             out = (jbyteArray) (*env)->CallObjectMethod(env, s, sign);
-            if (step_failed(env, "id:sign.sign")) out = NULL;
+            failed = step_failed(env, "id:sign.sign");
+            if (failed) out = NULL;
         }
         if (out) set_step("id:sign-ok");
     }

@@ -200,8 +200,8 @@ object BlobSecure {
         // the seal-then-open round trip inside the library: 0 = the vault path works end to end
         tag("round", (try { NativeSec.vaultSelfCheck() } catch (t: Throwable) { -9 }).toString() + "/" + st())
         tag("kv", (try { NativeSec.vaultOk(0) } catch (t: Throwable) { false }).toString() + "/" + st())
-        tag("has", (try { NativeSec.hasKey(0) } catch (t: Throwable) { false }).toString() +
-            (try { NativeSec.hasKey(1) } catch (t: Throwable) { false }).toString() + "/" + st())
+        tag("has", (if (try { NativeSec.hasKey(0) } catch (t: Throwable) { false }) "1" else "0") +
+            "-" + (if (try { NativeSec.hasKey(1) } catch (t: Throwable) { false }) "1" else "0") + "/" + st())
         val sp = try { NativeSec.spki() } catch (t: Throwable) { null }
         tag("spki", (sp?.size ?: -1).toString() + "/" + st())
         // a fixed non-secret message: the signature that follows is opened again below with the
@@ -214,8 +214,11 @@ object BlobSecure {
             try { NativeSec.verifySpki(sp, probe, sg) } catch (t: Throwable) { -9 }
         } else -8
         tag("ver", vv.toString() + "/" + st())
+        // labelled, not "1.1.0.1" - the log scrubber reads a dotted quadruple as an address and
+        // hides it, which is how the chain counts disappeared from one paste
         val ch = try { NativeSec.chain() } catch (t: Throwable) { null }
-        tag("chain", if (ch == null || ch.size < 6) "null" else ch[0] + "." + ch[1] + "." + ch[3] + "." + ch[5])
+        tag("chain", (if (ch == null || ch.size < 6) "null"
+        else "n=" + ch[0] + " att=" + ch[1] + " self=" + ch[3] + " ext=" + ch[5]) + "/" + st())
         tag("stage", BlobVault.lastStage.replace(' ', '_').take(44) + "/" + st())
         tag("verify", (SecurePrefs.verifyNote ?: "-").replace(' ', '_').take(40))
         tag("rng", (try { NativeSec.random(8)?.size ?: -1 } catch (t: Throwable) { -2 }).toString())
