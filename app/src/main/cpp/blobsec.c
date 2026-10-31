@@ -3245,29 +3245,34 @@ static void scr_ipv6(sbuf *o, const unsigned char *s, int n) {
                 last = q;
                 continue;
             }
-            /* short form: hex{1,4} ':' [hex:]* "::" [hex:.]* - the match must end on a hex
-             * digit, because the trailing  needs a word char before it (that is why the regex
-             * leaves a trailing colon in place) */
-            int r2 = (p < n && s[p] == ':') ? p + 1 : p;
-            int runStart = r2, seenDouble = 0, doubleEnd = 0;
-            while (r2 < n && (scr_hex(s[r2]) || s[r2] == ':' || s[r2] == '.')) {
-                if (s[r2] == ':' && r2 > runStart && s[r2 - 1] == ':') { seenDouble = 1; doubleEnd = r2 + 1; }
-                r2++;
+            /* short form, chosen the way the engine backtracks: the middle is [hex:]* up to the
+             * last double colon, the tail is [hex:.]* after it, and the end is the longest tail
+             * position where the trailing boundary holds (a word char on exactly one side) */
+            int matchEnd = -1;
+            if (p < n && s[p] == ':') {
+                int q0 = p + 1;
+                int mEnd = q0;
+                while (mEnd < n && (scr_hex(s[mEnd]) || s[mEnd] == ':')) mEnd++;
+                int dbl = -1;
+                for (int k = mEnd - 1; k > q0; k--) {
+                    if (s[k] == ':' && s[k - 1] == ':') { dbl = k - 1; break; }
+                }
+                if (dbl >= 0) {
+                    int t0 = dbl + 2;
+                    int tEnd = t0;
+                    while (tEnd < n && (scr_hex(s[tEnd]) || s[tEnd] == ':' || s[tEnd] == '.')) tEnd++;
+                    for (int e = tEnd; e >= t0; e--) {
+                        int prevWord = (e > 0) && scr_word((unsigned char) s[e - 1]);
+                        int nextWord = (e < n) && scr_word((unsigned char) s[e]);
+                        if (prevWord != nextWord) { matchEnd = e; break; }
+                    }
+                }
             }
-            int end2 = r2;
-            while (end2 > runStart && !scr_hex(s[end2 - 1])) end2--;
-            /* greedy tail first; when its boundary fails the engine backtracks to the end of the
-               double colon itself, where the boundary is colon to word and therefore counts */
-            if (!(end2 > runStart + 2 && (end2 == n || !scr_word(s[end2])))) {
-                if (seenDouble && doubleEnd < n && scr_word(s[doubleEnd])) end2 = doubleEnd;
-                else end2 = 0;
-            }
-            if (first >= 1 && first <= 4 && seenDouble && end2 > runStart + 2 && (end2 == n || !scr_word(s[end2]))) {
-                r2 = end2;
+            if (first >= 1 && first <= 4 && matchEnd > 0) {
                 scr_put(o, s, last, i);
                 sb_add(o, "[ip]");
-                i = r2;
-                last = r2;
+                i = matchEnd;
+                last = matchEnd;
                 continue;
             }
         }
