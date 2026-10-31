@@ -391,16 +391,21 @@ Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArr
     jbyteArray out = NULL;
     jstring transform = (*env)->NewStringUTF(env, (const char *) TRANS);
     jstring alg = (*env)->NewStringUTF(env, (const char *) ALG);
-    jbyte *key = (*env)->GetByteArrayElements(env, jkey, NULL);
-    jbyte *cip = (*env)->GetByteArrayElements(env, jcipher, NULL);
+    /* copied into a plain buffer instead of pinned: this call goes into javax.crypto (which may run
+     * for a megabyte payload), and a pinned array held across those callbacks occupies a VM slot
+     * until it is released - the leak that aborts the process is described in vaultSeal */
+    jbyte *cip = (jbyte *) malloc((size_t) cn);
+    jbyte *key = (jbyte *) malloc((size_t) kn);
 
     if (transform && alg && key && cip) {
+        (*env)->GetByteArrayRegion(env, jcipher, 0, cn, cip);
+        (*env)->GetByteArrayRegion(env, jkey, 0, kn, key);
         /* iv = cipher[0..11], ct||tag = cipher[12..] */
         jbyteArray iv = (*env)->NewByteArray(env, 12);
         jbyteArray ct = (*env)->NewByteArray(env, (jsize) (cn - 12));
         if (iv && ct) {
             (*env)->SetByteArrayRegion(env, iv, 0, 12, cip);
-            (*env)->SetByteArrayRegion(env, ct, 12 - 12, (jsize) (cn - 12), cip + 12);
+            (*env)->SetByteArrayRegion(env, ct, 0, (jsize) (cn - 12), cip + 12);
             jobject spec = (*env)->NewObject(env, specCls, midSpec, 128, iv, 0, 12);
             jobject kobj = (*env)->NewObject(env, keyCls, midKey, jkey, alg);
             jobject c = (*env)->CallStaticObjectMethod(env, cipherCls, midGet, transform);
@@ -421,8 +426,8 @@ Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArr
             }
         }
     }
-    if (key) (*env)->ReleaseByteArrayElements(env, jkey, key, JNI_ABORT);
-    if (cip) (*env)->ReleaseByteArrayElements(env, jcipher, cip, JNI_ABORT);
+    if (key) free(key);
+    if (cip) free(cip);
     if (transform) (*env)->DeleteLocalRef(env, transform);
     if (alg) (*env)->DeleteLocalRef(env, alg);
     (*env)->DeleteLocalRef(env, cipherCls);
@@ -617,8 +622,19 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultSeal(JNIEnv *env, jclass cls, jbyteA
                         jsize cn = (*env)->GetArrayLength(env, ct);
                         out = (*env)->NewByteArray(env, (jsize) (12 + cn));
                         if (out) {
-                            (*env)->SetByteArrayRegion(env, out, 0, 12, (jbyte *) (*env)->GetByteArrayElements(env, iv, NULL));
-                            (*env)->SetByteArrayRegion(env, out, 12, cn, (jbyte *) (*env)->GetByteArrayElements(env, ct, NULL));
+                            /* regions, never GetByteArrayElements: a pinned array that is not
+                             * released eats one of the 32 VM slots for the life of the process,
+                             * and once they are gone the runtime aborts the app with no Java
+                             * exception at all - "opens, dies after two seconds, no crash" */
+                            jbyte ivb[12];
+                            jbyte *ctb = (jbyte *) malloc(cn > 0 ? (size_t) cn : 1);
+                            (*env)->GetByteArrayRegion(env, iv, 0, 12, ivb);
+                            (*env)->SetByteArrayRegion(env, out, 0, 12, ivb);
+                            if (ctb) {
+                                (*env)->GetByteArrayRegion(env, ct, 0, cn, ctb);
+                                (*env)->SetByteArrayRegion(env, out, 12, cn, ctb);
+                                free(ctb);
+                            }
                         }
                     }
                 }
@@ -649,13 +665,15 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(JNIEnv *env, jclass cls, jbyteA
     jclass cipherCls = need_class(env, (const char *) CIPH);
     jclass specCls = need_class(env, (const unsigned char *) "javax/crypto/spec/GCMParameterSpec");
     if (!cipherCls || !specCls) return NULL;
-    jbyte *raw = (*env)->GetByteArrayElements(env, jblob, NULL);
+    jbyte *raw = (jbyte *) malloc((size_t) n);
     jbyteArray iv = (*env)->NewByteArray(env, 12);
     jbyteArray ct = (*env)->NewByteArray(env, (jsize) (n - 12));
     jbyteArray out = NULL;
-    if (iv && ct && raw) {
-        memcpy((*env)->GetByteArrayElements(env, iv, NULL), raw, 12);
-        memcpy((*env)->GetByteArrayElements(env, ct, NULL), raw + 12, (size_t) (n - 12));
+    if (raw && iv && ct) {
+        /* copied into a plain buffer, not pinned: see the note in vaultSeal */
+        (*env)->GetByteArrayRegion(env, jblob, 0, n, raw);
+        (*env)->SetByteArrayRegion(env, iv, 0, 12, raw);
+        (*env)->SetByteArrayRegion(env, ct, 0, (jsize) (n - 12), raw + 12);
         jmethodID specCtor = (*env)->GetMethodID(env, specCls, "<init>", "(I[B)V");
         jmethodID getInst = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);
         jstring tr = (*env)->NewStringUTF(env, (const char *) TRANS);
@@ -677,7 +695,7 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(JNIEnv *env, jclass cls, jbyteA
             }
         }
     }
-    if (raw) (*env)->ReleaseByteArrayElements(env, jblob, raw, JNI_ABORT);
+    if (raw) free(raw);
     (*env)->DeleteLocalRef(env, cipherCls);
     (*env)->DeleteLocalRef(env, specCls);
     return out;
@@ -956,15 +974,15 @@ Java_ir_v2rayng_compose_core_NativeSec_idChain(JNIEnv *env, jclass cls) {
                 jstring s = (jstring) (*env)->CallObjectMethod(env, iss, getName);
                 if (s) {
                     const char *c = (*env)->GetStringUTFChars(env, s, NULL);
-                    if (c) { strncpy(issuer, c, sizeof(issuer) - 1); (*env)->ReleaseStringUTFChars(env, s, c); }
-                    strncpy(subName, issuer, sizeof(subName) - 1);
+                    if (c) { strncpy(issuer, c, sizeof(issuer) - 1); issuer[sizeof(issuer) - 1] = 0; (*env)->ReleaseStringUTFChars(env, s, c); }
+                    strncpy(subName, issuer, sizeof(subName) - 1); subName[sizeof(subName) - 1] = 0;
                 }
             }
             if (sub && getName) {
                 jstring s = (jstring) (*env)->CallObjectMethod(env, sub, getName);
                 if (s) {
                     const char *c = (*env)->GetStringUTFChars(env, s, NULL);
-                    if (c) { strncpy(subName, c, sizeof(subName) - 1); (*env)->ReleaseStringUTFChars(env, s, c); }
+                    if (c) { strncpy(subName, c, sizeof(subName) - 1); subName[sizeof(subName) - 1] = 0; (*env)->ReleaseStringUTFChars(env, s, c); }
                 }
             }
             if (subName[0] && strcmp(subName, issuer) == 0) selfSigned[0] = '1';
