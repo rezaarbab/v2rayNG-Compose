@@ -1416,7 +1416,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             var code: String? = null
             try {
                 val conn = URL("https://www.cloudflare.com/cdn-cgi/trace").openConnection(
-                    java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", port)),
+                    java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", socksPort)),
                 ) as HttpURLConnection
                 conn.connectTimeout = 5000
                 conn.readTimeout = 5000
