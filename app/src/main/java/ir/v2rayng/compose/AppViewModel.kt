@@ -606,13 +606,16 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private suspend fun handleSyncFail() {
         val online = withContext(Dispatchers.IO) { netOnline() }
         val reason = Remote.lastFail ?: "unknown"
-        ir.v2rayng.compose.core.XrayBridge.trace("sync failed: " + reason)
+        // the reason goes on the log page, not logcat, because logcat is empty by his rule and
+        // "the list did not arrive" has three causes that need different fixes. It never carries a
+        // host - only an HTTP status, an enc letter, or the worker's own refusal text.
+        val short = reason.take(110)
         if (online) {
             srvFailToast()
-            log("WARN", "لیست سرور گرفته نشد")
+            log("WARN", "لیست سرور گرفته نشد: $short")
         } else {
             netToast()
-            log("WARN", "اینترنت قطع است - لیست سرور گرفته نشد")
+            log("WARN", "اینترنت قطع است - لیست سرور گرفته نشد: $short")
         }
     }
 
@@ -714,12 +717,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     applyRemote(r0)
                     infoToast(if (r0.unchanged) "Server list unchanged" else "Found " + r0.servers.size + " servers")
                 } else {
-                    log("WARN", "لیست سرور گرفته نشد")
-                    ir.v2rayng.compose.core.XrayBridge.trace("first sync: " + (Remote.lastFail ?: "unknown"))
+                    log("WARN", "لیست سرور گرفته نشد: " + (Remote.lastFail ?: "unknown").take(110))
                 }
             } catch (e: Exception) {
-                log("WARN", "لیست سرور گرفته نشد")
-                ir.v2rayng.compose.core.XrayBridge.trace("first sync threw: " + e.javaClass.simpleName)
+                log("WARN", "لیست سرور گرفته نشد: " + e.javaClass.simpleName)
             }
             delay(120_000L)
             while (true) {
