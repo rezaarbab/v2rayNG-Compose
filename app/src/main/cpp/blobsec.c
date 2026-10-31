@@ -2863,3 +2863,195 @@ JNIEXPORT void JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_payloadClear(JNIEnv *env, jclass cls) {
     payload_reset();
 }
+
+/* ---- the "cy" payload and the sealed row store ----
+ * cy is the same JSON without a carrier: it is opened with gcm and parsed through the same row
+ * store. The sealed form is what survives a restart: payloadSealAll() serialises the rows and
+ * seals them with the vault, Kotlin stores that opaque string; payloadRestore() takes it back and
+ * refills the rows, so connect works after a cold start without a fresh sync.
+ */
+
+static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len) {
+    jstring jjson = (*env)->NewStringUTF(env, (const char *) buf);
+    if (jjson == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); set_step("payload:string"); return -1; }
+    jclass jsonCls = need_class(env, "org/json/JSONObject");
+    jclass arrCls = need_class(env, "org/json/JSONArray");
+    jmethodID ctor = jsonCls ? (*env)->GetMethodID(env, jsonCls, "<init>", "(Ljava/lang/String;)V") : NULL;
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jobject root = (jsonCls && ctor) ? (*env)->NewObject(env, jsonCls, ctor, jjson) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); root = NULL; }
+    if (root == NULL) { set_step("payload:json"); return -1; }
+    jmethodID getArr = (*env)->GetMethodID(env, jsonCls, "optJSONArray", "(Ljava/lang/String;)Lorg/json/JSONArray;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jstring kServers = (*env)->NewStringUTF(env, "servers");
+    jobject arr = (getArr && kServers) ? (*env)->CallObjectMethod(env, root, getArr, kServers) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); arr = NULL; }
+    if (arr == NULL || arrCls == NULL) { set_step("payload:servers"); return 0; }
+    jmethodID arrLen = (*env)->GetMethodID(env, arrCls, "length", "()I");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID arrGet = (*env)->GetMethodID(env, arrCls, "optJSONObject", "(I)Lorg/json/JSONObject;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (!arrLen || !arrGet) { set_step("payload:array-methods"); return -1; }
+    int n = (*env)->CallIntMethod(env, arr, arrLen);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); n = 0; }
+    if (n < 0) n = 0;
+    if (n > PLR_MAX) n = PLR_MAX;
+    if (n == 0) { set_step("payload:empty"); return 0; }
+    g_rows = (plr_t *) calloc((size_t) n, sizeof(plr_t));
+    if (g_rows == NULL) { set_step("payload:alloc-rows"); return -1; }
+    int kept = 0;
+    for (int i = 0; i < n; i++) {
+        jobject o = (*env)->CallObjectMethod(env, arr, arrGet, i);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); o = NULL; }
+        if (o == NULL) continue;
+        plr_t *r = &g_rows[kept];
+        pl_json_str(env, o, jsonCls, "id", "", r->id, PLR_ID);
+        pl_json_str(env, o, jsonCls, "name", "", r->name, PL_NAME);
+        pl_json_str(env, o, jsonCls, "address", "", r->addr, PL_ADDR);
+        pl_json_str(env, o, jsonCls, "category", "", r->cat, PLR_CAT);
+        pl_json_str(env, o, jsonCls, "msg", "", r->msg, PLR_MISC);
+        pl_json_str(env, o, jsonCls, "link", "", r->link, PLR_LINK);
+        r->port = pl_json_int(env, o, jsonCls, "port", 0);
+        (*env)->DeleteLocalRef(env, o);
+        if (r->addr[0] == 0 || r->port <= 0) continue;
+        kept++;
+    }
+    (*env)->DeleteLocalRef(env, arr);
+    (*env)->DeleteLocalRef(env, root);
+    if (kServers) (*env)->DeleteLocalRef(env, kServers);
+    if (jsonCls) (*env)->DeleteLocalRef(env, jsonCls);
+    if (arrCls) (*env)->DeleteLocalRef(env, arrCls);
+    g_rows_n = kept;
+    set_step(kept > 0 ? "payload:ok" : "payload:no-usable-rows");
+    return kept;
+}
+
+/** the raw "cy" payload: same JSON, no carrier, opened with the session key */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_payloadLoadCy(JNIEnv *env, jclass cls, jbyteArray jblob, jbyteArray jkc) {
+    payload_reset();
+    set_step("payload:cy-entered");
+    if (jblob == NULL || jkc == NULL) { set_step("payload:cy-args"); return -1; }
+    if ((*env)->GetArrayLength(env, jkc) != 32) { set_step("payload:cy-key"); return -1; }
+    jbyteArray jaad = (*env)->NewByteArray(env, 5);
+    if (jaad == NULL) { set_step("payload:cy-aad"); return -1; }
+    const jbyte aad[5] = { 0x42, 0x4C, 0x42, 0x76, 0x31 };
+    (*env)->SetByteArrayRegion(env, jaad, 0, 5, aad);
+    jbyteArray plain = Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(env, cls, jblob, jkc, jaad);
+    if (plain == NULL) { set_step("payload:cy-open"); return -1; }
+    jsize plen = (*env)->GetArrayLength(env, plain);
+    if (plen <= 0 || plen > 4000000) { set_step("payload:size"); return -1; }
+    jbyte *buf = (jbyte *) malloc((size_t) plen);
+    if (buf == NULL) { set_step("payload:alloc"); return -1; }
+    (*env)->GetByteArrayRegion(env, plain, 0, plen, buf);
+    int n = payload_parse_bytes(env, buf, plen);
+    free(buf);
+    return n;
+}
+
+/** rows -> one text block (fields separated by \x1f, rows by \n), sealed by the vault, base64url.
+ *  Kotlin stores this opaque string; the links inside it are ciphertext like everything else. */
+JNIEXPORT jstring JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_payloadSealAll(JNIEnv *env, jclass cls) {
+    if (g_rows_n <= 0) return NULL;
+    size_t cap = 64;
+    for (int i = 0; i < g_rows_n; i++) {
+        cap += strlen(g_rows[i].id) + strlen(g_rows[i].name) + strlen(g_rows[i].addr) +
+               strlen(g_rows[i].cat) + strlen(g_rows[i].msg) + strlen(g_rows[i].link) + 32;
+    }
+    unsigned char *text = (unsigned char *) malloc(cap);
+    if (text == NULL) { set_step("seal-rows:alloc"); return NULL; }
+    size_t o = 0;
+    char portbuf[16];
+    for (int i = 0; i < g_rows_n; i++) {
+        plr_t *r = &g_rows[i];
+        snprintf(portbuf, sizeof(portbuf), "%d", r->port);
+        const char *parts[7] = { r->id, r->name, r->addr, portbuf, r->cat, r->msg, r->link };
+        for (int k = 0; k < 7; k++) {
+            size_t n = strlen(parts[k]);
+            if (o + n + 2 >= cap) { free(text); set_step("seal-rows:overflow"); return NULL; }
+            memcpy(text + o, parts[k], n);
+            o += n;
+            text[o++] = (k == 6) ? '\n' : 0x1f;
+        }
+    }
+    jbyteArray jtext = (*env)->NewByteArray(env, (jsize) o);
+    if (jtext) (*env)->SetByteArrayRegion(env, jtext, 0, (jsize) o, (const jbyte *) text);
+    free(text);
+    if (jtext == NULL) { set_step("seal-rows:array"); return NULL; }
+    jbyteArray sealed = Java_ir_v2rayng_compose_core_NativeSec_vaultSeal(env, cls, jtext);
+    if (sealed == NULL) { set_step("seal-rows:vault"); return NULL; }
+    jstring out = Java_ir_v2rayng_compose_core_NativeSec_b64uEncode(env, cls, sealed);
+    set_step(out ? "seal-rows:ok" : "seal-rows:encode");
+    return out;
+}
+
+/** sealed rows back into memory; returns the row count or -1 */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_payloadRestore(JNIEnv *env, jclass cls, jstring jsealed) {
+    payload_reset();
+    set_step("restore:entered");
+    if (jsealed == NULL) { set_step("restore:null"); return -1; }
+    jstring jplaintext = NULL;
+    {
+        const char *b64 = (*env)->GetStringUTFChars(env, jsealed, NULL);
+        if (b64 == NULL) { set_step("restore:chars"); return -1; }
+        /* decoded here, not through another JNI entry: the sealed string is our own base64url */
+        size_t blen = strlen(b64);
+        unsigned char *raw = (unsigned char *) malloc(blen + 1);
+        jbyteArray blob = NULL;
+        if (raw) {
+            int rl = pl_b64(b64, (int) blen, (char *) raw, (int) blen + 1);
+            if (rl > 0) {
+                blob = (*env)->NewByteArray(env, (jsize) rl);
+                if (blob) (*env)->SetByteArrayRegion(env, blob, 0, (jsize) rl, (const jbyte *) raw);
+            }
+            free(raw);
+        }
+        (*env)->ReleaseStringUTFChars(env, jsealed, b64);
+        if (blob == NULL) { set_step("restore:b64"); return -1; }
+        jbyteArray plain = Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(env, cls, blob, 0);
+        if (plain == NULL) { set_step("restore:vault"); return -1; }
+        jsize n = (*env)->GetArrayLength(env, plain);
+        unsigned char *buf = (unsigned char *) malloc((size_t) n + 1);
+        if (buf == NULL) { set_step("restore:alloc"); return -1; }
+        (*env)->GetByteArrayRegion(env, plain, 0, n, (jbyte *) buf);
+        buf[n] = 0;
+        /* split rows and fields */
+        g_rows = (plr_t *) calloc(PLR_MAX, sizeof(plr_t));
+        if (g_rows == NULL) { free(buf); set_step("restore:alloc-rows"); return -1; }
+        int kept = 0;
+        char *row = (char *) buf;
+        while (row != NULL && *row != 0 && kept < PLR_MAX) {
+            char *nl = strchr(row, '\n');
+            if (nl) *nl = 0;
+            char *f[7];
+            int nf = 0;
+            char *p = row;
+            while (nf < 7) {
+                f[nf++] = p;
+                char *sep = strchr(p, 0x1f);
+                if (sep == NULL) break;
+                *sep = 0;
+                p = sep + 1;
+            }
+            if (nf == 7) {
+                plr_t *r = &g_rows[kept];
+                pl_copy(r->id, PLR_ID, f[0], (int) strlen(f[0]));
+                pl_copy(r->name, PL_NAME, f[1], (int) strlen(f[1]));
+                pl_copy(r->addr, PL_ADDR, f[2], (int) strlen(f[2]));
+                r->port = atoi(f[3]);
+                pl_copy(r->cat, PLR_CAT, f[4], (int) strlen(f[4]));
+                pl_copy(r->msg, PLR_MISC, f[5], (int) strlen(f[5]));
+                pl_copy(r->link, PLR_LINK, f[6], (int) strlen(f[6]));
+                if (r->addr[0] && r->port > 0) kept++;
+            }
+            row = nl ? nl + 1 : NULL;
+        }
+        free(buf);
+        g_rows_n = kept;
+        set_step(kept > 0 ? "restore:ok" : "restore:empty");
+        return kept;
+    }
+    (void) jplaintext;
+}

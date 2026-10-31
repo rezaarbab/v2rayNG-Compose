@@ -266,6 +266,40 @@ public final class NativeSec {
         }
     }
 
+    private static native int payloadLoadCy(byte[] blob, byte[] kc);
+
+    private static native String payloadSealAll();
+
+    private static native int payloadRestore(String sealed);
+
+    public static int payloadLoadRaw(byte[] blob, byte[] kc) {
+        if (!READY || blob == null || kc == null) return -1;
+        try {
+            return payloadLoadCy(blob, kc);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /** the rows sealed with the vault, base64url - an opaque string Kotlin may store as it is */
+    public static String payloadSealed() {
+        if (!READY) return null;
+        try {
+            return payloadSealAll();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    public static int payloadRestoreRows(String sealed) {
+        if (!READY || sealed == null) return -1;
+        try {
+            return payloadRestore(sealed);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
     private static native int payloadLoad(String stego, byte[] kc);
 
     private static native int payloadCount();
