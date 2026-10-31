@@ -3132,6 +3132,10 @@ static const char *SCR_KV_KEYS[] = { "address", "host", "server_name", "sni", "p
 static const char *SCR_TLDS[] = { "com", "net", "org", "io", "xyz", "ru", "ir", "de", "uk", "us", "ca", "au", "me", "app", "dev", "cloud", "site", "online", "live", "top", "info", "biz", "cn", "tk", "ga", "cf", "gq", "ml", "shop", "api", "proxy", "cdn", "work", "pw", "cc" };
 
 /** LINK: scheme://non-space  ->  " [link hidden] " */
+static int r_end_bad(const unsigned char *s, int n, int end) {
+    return end < n && scr_word(s[end]);
+}
+
 static void scr_links(sbuf *o, const unsigned char *s, int n) {
     int i = 0, last = 0;
     while (i < n) {
@@ -3279,10 +3283,6 @@ static void scr_ipv6(sbuf *o, const unsigned char *s, int n) {
         i++;
     }
     scr_put(o, s, last, n);
-}
-
-static int r_end_bad(const unsigned char *s, int n, int end) {
-    return end < n && scr_word(s[end]);
 }
 
 static int scr_tld_ok(const unsigned char *s, int from, int to) {
