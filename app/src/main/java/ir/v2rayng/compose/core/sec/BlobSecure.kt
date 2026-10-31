@@ -131,6 +131,10 @@ object BlobSecure {
     var lastProofNote: String = ""
         private set
 
+    /** Which half of the proof refused, with the library step attached - TEMPORARY, goes with diag(). */
+    @Volatile
+    private var proofFail: String = ""
+
     /** Proof that this install owns its hardware key: the same message, signed instead of MACed.
      *  Sent only on the key endpoint, where the worker checks it against the public key stored for this
      *  device. null = the keystore refused to sign, so no session can be opened. */
@@ -138,8 +142,21 @@ object BlobSecure {
         val ts = tsBytes(nextTs())
         val nonce = newNonce()
         val msg = tokMsg(device, ts, nonce)
-        val sig = BlobIdentity.sign(msg) ?: return null
-        val pubDer = BlobB64.decode(BlobIdentity.publicKeyB64() ?: return null) ?: return null
+        proofFail = ""
+        val sig = BlobIdentity.sign(msg) ?: run {
+            // read the recorder before any other native call: it keeps one slot, and the next call
+            // would overwrite the step that just failed
+            proofFail = "sign refused step=" + NativeSec.errInfo() + " id=" + (BlobIdentity.note ?: "-")
+            return null
+        }
+        val pub = BlobIdentity.publicKeyB64() ?: run {
+            proofFail = "no public key step=" + NativeSec.errInfo() + " id=" + (BlobIdentity.note ?: "-")
+            return null
+        }
+        val pubDer = BlobB64.decode(pub) ?: run {
+            proofFail = "public key is not base64url"
+            return null
+        }
         // verify our own signature with the bytes we export as the public key: REJECTED here means
         // this device's exported key is not the pair that signed (keystore/format), while ok here
         // plus a refusal from the worker means the two sides read the encoding differently.
@@ -165,6 +182,52 @@ object BlobSecure {
         return d.take(3).joinToString("") { String.format("%02x", it) }
     }
 
+    /** ONE line with every answer this handset can give about the secure channel - asked for on
+     *  2026-10-31 so that a failing build says everything at once instead of one cause per build.
+     *  It never destroys anything: no call here drops or replaces a key. It can create the vault
+     *  key on a device that has never saved a setting, which is what the first save would do.
+     *  No value that leaves the device appears - sizes, counts, verdicts and the step name only.
+     *  It costs a few keystore round trips, so the caller runs it off the main thread, once per
+     *  distinct failure. TEMPORARY, and deleted with the step recorder in blobsec.c. */
+    fun diag(): String {
+        val sb = StringBuilder()
+        fun st(): String = try { NativeSec.errInfo() } catch (t: Throwable) { "?" }
+        fun tag(k: String, v: String) {
+            sb.append(' ').append(k).append('=').append(v)
+        }
+        tag("lib", NativeSec.note())
+        tag("gate", try { NativeKit.note() } catch (t: Throwable) { "?" })
+        // the seal-then-open round trip inside the library: 0 = the vault path works end to end
+        tag("round", (try { NativeSec.vaultSelfCheck() } catch (t: Throwable) { -9 }).toString() + "/" + st())
+        tag("kv", (try { NativeSec.vaultOk(0) } catch (t: Throwable) { false }).toString() + "/" + st())
+        tag("has", (try { NativeSec.hasKey(0) } catch (t: Throwable) { false }).toString() +
+            (try { NativeSec.hasKey(1) } catch (t: Throwable) { false }).toString() + "/" + st())
+        val sp = try { NativeSec.spki() } catch (t: Throwable) { null }
+        tag("spki", (sp?.size ?: -1).toString() + "/" + st())
+        // a fixed non-secret message: the signature that follows is opened again below with the
+        // public bytes this device exports, which separates "the key is dead" from "we disagree
+        // about the encoding" - the second one is the worker's problem, the first one is ours
+        val probe = "blb-diag".toByteArray(Charsets.UTF_8)
+        val sg = try { NativeSec.sign(probe) } catch (t: Throwable) { null }
+        tag("sig", (sg?.size ?: -1).toString() + "/" + st())
+        val vv = if (sp != null && sg != null) {
+            try { NativeSec.verifySpki(sp, probe, sg) } catch (t: Throwable) { -9 }
+        } else -8
+        tag("ver", vv.toString() + "/" + st())
+        val ch = try { NativeSec.chain() } catch (t: Throwable) { null }
+        tag("chain", if (ch == null || ch.size < 6) "null" else ch[0] + "." + ch[1] + "." + ch[3] + "." + ch[5])
+        tag("stage", BlobVault.lastStage.replace(' ', '_').take(44) + "/" + st())
+        tag("verify", (SecurePrefs.verifyNote ?: "-").replace(' ', '_').take(40))
+        tag("rng", (try { NativeSec.random(8)?.size ?: -1 } catch (t: Throwable) { -2 }).toString())
+        tag("why", (lastReason ?: "-").replace(' ', '_').take(44))
+        tag("proof", lastProofNote.replace(' ', '_').take(56))
+        tag("idnote", (BlobIdentity.note ?: "-").replace(' ', '_').take(40))
+        tag("os", android.os.Build.VERSION.SDK_INT.toString() + "/" +
+            android.os.Build.BRAND.take(8).replace(' ', '_') + "/" +
+            android.os.Build.MODEL.take(14).replace(' ', '_'))
+        return sb.toString()
+    }
+
     /** the key endpoint - get fresh 60-minute keys from the worker, persist via BlobVault.
      *  Returns the newly stored session, or null when the worker refuses. */
     private fun issueKeys(base: String, body: JSONObject): Session? {
@@ -176,7 +239,8 @@ object BlobSecure {
             // report as "signature does not match"
             val proof = deviceProof(device) ?: run {
                 blog("issueKeys: keystore signing failed")
-                fail("device identity signature failed (keystore)")
+                fail("device identity signature failed (keystore)" +
+                    if (proofFail.isEmpty()) "" else " [" + proofFail + "]")
                 return null
             }
             val pub = BlobIdentity.publicKeyB64() ?: run {

@@ -199,26 +199,34 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             }
             Remote.BASE = base
             storedListLoaded = true
+            // TEMPORARY: the reason used to be handed to XrayBridge.trace, which is empty by his
+            // rule - so the sentence said "something failed" and the cause was thrown away. It goes
+            // on the visible line now, and one full DIAG line follows when anything fired.
+            var broke = ""
             if (base.isBlank()) {
                 // without the native gate there is no address at all, and "sync failed" would be
                 // the wrong thing to blame - say what is actually missing
-                log("ERROR", "کتابخانهٔ داخلی برنامه بار نشد - همگام‌سازی انجام نمی‌شود")
-                ir.v2rayng.compose.core.XrayBridge.trace(ir.v2rayng.compose.core.NativeKit.note())
+                log("ERROR", "کتابخانهٔ داخلی برنامه بار نشد - همگام‌سازی انجام نمی‌شود (" +
+                    ir.v2rayng.compose.core.NativeKit.note() + ")")
+                broke += "lib "
             }
-            // what happened, in the user's terms; which value failed to unseal is for logcat
+            // what happened, in the user's terms; which value failed to unseal is on the same line
             SecurePrefs.unreadableReport()?.let {
-                log("ERROR", "مقادیر ذخیره‌شدهٔ این دستگاه رمزگشایی نشد (کلید امنیتی عوض شده)")
-                ir.v2rayng.compose.core.XrayBridge.trace("unreadable stored values: " + it)
+                log("ERROR", "مقادیر ذخیره‌شدهٔ این دستگاه رمزگشایی نشد (کلید امنیتی عوض شده) [" +
+                    it.replace(' ', '_').take(70) + "]")
+                broke += "unseal "
             }
             SecurePrefs.sealFailureReport()?.let {
-                log("ERROR", "ذخیرهٔ امن تنظیمات ناموفق بود")
-                ir.v2rayng.compose.core.XrayBridge.trace("seal failure: " + it)
+                log("ERROR", "ذخیرهٔ امن تنظیمات ناموفق بود [" + it.replace(' ', '_').take(70) + "]")
+                broke += "seal "
             }
             ir.v2rayng.compose.core.sec.BlobVault.recoveryNote?.let {
                 // this one IS for him: without the note "nothing saves" and "the keystore refused"
                 // are the same one line, and they need different answers
                 log("ERROR", "ذخیره‌سازی امن این دستگاه مشکل دارد: " + it)
+                broke += "recover "
             }
+            if (broke.isNotEmpty()) logDiag("startup:" + broke.trim())
             loadRemoteState()
             if (_state.value.servers.isNotEmpty() && effPingStart()) {
                 pingServers(null, effFlagStart())
@@ -449,6 +457,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 // tell them apart from the phone
                 val why = ir.v2rayng.compose.core.sec.SecurePrefs.verifyNote ?: "بدون دلیل"
                 log("ERROR", "تنظیمات ذخیره نشد - دستگاه نوشت را تأیید نکرد: $why")
+                logDiag("save:" + why)
                 ir.v2rayng.compose.core.NotifyKit.alarm(
                     AppCtx.app,
                     "تنظیمات ذخیره نشد",
@@ -603,16 +612,38 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
     }
 
+    /** TEMPORARY, on his request ("ی لاگ کامل بزار"): instead of one cause per build, the first
+     *  failure of a kind prints the whole state of the secure channel - library gate, vault round
+     *  trip, identity key, signature, self-verify, chain counts, nonce source, and the step the C
+     *  library stopped at. Deduplicated by reason, runs on IO because it touches the keystore, and
+     *  goes away together with the step recorder in blobsec.c. */
+    private var diagFor: String? = null
+
+    private suspend fun logDiag(what: String) {
+        if (diagFor == what) return
+        diagFor = what
+        val line = withContext(Dispatchers.IO) {
+            try {
+                ir.v2rayng.compose.core.sec.BlobSecure.diag()
+            } catch (t: Throwable) {
+                "diag threw " + t.javaClass.simpleName
+            }
+        }
+        log("WARN", "DIAG(" + what + ")" + line)
+    }
+
     private suspend fun handleSyncFail() {
         val online = withContext(Dispatchers.IO) { netOnline() }
         val reason = Remote.lastFail ?: "unknown"
         // the reason goes on the log page, not logcat, because logcat is empty by his rule and
         // "the list did not arrive" has three causes that need different fixes. It never carries a
         // host - only an HTTP status, an enc letter, or the worker's own refusal text.
-        val short = reason.take(110)
+        val short = reason.take(170)
         if (online) {
             srvFailToast()
             log("WARN", "لیست سرور گرفته نشد: $short")
+            // the network answered and the payload did not arrive: print the full state once
+            logDiag(reason)
         } else {
             netToast()
             log("WARN", "اینترنت قطع است - لیست سرور گرفته نشد: $short")
@@ -717,10 +748,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     applyRemote(r0)
                     infoToast(if (r0.unchanged) "Server list unchanged" else "Found " + r0.servers.size + " servers")
                 } else {
-                    log("WARN", "لیست سرور گرفته نشد: " + (Remote.lastFail ?: "unknown").take(110))
+                    val r0why = Remote.lastFail ?: "unknown"
+                    log("WARN", "لیست سرور گرفته نشد: " + r0why.take(170))
+                    logDiag(r0why)
                 }
             } catch (e: Exception) {
                 log("WARN", "لیست سرور گرفته نشد: " + e.javaClass.simpleName)
+                logDiag("throw:" + e.javaClass.simpleName)
             }
             delay(120_000L)
             while (true) {
@@ -1095,12 +1129,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         val clean = ir.v2rayng.compose.core.LogSanitize.clean(msg)
         val line = LogLine(TimeKit.now(), level, clean)
         put { s -> s.copy(logs = (s.logs + line).takeLast(400)) }
-        // the keystore timings stay out of the user's log but not out of reach: an error dumps
-        // them to logcat, where they are one adb command away instead of one screenshot away
+        // the keystore timings were sent to blog(), which is empty by his rule - so they vanished.
+        // They belong on the same page the user pastes from, under the error that needs them.
+        // Re-entering log() with ERROR is safe: drain() clears, so the second pass has nothing.
         if (level == "ERROR") {
-            for (j in ir.v2rayng.compose.core.sec.SecJournal.drain()) {
-                ir.v2rayng.compose.core.sec.blog("journal: " + j)
-            }
+            val j = ir.v2rayng.compose.core.sec.SecJournal.drain().takeLast(10).joinToString(" | ")
+            if (j.isNotEmpty()) log("ERROR", "SEC " + j)
         }
     }
 
