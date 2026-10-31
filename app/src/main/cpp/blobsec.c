@@ -374,6 +374,15 @@ static char g_step[40] = "ok";    /* last named point reached, on success or fai
 static char g_last[224] = "";      /* what refused, in one string: where | class | message */
 static char g_det[80] = "";        /* values read back from a spec that was built */
 
+/** copy ASCII only, and never cut a multibyte sequence in half: these buffers go back into
+ *  NewStringUTF, and a dangling byte there is a second crash on the way to reporting the first */
+static void copy_ascii(char *out, size_t n, const char *in) {
+    size_t k = 0;
+    if (in == NULL) { out[0] = 0; return; }
+    for (; k + 1 < n && in[k] != 0; k++) out[k] = ((unsigned char) in[k] < 0x80) ? in[k] : '?';
+    out[k] = 0;
+}
+
 static void set_step(const char *where) {
     strncpy(g_step, where, sizeof(g_step) - 1);
     g_step[sizeof(g_step) - 1] = 0;
@@ -391,11 +400,15 @@ static void read_exc_msg(JNIEnv *env, jthrowable ex, char *out, size_t n) {
     out[0] = 0;
     jclass oc = (*env)->GetObjectClass(env, ex);
     jmethodID getMsg = oc ? (*env)->GetMethodID(env, oc, "getMessage", "()Ljava/lang/String;") : NULL;
-    if (getMsg && oc) {
-        jstring nm = (jstring) (*env)->CallObjectMethod(env, oc, getMsg);
+    /* the method is found on the exception's class but MUST be invoked on the exception: calling it
+     * with the Class object as receiver (which is what this line said for one build) hands ART an
+     * object of the wrong shape, and that is a SIGSEGV in InvokeVirtualOrInterfaceWithVarArgs, not a
+     * Java exception - the tombstone in /data/tombstones is what proved it */
+    if (getMsg && ex) {
+        jstring nm = (jstring) (*env)->CallObjectMethod(env, ex, getMsg);
         if (nm) {
             const char *c = (*env)->GetStringUTFChars(env, nm, NULL);
-            if (c) { strncpy(out, c, n - 1); out[n - 1] = 0; (*env)->ReleaseStringUTFChars(env, nm, c); }
+            if (c) { copy_ascii(out, n, c); (*env)->ReleaseStringUTFChars(env, nm, c); }
             (*env)->DeleteLocalRef(env, nm);
         }
     }
@@ -415,8 +428,7 @@ static void read_exc_class(JNIEnv *env, jthrowable ex, char *out, size_t n) {
             const char *c = (*env)->GetStringUTFChars(env, nm, NULL);
             if (c) {
                 const char *dot = strrchr(c, '.');
-                strncpy(out, dot ? dot + 1 : c, n - 1);
-                out[n - 1] = 0;
+                copy_ascii(out, n, dot ? dot + 1 : c);
                 (*env)->ReleaseStringUTFChars(env, nm, c);
             }
             (*env)->DeleteLocalRef(env, nm);
@@ -664,7 +676,7 @@ static void spec_detail(JNIEnv *env, jobject spec) {
         jstring first = (jstring) (*env)->GetObjectArrayElement(env, arr, 0);
         if (first) {
             const char *c = (*env)->GetStringUTFChars(env, first, NULL);
-            if (c) { strncpy(bm, c, sizeof(bm) - 1); bm[sizeof(bm) - 1] = 0; (*env)->ReleaseStringUTFChars(env, first, c); }
+            if (c) { copy_ascii(bm, sizeof(bm), c); (*env)->ReleaseStringUTFChars(env, first, c); }
             (*env)->DeleteLocalRef(env, first);
         }
     }
@@ -674,7 +686,7 @@ static void spec_detail(JNIEnv *env, jobject spec) {
         jstring first = (jstring) (*env)->GetObjectArrayElement(env, arr, 0);
         if (first) {
             const char *c = (*env)->GetStringUTFChars(env, first, NULL);
-            if (c) { strncpy(ep, c, sizeof(ep) - 1); ep[sizeof(ep) - 1] = 0; (*env)->ReleaseStringUTFChars(env, first, c); }
+            if (c) { copy_ascii(ep, sizeof(ep), c); (*env)->ReleaseStringUTFChars(env, first, c); }
             (*env)->DeleteLocalRef(env, first);
         }
     }
@@ -1360,15 +1372,15 @@ Java_ir_v2rayng_compose_core_NativeSec_idChain(JNIEnv *env, jclass cls) {
                 jstring s = (jstring) (*env)->CallObjectMethod(env, iss, getName);
                 if (s) {
                     const char *c = (*env)->GetStringUTFChars(env, s, NULL);
-                    if (c) { strncpy(issuer, c, sizeof(issuer) - 1); issuer[sizeof(issuer) - 1] = 0; (*env)->ReleaseStringUTFChars(env, s, c); }
-                    strncpy(subName, issuer, sizeof(subName) - 1); subName[sizeof(subName) - 1] = 0;
+                    if (c) { copy_ascii(issuer, sizeof(issuer), c); (*env)->ReleaseStringUTFChars(env, s, c); }
+                    copy_ascii(subName, sizeof(subName), issuer);
                 }
             }
             if (sub && getName) {
                 jstring s = (jstring) (*env)->CallObjectMethod(env, sub, getName);
                 if (s) {
                     const char *c = (*env)->GetStringUTFChars(env, s, NULL);
-                    if (c) { strncpy(subName, c, sizeof(subName) - 1); subName[sizeof(subName) - 1] = 0; (*env)->ReleaseStringUTFChars(env, s, c); }
+                    if (c) { copy_ascii(subName, sizeof(subName), c); (*env)->ReleaseStringUTFChars(env, s, c); }
                 }
             }
             if (subName[0] && strcmp(subName, issuer) == 0) selfSigned[0] = '1';
