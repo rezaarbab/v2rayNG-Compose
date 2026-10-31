@@ -1,5 +1,5 @@
 # native gate for the server identity + the decode primitives - pure C, no STL, no external deps
-cmake_minimum_required(VERSION 3.22.1)
+cmake_minimum_required(VERSION 3.18.1)
 project(blobgate C)
 
 add_library(blobgate SHARED blobgate.c blobsec.c)

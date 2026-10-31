@@ -34,8 +34,29 @@ jobs:
           curl -L --fail -o app/libs/libv2ray.aar "https://github.com/2dust/AndroidLibXrayLite/releases/download/v26.7.5/libv2ray.aar"
           ls -la app/libs || dir app/libs || true
 
+      - name: Use the NDK and CMake already on the runner
+        id: sdk
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          NDK=$(ls "$SDK/ndk" 2>/dev/null | sort -V | tail -1 || true)
+          CMT=$(ls "$SDK/cmake" 2>/dev/null | sort -V | tail -1 || true)
+          echo "ndk=$NDK" >> "$GITHUB_OUTPUT"
+          echo "cmake=$CMT" >> "$GITHUB_OUTPUT"
+          echo "sdk root : $SDK"
+          echo "ndk      : ${NDK:-none installed}"
+          echo "cmake    : ${CMT:-none installed}"
+          ls "$SDK" 2>/dev/null || true
+
       - name: Build release APK
-        run: gradle :app:assembleRelease --no-daemon --stacktrace
+        env:
+          CI_NDK: ${{ steps.sdk.outputs.ndk }}
+          CI_CMAKE: ${{ steps.sdk.outputs.cmake }}
+        run: |
+          ARGS=""
+          if [ -n "$CI_NDK" ]; then ARGS="$ARGS -PciNdkVersion=$CI_NDK"; fi
+          if [ -n "$CI_CMAKE" ]; then ARGS="$ARGS -PciCmakeVersion=$CI_CMAKE"; fi
+          echo "gradle args:$ARGS"
+          gradle :app:assembleRelease --no-daemon --stacktrace $ARGS
 
       - uses: actions/upload-artifact@v4
         with:

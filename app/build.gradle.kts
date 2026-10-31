@@ -8,6 +8,14 @@ android {
     namespace = "ir.v2rayng.compose"
     compileSdk = 35
 
+    // The NDK and CMake versions come from whatever the build machine already has installed
+    // (see the "Use the NDK and CMake already on the runner" step). Pinning AGP's own default
+    // instead made CI try to download ndk;27.0.12077973, and that download failed on a corrupt
+    // archive - a build that dies on a mirror, not on the code.
+    val ciNdk = providers.gradleProperty("ciNdkVersion").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    val ciCmake = providers.gradleProperty("ciCmakeVersion").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    if (ciNdk != null) ndkVersion = ciNdk
+
     defaultConfig {
         applicationId = "ir.blob.vpn"
         minSdk = 26
@@ -26,7 +34,7 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+            if (ciCmake != null) version = ciCmake
         }
     }
 
