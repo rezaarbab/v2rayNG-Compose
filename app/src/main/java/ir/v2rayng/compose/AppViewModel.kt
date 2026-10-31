@@ -168,6 +168,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             val s = store.load()
             settingsLoaded = true
+            // the list lives in the library between syncs; take it back before anything reads it
+            try {
+                if (ir.v2rayng.compose.core.NativeSec.payloadRows() == 0) {
+                    val sealed = ir.v2rayng.compose.core.sec.SecurePrefs.get("srvrows")
+                    if (!sealed.isNullOrEmpty()) ir.v2rayng.compose.core.NativeSec.payloadRestoreRows(sealed)
+                }
+            } catch (_: Throwable) {
+            }
             // palette, stickers and wallpaper are what the eye notices, so they are applied before
             // the server list is unsealed; anything the user changed in the meantime is replayed on
             // top of the stored values instead of replacing them

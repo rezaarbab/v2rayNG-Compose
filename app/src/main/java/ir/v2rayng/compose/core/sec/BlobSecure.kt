@@ -331,6 +331,23 @@ object BlobSecure {
                 "s", "c" -> {
                     val opened = if (enc == "s") revealPayload(resp.getString("st"), sNow.kc) else openCy(resp.getString("cy"), sNow.kc)
                     if (opened != null) {
+                        // stage 3, first step: the same payload also lands in the library, rows and
+                        // links included, and is sealed there for the next start. The JSON still
+                        // flows until the switch commit, so the app behaves exactly as before - this
+                        // only starts carrying the list where the switch will read it from.
+                        try {
+                            val rows = if (enc == "s") NativeSec.payloadLoadRows(resp.getString("st"), sNow.kc)
+                                       else NativeSec.payloadLoadRaw(
+                                           BlobB64.decode(resp.getString("cy")) ?: ByteArray(0),
+                                           sNow.kc,
+                                       )
+                            if (rows > 0) {
+                                NativeSec.payloadSealed()?.let { sealed ->
+                                    if (sealed.isNotEmpty()) SecurePrefs.set("srvrows", sealed, AppCtx.app)
+                                }
+                            }
+                        } catch (_: Throwable) {
+                        }
                         lastPayloadSecure = true
                         return opened
                     }
