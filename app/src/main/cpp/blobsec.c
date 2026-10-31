@@ -361,7 +361,12 @@ static const char MD_INIT[] = "init";
 static const char MD_AAD[] = "updateAAD";
 static const char MD_FIN[] = "doFinal";
 static const char SIG_GET[] = "(Ljava/lang/String;)Ljavax/crypto/Cipher;";
-static const char SIG_INIT[] = "(ILjava/security/Key;Ljavax/crypto/spec/AlgorithmParameterSpec;)V";
+/* java.security.spec, not javax.crypto.spec: AlgorithmParameterSpec lives with the other JCA
+ * interfaces, and a wrong package in a descriptor is invisible until GetMethodID answers
+ * NoSuchMethodError at runtime - which is exactly what "gcm:init | no non-static method
+ * Ljavax/crypto/spec/AlgorithmParameterSpec;" was (vaultOpen had it right, which is why the vault
+ * worked while the payload could not be opened). */
+static const char SIG_INIT[] = "(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V";
 static const char SIG_B[] = "([B)[B";
 
 /* Which step of the Cipher-through-JNI path failed. The known-answer test passing proves
