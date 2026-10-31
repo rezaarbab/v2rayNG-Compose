@@ -244,7 +244,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         var lastRealState = ir.v2rayng.compose.core.RealState.IDLE
         viewModelScope.launch {
             ir.v2rayng.compose.core.XrayBridge.status.collect { st ->
-                val real = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }?.link != null ||
+                val real = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }?.let { dialLinkOf(it) } != null ||
                     _state.value.selectedId.startsWith("rv-")
                 if (real || st.state != ir.v2rayng.compose.core.RealState.IDLE) {
                     if (st.state != lastRealState) {
@@ -329,7 +329,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                         }
                         if (st.state == ir.v2rayng.compose.core.RealState.CONNECTED && _settings.value.autoFlag) {
                             val sel = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
-                            if (sel?.link != null) {
+                            if (sel?.let { dialLinkOf(it) } != null) {
                                 viewModelScope.launch {
                                     var res: IpProbe? = null
                                     var attempt = 0
@@ -1147,6 +1147,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         return if (addr.isEmpty() || port <= 0) null else addr to port
     }
 
+    /** the link text for a dial, from the library when the list no longer carries one */
+    private fun dialLinkOf(p: ServerProfile): String? =
+        p.link ?: addrPortOf(p.host)?.let { ir.v2rayng.compose.core.NativeSec.linkAtHost(it.first, it.second) }
+
     private fun doConnect(target: ServerProfile) {
         val dialLink = target.link
             ?: addrPortOf(target.host)?.let { ir.v2rayng.compose.core.NativeSec.linkAtHost(it.first, it.second) }
@@ -1178,7 +1182,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         val target = _state.value.selected
         connectJob?.cancel()
         watchdogJob?.cancel()
-        if (target.link != null) {
+        // the tunnel is stopped by what the app knows, not by whether this profile carries a link
+        if (_state.value.vpnState != VpnState.IDLE) {
             ir.v2rayng.compose.core.XrayVpnService.stop(appCtx())
         }
         put { s ->
@@ -1423,7 +1428,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private suspend fun ipCountryNow(): IpProbe? {
         val throughTunnel = _state.value.vpnState == VpnState.CONNECTED &&
-            _state.value.servers.firstOrNull { it.id == _state.value.selectedId }?.link != null
+            _state.value.servers.firstOrNull { it.id == _state.value.selectedId }?.let { dialLinkOf(it) } != null
         return withContext(Dispatchers.IO) {
             var cfIp: String? = null
             var cfCode: String? = null
@@ -1568,13 +1573,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         log("INFO", S.LOG_SELECTED.format(name))
         if (tunnelUp) {
             // hot swap: drop the old tunnel and bring the newly selected one up
-            val sel = _state.value.servers.firstOrNull { it.id == id }
-            if (sel?.link != null) {
-                val parsed = ir.v2rayng.compose.core.parseProxyLink(sel.link)
+            val sel = _state.value.servers.firstOrNull { it.id == id } ?: return
+            val swapLink = dialLinkOf(sel)
+            if (swapLink != null) {
+                val parsed = ir.v2rayng.compose.core.parseProxyLink(swapLink)
                 if (parsed != null) {
                     log("INFO", S.LOG_CONNECTING.format(sel.name))
                     // the running service's connect intent swaps the core internally (700ms settle)
-                    ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed.copy(name = sel.name.ifBlank { parsed.name }), sel.link)
+                    ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed.copy(name = sel.name.ifBlank { parsed.name }), swapLink)
                 } else {
                     put { s -> s.copy(vpnState = VpnState.BROKEN) }
                 }
