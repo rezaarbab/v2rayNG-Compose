@@ -1507,31 +1507,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
     }
 
-    fun addServerFromLink(raw: String) {
-        val link = ir.v2rayng.compose.core.parseProxyLink(raw)
-        if (link == null) {
-            log("ERROR", "Link not recognized (vless / vmess / trojan / ss)")
-            return
-        }
-        serversTouched = true
-        // server names are admin-generated - the name inside the config (#NAME) is never used
-        val shownName = "srv-${_state.value.servers.size + 1}"
-        val newId = "rv-${_state.value.servers.size}-${Random.nextInt(999)}"
-        put { s ->
-            s.copy(
-                servers = s.servers + ServerProfile(
-                    id = newId,
-                    name = shownName,
-                    host = "${link.address}:${link.port}",
-                    stickerIndex = s.servers.size,
-                    link = raw.trim(),
-                ),
-            )
-        }
-        log("INFO", S.LOG_ADDED.format(shownName))
-        persistServers()
-    }
-
     fun resetTraffic() {
         trafficBaseUp = 0L
         trafficBaseDown = 0L
@@ -1641,21 +1616,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         } catch (_: Exception) {
             false
         }
-    }
-
-    fun addServer(name: String, host: String) {
-        val idx = _state.value.servers.size
-        put { s ->
-            s.copy(
-                servers = s.servers + ServerProfile(
-                    id = "srv-${idx}-${Random.nextInt(999)}",
-                    name = name,
-                    host = host,
-                    stickerIndex = idx,
-                )
-            )
-        }
-        log("INFO", S.LOG_ADDED.format(name))
     }
 
     fun clearLogs() {

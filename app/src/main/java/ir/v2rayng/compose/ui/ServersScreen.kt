@@ -19,7 +19,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
@@ -60,7 +59,6 @@ import ir.v2rayng.compose.stickers.V2Stickers
 @Composable
 fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var editSrv by remember { mutableStateOf<String?>(null) }
-    var showImport by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var catSel by remember { mutableStateOf("") } // empty string means All
     var delSrv by remember { mutableStateOf<ServerProfile?>(null) }
@@ -89,7 +87,6 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            TipIconButton(Icons.Filled.Add, S.IMPORT_TITLE) { showImport = true }
             TipIconButton(Icons.Filled.Delete, S.RESET_TRAFFIC, tint = MaterialTheme.colorScheme.onSurfaceVariant) { vm.resetAllServerTraffic() }
             TipIconButton(Icons.Filled.Refresh, S.REMOTE_SYNC) { vm.syncNow() }
             TipIconButton(Icons.Filled.Send, S.PING_TEST) { vm.pingAll() }
@@ -160,9 +157,6 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     editSrv?.let { id ->
         StickerEditorDialog("srv:$id", settings, vm) { editSrv = null }
     }
-    if (showImport) {
-        ImportLinkDialog(vm) { showImport = false }
-    }
 
     delSrv?.let { srv ->
         AlertDialog(
@@ -189,35 +183,6 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             dismissButton = { TextButton(onClick = { askDead = false }) { Text(S.CANCEL) } },
         )
     }
-}
-
-@Composable
-private fun ImportLinkDialog(vm: AppViewModel, onDismiss: () -> Unit) {
-    var text by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(S.IMPORT_TITLE) },
-        text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                singleLine = true,
-                label = { Text(S.IMPORT_HINT) },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    if (text.isNotBlank()) {
-                        vm.addServerFromLink(text)
-                    }
-                    onDismiss()
-                },
-            ) { Text(S.ADD) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(S.CANCEL) } },
-    )
 }
 
 @Composable
