@@ -1,8 +1,11 @@
 /* blobsec - the decode primitives, in C.
  *
- * SHA-256, HMAC-SHA256, base64url and the zlib envelope opening live here; the Kotlin side keeps
- * no copy of them. AES-256-GCM is deliberately NOT here yet - see the note at the bottom and the
- * self-test below, which must pass on the device before any of this is trusted.
+ * SHA-256, HMAC-SHA256, base64url and the zlib envelope opening are implemented here; the Kotlin
+ * side keeps no copy of them. AES-256-GCM and the keystore are NOT re-implemented: this library
+ * drives the platform's own Cipher, KeyStore and Signature through JNI, because on a machine with
+ * no C compiler and no local builds a hand-typed AES table is a bug nobody can find before it
+ * ships. Either way no Java or Kotlin source contains a cipher, a key spec or an alias.
+ * The self-test below must pass on the device before any of this is trusted.
  */
 
 #include <jni.h>
@@ -968,28 +971,34 @@ static jobject priv_cached(JNIEnv *env) {
     return cached_priv_valid ? cached_priv : NULL;
 }
 
-/** 16 bytes from the platform CSPRNG for the attestation challenge. It proves liveness and is not
- *  secret material, but Kotlin has no SecureRandom any more, so the nonce is drawn here. */
-static jbyteArray att_challenge(JNIEnv *env) {
+/** n bytes from the platform's own CSPRNG. Kotlin has no SecureRandom any more, so every random
+ *  value the protocol needs - the attestation challenge, the one-shot token nonce - is drawn here.
+ *  A new instance per call, the way java.security.SecureRandom was constructed before. */
+static jbyteArray rnd_bytes(JNIEnv *env, jsize n) {
+    if (n <= 0 || n > 4096) { set_step("rnd:count"); return NULL; }
     jclass sr = need_class(env, SRND_CLS);
-    if (!sr) { set_step("id:rng-class"); return NULL; }
+    if (!sr) { set_step("rnd:class"); return NULL; }
     jmethodID srNew = (*env)->GetMethodID(env, sr, "<init>", "()V");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jmethodID next = (*env)->GetMethodID(env, sr, "nextBytes", "([B)V");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    jbyteArray buf = (*env)->NewByteArray(env, 16);
+    jbyteArray buf = (*env)->NewByteArray(env, n);
     jobject rnd = srNew ? (*env)->NewObject(env, sr, srNew) : NULL;
-    if (step_failed(env, "id:rng-ctor")) rnd = NULL;
+    if (step_failed(env, "rnd:ctor")) rnd = NULL;
     if (rnd && buf && next) {
         (*env)->CallVoidMethod(env, rnd, next, buf);
-        if (step_failed(env, "id:rng-nextBytes")) { (*env)->DeleteLocalRef(env, buf); buf = NULL; }
+        if (step_failed(env, "rnd:nextBytes")) { (*env)->DeleteLocalRef(env, buf); buf = NULL; }
     } else {
-        set_step("id:rng-methods");
+        set_step("rnd:methods");
     }
     (*env)->DeleteLocalRef(env, sr);
     if (rnd) (*env)->DeleteLocalRef(env, rnd);
+    if (buf) set_step("rnd:ok");
     return buf;
 }
+
+/** the attestation challenge is 16 of those bytes; it proves liveness and is not secret material */
+static jbyteArray att_challenge(JNIEnv *env) { return rnd_bytes(env, 16); }
 
 /** the builder chain, with or without an attestation challenge */
 static jobject build_spec(JNIEnv *env, jbyteArray challenge) {
@@ -1287,3 +1296,79 @@ Java_ir_v2rayng_compose_core_NativeSec_idChain(JNIEnv *env, jclass cls) {
 /* AES-256-GCM is NOT hand-written here. See the note above: the platform primitive is driven from
  * C so that no Java/Kotlin source holds the crypto, without betting every handset's sync on an
  * AES table nobody was able to compile and test. */
+
+
+/* ---------------- the nonce source and the verdict, for the Kotlin side ----------------
+ * BlobSecure used to construct KeyFactory/X509EncodedKeySpec/Signature itself to check that the
+ * public key it exports really is the pair that signed. The answer is one verdict, so the key
+ * bytes never have to be readable by anything written in Kotlin again.
+ */
+
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_rndBytes(JNIEnv *env, jclass cls, jint count) {
+    return rnd_bytes(env, (jsize) count);
+}
+
+/** 1 = this signature opens under this SPKI, 0 = it does not, -1 = the call could not be made
+ *  (which step is in err(), and a -1 is a different bug from a 0) */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_verify(JNIEnv *env, jclass cls, jbyteArray jspki, jbyteArray jmsg, jbyteArray jsig) {
+    if (jspki == NULL || jmsg == NULL || jsig == NULL) { set_step("ver:null-args"); return -1; }
+    set_step("ver:entered");
+    jclass kfCls = need_class(env, "java/security/KeyFactory");
+    jclass specCls = need_class(env, "java/security/spec/X509EncodedKeySpec");
+    jclass sigCls = need_class(env, "java/security/Signature");
+    if (!kfCls || !specCls || !sigCls) { set_step("ver:classes"); return -1; }
+    jmethodID kfGet = (*env)->GetStaticMethodID(env, kfCls, MD_GET, "(Ljava/lang/String;)Ljava/security/KeyFactory;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID genPub = (*env)->GetMethodID(env, kfCls, "generatePublic", "(Ljava/security/spec/KeySpec;)Ljava/security/PublicKey;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID specCtor = (*env)->GetMethodID(env, specCls, "<init>", "([B)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID sigGet = (*env)->GetStaticMethodID(env, sigCls, MD_GET, "(Ljava/lang/String;)Ljava/security/Signature;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID initVer = (*env)->GetMethodID(env, sigCls, "initVerify", "(Ljava/security/PublicKey;)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID upd = (*env)->GetMethodID(env, sigCls, "update", "([BII)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID ver = (*env)->GetMethodID(env, sigCls, "verify", "([B)Z");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (!kfGet || !genPub || !specCtor || !sigGet || !initVer || !upd || !ver) { set_step("ver:method-ids"); return -1; }
+
+    jstring ecName = (*env)->NewStringUTF(env, ID_EC);
+    jstring algo = (*env)->NewStringUTF(env, "SHA256withECDSA");
+    jint verdict = -1;
+    jobject kf = ecName ? (*env)->CallStaticObjectMethod(env, kfCls, kfGet, ecName) : NULL;
+    if (step_failed(env, "ver:keyfactory")) kf = NULL;
+    jobject spec = kf && specCtor ? (*env)->NewObject(env, specCls, specCtor, jspki) : NULL;
+    if (step_failed(env, "ver:spec-ctor")) spec = NULL;
+    jobject pub = (kf && spec) ? (*env)->CallObjectMethod(env, kf, genPub, spec) : NULL;
+    if (step_failed(env, "ver:generatePublic")) pub = NULL;
+    if (pub == NULL) { set_step("ver:no-public-key"); return -1; }
+    jobject s = algo ? (*env)->CallStaticObjectMethod(env, sigCls, sigGet, algo) : NULL;
+    if (step_failed(env, "ver:signature")) s = NULL;
+    if (s) {
+        (*env)->CallVoidMethod(env, s, initVer, pub);
+        if (!step_failed(env, "ver:initVerify")) {
+            jsize n = (*env)->GetArrayLength(env, jmsg);
+            (*env)->CallVoidMethod(env, s, upd, jmsg, 0, n);
+            if (!step_failed(env, "ver:update")) {
+                jboolean v = (*env)->CallBooleanMethod(env, s, ver, jsig);
+                if (step_failed(env, "ver:verify")) verdict = -1;
+                else verdict = v ? 1 : 0;
+            }
+        }
+    }
+    if (verdict == 1) set_step("ver:ok");
+    else if (verdict == 0) set_step("ver:rejected");
+    (*env)->DeleteLocalRef(env, kfCls);
+    (*env)->DeleteLocalRef(env, specCls);
+    (*env)->DeleteLocalRef(env, sigCls);
+    if (ecName) (*env)->DeleteLocalRef(env, ecName);
+    if (algo) (*env)->DeleteLocalRef(env, algo);
+    if (kf) (*env)->DeleteLocalRef(env, kf);
+    if (spec) (*env)->DeleteLocalRef(env, spec);
+    if (pub) (*env)->DeleteLocalRef(env, pub);
+    if (s) (*env)->DeleteLocalRef(env, s);
+    return verdict;
+}

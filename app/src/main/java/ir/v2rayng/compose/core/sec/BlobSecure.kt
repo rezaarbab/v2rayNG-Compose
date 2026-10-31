@@ -2,6 +2,7 @@ package ir.v2rayng.compose.core.sec
 
 import ir.v2rayng.compose.AppCtx
 import ir.v2rayng.compose.core.NativeKit
+import ir.v2rayng.compose.core.NativeSec
 import org.json.JSONObject
 
 /**
@@ -108,11 +109,10 @@ object BlobSecure {
     private fun tsBytes(ts: Int): ByteArray =
         byteArrayOf((ts shr 24).toByte(), (ts shr 16).toByte(), (ts shr 8).toByte(), ts.toByte())
 
-    private fun newNonce(): ByteArray {
-        val n = ByteArray(8)
-        java.security.SecureRandom().nextBytes(n)
-        return n
-    }
+    /** 8 random bytes from the library's CSPRNG. If it ever answers nothing, the nonce is zeros -
+     *  and a repeated nonce for the same second makes the worker's own replay guard refuse the
+     *  token, so the worst case is a refused request, not a reused keystream. */
+    private fun newNonce(): ByteArray = NativeSec.random(8) ?: ByteArray(8)
 
     /** the exact bytes the worker recomputes its mac / verifies its signature over */
     private fun tokMsg(device: String, ts: ByteArray, nonce: ByteArray): ByteArray =
@@ -142,17 +142,13 @@ object BlobSecure {
         val pubDer = BlobB64.decode(BlobIdentity.publicKeyB64() ?: return null) ?: return null
         // verify our own signature with the bytes we export as the public key: REJECTED here means
         // this device's exported key is not the pair that signed (keystore/format), while ok here
-        // plus a refusal from the worker means the two sides read the encoding differently
-        val self: String = try {
-            val pk = java.security.KeyFactory.getInstance("EC").generatePublic(
-                java.security.spec.X509EncodedKeySpec(pubDer),
-            )
-            val v = java.security.Signature.getInstance("SHA256withECDSA")
-            v.initVerify(pk)
-            v.update(msg)
-            if (v.verify(sig)) "self-verify ok" else "self-verify REJECTED"
-        } catch (e: Exception) {
-            "self-verify error " + e.javaClass.simpleName
+        // plus a refusal from the worker means the two sides read the encoding differently.
+        // The KeyFactory/Signature calls live in blobsec.c; this is only the verdict.
+        val v = NativeSec.verifySpki(pubDer, msg, sig)
+        val self = when (v) {
+            1 -> "self-verify ok"
+            0 -> "self-verify REJECTED"
+            else -> "self-verify error (step=" + NativeSec.errInfo() + ")"
         }
         val md = hex3(msg)
         lastProofNote = self + ", fp " + BlobIdentity.fingerprint() + ", msg " + md + " (" + msg.size + "B), pub " +
@@ -163,11 +159,10 @@ object BlobSecure {
 
     /** First three bytes of the SHA-256 of these bytes, hex - enough to prove two blobs are the
      *  same without putting the key material in a log. */
-    private fun hex3(b: ByteArray): String = try {
-        java.security.MessageDigest.getInstance("SHA-256").digest(b).take(3)
-            .joinToString("") { String.format("%02x", it) }
-    } catch (_: Exception) {
-        "?"
+    private fun hex3(b: ByteArray): String {
+        val d = NativeSec.sha256(b) ?: return "?"
+        if (d.size < 3) return "?"
+        return d.take(3).joinToString("") { String.format("%02x", it) }
     }
 
     /** the key endpoint - get fresh 60-minute keys from the worker, persist via BlobVault.

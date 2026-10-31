@@ -267,7 +267,8 @@ object Remote {
                 pm.getPackageInfo(pkg, android.content.pm.PackageManager.GET_SIGNATURES).signatures
             }
         val raw = sigs?.firstOrNull()?.toByteArray() ?: return ""
-        val d = java.security.MessageDigest.getInstance("SHA-256").digest(raw)
+        // the digest is the library's SHA-256, so no java.security call is left in this file either
+        val d = ir.v2rayng.compose.core.NativeSec.sha256(raw) ?: return ""
         StringBuilder().also { sb -> d.take(8).forEach { b -> sb.append(String.format("%02x", b)) } }.toString()
     } catch (_: Exception) {
         ""

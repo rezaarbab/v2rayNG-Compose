@@ -228,6 +228,30 @@ public final class NativeSec {
         }
     }
 
+    private static native byte[] rndBytes(int count);
+
+    private static native int verify(byte[] spki, byte[] msg, byte[] sig);
+
+    /** n bytes from the platform CSPRNG - the token nonce and the attestation challenge */
+    public static byte[] random(int count) {
+        if (!READY || count <= 0) return null;
+        try {
+            return rndBytes(count);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 1 = the signature opens under this SPKI, 0 = it does not, -1 = the call could not be made */
+    public static int verifySpki(byte[] spki, byte[] msg, byte[] sig) {
+        if (!READY || spki == null || msg == null || sig == null) return -1;
+        try {
+            return verify(spki, msg, sig);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
     public static String note() {
         return READY ? "sec ok" : "sec library failed its self test";
     }
