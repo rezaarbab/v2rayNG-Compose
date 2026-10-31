@@ -437,69 +437,6 @@ private fun outboundOf(link: ProxyLink): JSONObject = when (link.kind) {
         )
 }
 
-/** Lean config used only for delay measurement: no inbounds, no stats, nothing to bind. */
-fun buildPingConfig(link: ProxyLink): String =
-    JSONObject()
-        .put("log", JSONObject().put("loglevel", "warning"))
-        .put(
-            "outbounds",
-            JSONArray()
-                .put(outboundOf(link))
-                .put(JSONObject().put("tag", "direct").put("protocol", "freedom")),
-        )
-        .put(
-            "routing",
-            JSONObject()
-                .put("domainStrategy", "AsIs")
-                .put(
-                    "rules",
-                    JSONArray().put(
-                        JSONObject()
-                            .put("type", "field")
-                            .put("outboundTag", "proxy")
-                            .put("network", "tcp,udp"),
-                    ),
-                ),
-        )
-        .toString()
-
-/** Short-lived core config exposing one server through a local socks port - used to detect the exit country. */
-fun buildFlagProbeConfig(link: ProxyLink, socksPort: Int): String =
-    JSONObject()
-        .put("log", JSONObject().put("loglevel", "warning"))
-        .put(
-            "inbounds",
-            JSONArray().put(
-                JSONObject()
-                    .put("tag", "socks-in")
-                    .put("protocol", "socks")
-                    .put("listen", "127.0.0.1")
-                    .put("port", socksPort)
-                    .put("settings", JSONObject().put("udp", false)),
-            ),
-        )
-        .put(
-            "outbounds",
-            JSONArray()
-                .put(outboundOf(link))
-                .put(JSONObject().put("tag", "direct").put("protocol", "freedom")),
-        )
-        .put(
-            "routing",
-            JSONObject()
-                .put("domainStrategy", "AsIs")
-                .put(
-                    "rules",
-                    JSONArray().put(
-                        JSONObject()
-                            .put("type", "field")
-                            .put("outboundTag", "proxy")
-                            .put("network", "tcp,udp"),
-                    ),
-                ),
-        )
-        .toString()
-
 private fun streamOf(link: ProxyLink): JSONObject {
     val stream = JSONObject()
         .put("network", link.type)

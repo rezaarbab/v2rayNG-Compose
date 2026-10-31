@@ -1303,24 +1303,17 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 for (srv in targets) {
                     launch(Dispatchers.IO) {
                         sem.withPermit {
-                            val pingLink = srv.link ?: addrPortOf(srv.host)?.let {
-                                ir.v2rayng.compose.core.NativeSec.linkAtHost(it.first, it.second)
-                            }
-                            val parsed = pingLink?.let { l -> try { ir.v2rayng.compose.core.parseProxyLink(l) } catch (_: Exception) { null } }
-                            val (ms, msErr) = when {
-                                parsed != null -> probePing(parsed, srv.name)
-                                pingLink != null -> {
-                                    null to "config"
-                                }
-                                else -> {
-                                    // nothing to measure: report that instead of inventing a latency
-                                    null to "no link"
-                                }
+                            val ap = addrPortOf(srv.host)
+                            val (ms, msErr) = if (ap != null) {
+                                probePing(ap.first, ap.second, srv.name)
+                            } else {
+                                // nothing to measure: report that instead of inventing a latency
+                                null to "no link"
                             }
                             put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms, pingErr = msErr) else it }) }
                             // country probe only for tunnels proven alive; broken ones get no flag
-                            if (doFlags && ms != null && msErr == null && parsed != null) {
-                                val code = probeFlag(parsed, 21000 + portSeq.getAndIncrement() % 60)
+                            if (doFlags && ms != null && msErr == null && ap != null) {
+                                val code = probeFlag(ap.first, ap.second, 21000 + portSeq.getAndIncrement() % 60)
                                 if (code != null) {
                                     put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(country = code) else it }) }
                                 }
@@ -1336,13 +1329,16 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      * https -> (plain http only when tls/anti-bot specifically died) -> tcp for one parsed server.
      * Returns (delay ms, short error) - error is null when the ping succeeded.
      */
-    private suspend fun probePing(l: ir.v2rayng.compose.core.ProxyLink, label: String = ""): Pair<Int?, String?> = withContext(Dispatchers.IO) {
+    private suspend fun probePing(addr: String, targetPort: Int, label: String = ""): Pair<Int?, String?> = withContext(Dispatchers.IO) {
         var ms: Int? = null
         var token = ""
         var detail = ""
         var via = "https"
         try {
-            // the config comes from the library when it knows this host; the Kotlin builder stays as
+            val pingCfg = ir.v2rayng.compose.core.NativeSec.coreConfig(
+                ir.v2rayng.compose.core.NativeSec.rowOfHost(addr, targetPort), 1, 0,
+            ) ?: return@withContext null to "config"
+            val d = libv2ray.Libv2ray.measureOutboundDelay(pingCfg, PING_URL_HTTPS)
             if (d >= 0) ms = d.toInt()
         } catch (e: Exception) {
             val raw = e.message ?: ""
@@ -1352,7 +1348,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         if (ms == null && token != "server down" && token != "refused") {
             // the server link is fine but https got killed at the tls/anti-bot layer - plain http still works
             try {
-                // the config comes from the library when it knows this host; the Kotlin builder stays as
+                val pingCfg = ir.v2rayng.compose.core.NativeSec.coreConfig(
+                    ir.v2rayng.compose.core.NativeSec.rowOfHost(addr, targetPort), 1, 0,
+                ) ?: return@withContext null to "config"
+                val d = libv2ray.Libv2ray.measureOutboundDelay(pingCfg, PING_URL_HTTP)
                 if (d >= 0) ms = d.toInt()
                 via = "http"
             } catch (e: Exception) {
@@ -1363,7 +1362,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             }
         }
         if (ms == null) {
-            val t = tcpPing(l.address, l.port)
+            val t = tcpPing(addr, targetPort)
             if (t != null) {
                 ms = t
                 via = "tcp"
@@ -1371,7 +1370,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 token = "tcp"
             }
         }
-        val who = label.ifBlank { l.name }.ifBlank { "${l.address}:${l.port}" }
+        val who = label.ifBlank { "$addr:$targetPort" }
         if (ms != null) {
             if (via != "https") log("INFO", "Ping $who: ${ms}ms ($via fallback)")
         } else {
@@ -1401,7 +1400,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     }
 
     /** Best-effort exit-country probe: short-lived core with a local socks port + cloudflare trace through the server. */
-    private fun probeFlag(l: ir.v2rayng.compose.core.ProxyLink, port: Int): String? {
+    private fun probeFlag(addr: String, targetPort: Int, socksPort: Int): String? {
         if (_state.value.vpnState == VpnState.CONNECTED || _state.value.vpnState == VpnState.CONNECTING) return null
         return try {
             val cb = object : libv2ray.CoreCallbackHandler {
@@ -1411,8 +1410,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             }
             val c = libv2ray.Libv2ray.newCoreController(cb)
             val flagCfg = ir.v2rayng.compose.core.NativeSec.coreConfig(
-                ir.v2rayng.compose.core.NativeSec.rowOfHost(l.address, l.port), 2, port,
-            ) ?: ir.v2rayng.compose.core.buildFlagProbeConfig(l, port)
+                ir.v2rayng.compose.core.NativeSec.rowOfHost(addr, targetPort), 2, socksPort,
+            ) ?: return null
             c.startLoop(flagCfg, 0)
             var code: String? = null
             try {
