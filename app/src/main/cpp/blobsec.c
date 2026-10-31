@@ -13,6 +13,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <zlib.h>
+#include <stdint.h>
+#include <time.h>
 
 /* ---------------- SHA-256 (FIPS 180-4) ---------------- */
 
@@ -1685,4 +1687,447 @@ Java_ir_v2rayng_compose_core_NativeSec_verify(JNIEnv *env, jclass cls, jbyteArra
     if (pub) (*env)->DeleteLocalRef(env, pub);
     if (s) (*env)->DeleteLocalRef(env, s);
     return verdict;
+}
+
+/* ---------------- the stego carrier, receiver side ----------------
+ * Bit-exact port of the Kotlin receiver that has been decoding this worker's carriers: slot
+ * building (morphology insertions, space insertions, homoglyph swaps), the keyed shuffle, the
+ * 16-bit magic / 32-bit length header and the bit stream. Nothing here is guessed: the port is
+ * compared against a JS transcription of the Kotlin over fuzz carriers (chkstego.js), because a
+ * hand-typed table or a wrong bit order would look exactly like "the server is broken".
+ *
+ * isLetter is the device's own Character.isLetter, memoised per UTF-16 unit - the worker's sender
+ * uses the narrower Arabic+ASCII rule on the pre-swap text, the receiver must accept the swap
+ * targets too, which is why the two definitions are deliberately different.
+ */
+
+#define ST_MAX_CIPHER 2000000
+#define ST_MAGIC 0xB10B
+#define ST_HEADER_BITS 56
+
+static unsigned char g_st_letter[65536];   /* 0 unknown, 1 letter, 2 not */
+
+static const jchar ST_TWIN_A[] = {
+    0x06CC, 0x06A9,                                     /* ی ک */
+    0x0061, 0x0041, 0x0063, 0x0043, 0x0065, 0x0045,     /* a A c C e E */
+    0x006F, 0x004F, 0x0070, 0x0050, 0x0078, 0x0058,     /* o O p P x X */
+    0x0079, 0x0059, 0x006B, 0x004B, 0x006D, 0x004D,     /* y Y k K m M */
+    0x006A, 0x004A, 0x0042                              /* j J B */
+};
+static const jchar ST_TWIN_B[] = {
+    0x064A, 0x0643,                                     /* ي ك */
+    0x0430, 0x0410, 0x0441, 0x0421, 0x0435, 0x0415,     /* а А с С е Е */
+    0x043E, 0x041E, 0x0440, 0x0420, 0x0445, 0x0425,     /* о О р Р х Х */
+    0x0443, 0x0423, 0x043A, 0x041A, 0x043C, 0x041C,     /* у У к К м М */
+    0x0458, 0x0408, 0x0412                              /* ј Ј В */
+};
+#define ST_PAIRS ((int) (sizeof(ST_TWIN_A) / sizeof(ST_TWIN_A[0])))
+
+static int st_is_primary(jchar c) {
+    for (int i = 0; i < ST_PAIRS; i++) if (ST_TWIN_A[i] == c) return 1;
+    return 0;
+}
+
+static jchar st_twin(jchar c) {
+    for (int i = 0; i < ST_PAIRS; i++) {
+        if (ST_TWIN_A[i] == c) return ST_TWIN_B[i];
+        if (ST_TWIN_B[i] == c) return ST_TWIN_A[i];
+    }
+    return 0;
+}
+
+static jchar st_primary_of(jchar c) {
+    if (st_is_primary(c)) return c;
+    jchar t = st_twin(c);
+    return t != 0 ? t : c;
+}
+
+static int st_is_glue_char(jchar c) {
+    return c == 0x200B || c == 0x200C || c == 0x200D || c == 0x2060 || c == 0xFEFF || c == 0x00AD;
+}
+
+static int st_is_letter(JNIEnv *env, jchar c, jclass chCls, jmethodID chMid) {
+    if (c >= 0x0600 && c <= 0x06FF) return 1;
+    if (g_st_letter[c] == 0) {
+        jboolean v = (chCls && chMid) ? (*env)->CallStaticBooleanMethod(env, chCls, chMid, (jint) c) : JNI_FALSE;
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        g_st_letter[c] = v ? 1 : 2;
+    }
+    return g_st_letter[c] == 1;
+}
+
+static int st_is_glue(JNIEnv *env, jchar c, jclass chCls, jmethodID chMid) {
+    return !st_is_letter(env, c, chCls, chMid) && st_is_glue_char(c);
+}
+
+static int st_family(jchar c) {
+    if ((c >= 0x0600 && c <= 0x06FF) || (c >= 0x0750 && c <= 0x077F) || (c >= 0x08A0 && c <= 0x08FF) ||
+        (c >= 0xFB50 && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF)) return 1;
+    if ((c >= 0x0400 && c <= 0x052F) || (c >= 0x0041 && c <= 0x005A) || (c >= 0x0061 && c <= 0x007A)) return 2;
+    if ((c >= 0x0370 && c <= 0x03FF) || (c >= 0x1F00 && c <= 0x1FFF)) return 3;
+    if ((c >= 0x3040 && c <= 0x30FF) || (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0xAC00 && c <= 0xD7AF)) return 4;
+    return 0;
+}
+
+typedef struct {
+    int swap;
+    int at;
+    int prev;
+    jchar ch;
+    jchar twin;
+} st_slot;
+
+/** suffix/prefix rule of the slot builder: 0 = no morphology slot in this word */
+static int st_morph_index(const jchar *w, int wlen, int k, int end) {
+    /* هایی */ 
+    if (wlen >= 8 && wlen >= 4 && w[wlen - 4] == 0x0647 && w[wlen - 3] == 0x0627 && w[wlen - 2] == 0x06CC && w[wlen - 1] == 0x06CC) return end - 3;
+    /* ترین */
+    if (wlen >= 8 && wlen >= 4 && w[wlen - 4] == 0x062A && w[wlen - 3] == 0x0631 && w[wlen - 2] == 0x06CC && w[wlen - 1] == 0x0646) return end - 3;
+    /* های */
+    if (wlen >= 7 && wlen >= 3 && w[wlen - 3] == 0x0647 && w[wlen - 2] == 0x0627 && w[wlen - 1] == 0x06CC) return end - 2;
+    /* ها */
+    if (wlen >= 5 && wlen >= 2 && w[wlen - 2] == 0x0647 && w[wlen - 1] == 0x0627) return end - 1;
+    /* تر */
+    if (wlen >= 6 && wlen >= 2 && w[wlen - 2] == 0x062A && w[wlen - 1] == 0x0631) return end - 1;
+    /* نمی */
+    if (wlen >= 6 && wlen >= 3 && w[0] == 0x0646 && w[1] == 0x0645 && w[2] == 0x06CC) return k + 3;
+    /* می */
+    if (wlen >= 5 && wlen >= 2 && w[0] == 0x0645 && w[1] == 0x06CC) return k + 2;
+    return -1;
+}
+
+/** the robust slot list: morphology, then space insertions, then swaps (the only mode reveal uses) */
+static int st_build_slots(JNIEnv *env, const jchar *s, int slen,
+                          jclass chCls, jmethodID chMid, st_slot **out) {
+    *out = NULL;
+    int n = 0;
+    for (int i = 0; i < slen; i++) if (st_is_letter(env, s[i], chCls, chMid)) n++;
+    if (n < 2) return 0;
+    jchar *lch = (jchar *) malloc(sizeof(jchar) * (size_t) n);
+    int *lidx = (int *) malloc(sizeof(int) * (size_t) n);
+    unsigned char *same = (unsigned char *) calloc((size_t) n, 1);
+    unsigned char *morphK = (unsigned char *) calloc((size_t) n, 1);
+    jchar *w = (jchar *) malloc(sizeof(jchar) * (size_t) (n + 1));
+    st_slot *slots = (st_slot *) malloc(sizeof(st_slot) * (size_t) (3 * n + 8));
+    if (!lch || !lidx || !same || !morphK || !w || !slots) {
+        free(lch); free(lidx); free(same); free(morphK); free(w); free(slots);
+        set_step("stego:alloc");
+        return -1;
+    }
+    int t = 0;
+    for (int i = 0; i < slen; i++) {
+        if (st_is_letter(env, s[i], chCls, chMid)) { lch[t] = s[i]; lidx[t] = i; t++; }
+    }
+    for (int j = 0; j < n - 1; j++) {
+        int cont = 1;
+        for (int u = lidx[j] + 1; u < lidx[j + 1]; u++) {
+            if (!st_is_glue(env, s[u], chCls, chMid)) { cont = 0; break; }
+        }
+        same[j] = (unsigned char) cont;
+    }
+    int count = 0;
+    int k = 0;
+    while (k < n) {
+        int end = k;
+        while (end + 1 < n && same[end]) end++;
+        int wlen = 0;
+        for (int u = k; u <= end; u++) w[wlen++] = st_primary_of(lch[u]);
+        int slotK = st_morph_index(w, wlen, k, end);
+        if (slotK > 0 && slotK > k && slotK <= end) {
+            morphK[slotK] = 1;
+            slots[count].swap = 0;
+            slots[count].at = lidx[slotK];
+            slots[count].prev = lidx[slotK - 1];
+            slots[count].ch = 0x200C;      /* ZWNJ */
+            slots[count].twin = 0;
+            count++;
+        }
+        k = end + 1;
+    }
+    for (int j = 0; j < n - 1; j++) {
+        int target = j + 1;
+        if (morphK[target]) continue;
+        int spaceLike = 1;
+        for (int u = lidx[j] + 1; u < lidx[target]; u++) {
+            if (s[u] != ' ' && !st_is_glue(env, s[u], chCls, chMid)) { spaceLike = 0; break; }
+        }
+        if (spaceLike && lidx[target] > lidx[j] + 1) {
+            slots[count].swap = 0;
+            slots[count].at = lidx[target];
+            slots[count].prev = lidx[j];
+            slots[count].ch = ' ';
+            slots[count].twin = 0;
+            count++;
+        }
+    }
+    for (int j = 0; j < n; j++) {
+        jchar tw = st_twin(lch[j]);
+        if (tw != 0) {
+            slots[count].swap = 1;
+            slots[count].at = lidx[j];
+            slots[count].prev = 0;
+            slots[count].ch = 0;
+            slots[count].twin = tw;
+            count++;
+        }
+    }
+    free(lch); free(lidx); free(same); free(morphK); free(w);
+    *out = slots;
+    return count;
+}
+
+static int st_eval(const jchar *s, int slen, const st_slot *sl) {
+    if (sl->swap) return sl->at >= 0 && sl->at < slen && !st_is_primary(s[sl->at]);
+    if (sl->prev < 0 || sl->at >= slen || sl->at <= sl->prev) return 0;
+    if (sl->ch == ' ') {
+        int cnt = 0;
+        for (int i = sl->prev + 1; i < sl->at; i++) if (s[i] == ' ') cnt++;
+        return cnt >= 2;
+    }
+    for (int i = sl->prev + 1; i < sl->at; i++) if (s[i] == sl->ch) return 1;
+    return 0;
+}
+
+typedef struct { uint64_t state; } st_rnd;
+
+static uint64_t st_next64(st_rnd *r) {
+    uint64_t x = r->state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    r->state = x;
+    return x * 0x2545F4914F6CDD1DULL;
+}
+
+static int st_below(st_rnd *r, int bound) {
+    if (bound <= 1) return 0;
+    uint64_t b = (uint64_t) bound;
+    uint64_t lim = (0x4000000000000000ULL / b) * b;
+    uint64_t v;
+    do { v = st_next64(r) & 0x3FFFFFFFFFFFFFFFULL; } while (v >= lim);
+    return (int) (v % b);
+}
+
+static void st_seed(const unsigned char *kc, st_rnd *r) {
+    unsigned char mac[32];
+    hmac_sha256(kc, 32, (const unsigned char *) "BLB1", 4, mac);
+    uint64_t seed = 0;
+    for (int i = 0; i < 8; i++) seed = (seed << 8) | (uint64_t) mac[i];
+    seed ^= 0x9E3779B97F4A7C15ULL;              /* -0x61C8864680B583EB in two's complement */
+    if (seed == 0) seed = 0xB504F32DULL;
+    r->state = seed;
+}
+
+static int st_read_bits(const jchar *s, int slen, const st_slot *slots, const int *shuf, int from, int width) {
+    int v = 0;
+    for (int i = 0; i < width; i++) {
+        int e = st_eval(s, slen, &slots[shuf[from + i]]);
+        v = (v << 1) | (e ? 1 : 0);
+    }
+    return v;
+}
+
+/** the whole payload path: carrier text + session key in, plaintext JSON bytes out.
+ *  NULL means one of the named steps refused, and err() carries which. */
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_stegoOpen(JNIEnv *env, jclass cls, jstring jstego, jbyteArray jkc) {
+    set_step("stego:entered");
+    if (jstego == NULL || jkc == NULL) { set_step("stego:null-args"); return NULL; }
+    if ((*env)->GetArrayLength(env, jkc) != 32) { set_step("stego:key-size"); return NULL; }
+    jsize slen = (*env)->GetStringLength(env, jstego);
+    const jchar *s = (*env)->GetStringChars(env, jstego, NULL);
+    if (s == NULL) { set_step("stego:chars"); return NULL; }
+
+    jclass chCls = need_class(env, "java/lang/Character");
+    jmethodID chMid = chCls ? (*env)->GetStaticMethodID(env, chCls, "isLetter", "(C)Z") : NULL;  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (!chCls || !chMid) { set_step("stego:character-class"); (*env)->ReleaseStringChars(env, jstego, s); return NULL; }
+
+    st_slot *slots = NULL;
+    int count = st_build_slots(env, s, slen, chCls, chMid, &slots);
+    if (count < 0) { (*env)->ReleaseStringChars(env, jstego, s); return NULL; }
+    if (count < ST_HEADER_BITS) { set_step("stego:small"); free(slots); (*env)->ReleaseStringChars(env, jstego, s); return NULL; }
+
+    unsigned char kc[32];
+    (*env)->GetByteArrayRegion(env, jkc, 0, 32, (jbyte *) kc);
+    st_rnd rnd;
+    st_seed(kc, &rnd);
+    int *shuf = (int *) malloc(sizeof(int) * (size_t) count);
+    if (!shuf) { set_step("stego:alloc"); free(slots); (*env)->ReleaseStringChars(env, jstego, s); return NULL; }
+    for (int i = 0; i < count; i++) shuf[i] = i;
+    for (int i = count - 1; i >= 1; i--) {
+        int j = st_below(&rnd, i + 1);
+        int tmp = shuf[i]; shuf[i] = shuf[j]; shuf[j] = tmp;
+    }
+    int magic = st_read_bits(s, slen, slots, shuf, 0, 16);
+    if (magic != ST_MAGIC) {
+        set_step("stego:magic"); free(shuf); free(slots); (*env)->ReleaseStringChars(env, jstego, s);
+        return NULL;
+    }
+    int cipherLen = st_read_bits(s, slen, slots, shuf, 16, 32);
+    if (cipherLen <= 0 || cipherLen > ST_MAX_CIPHER) {
+        set_step("stego:len"); free(shuf); free(slots); (*env)->ReleaseStringChars(env, jstego, s);
+        return NULL;
+    }
+    if ((long long) ST_HEADER_BITS + (long long) cipherLen * 8 > (long long) count) {
+        set_step("stego:short"); free(shuf); free(slots); (*env)->ReleaseStringChars(env, jstego, s);
+        return NULL;
+    }
+    jbyteArray jcipher = (*env)->NewByteArray(env, (jsize) cipherLen);
+    jbyteArray out = NULL;
+    if (jcipher) {
+        jbyte *tmp = (jbyte *) malloc((size_t) cipherLen);
+        if (tmp) {
+            for (int i = 0; i < cipherLen; i++) {
+                int v = 0;
+                for (int b = 0; b < 8; b++) {
+                    int e = st_eval(s, slen, &slots[shuf[ST_HEADER_BITS + i * 8 + b]]);
+                    v = (v << 1) | (e ? 1 : 0);
+                }
+                tmp[i] = (jbyte) v;
+            }
+            (*env)->SetByteArrayRegion(env, jcipher, 0, (jsize) cipherLen, tmp);
+            free(tmp);
+            jbyteArray jaad = (*env)->NewByteArray(env, 5);
+            if (jaad) {
+                const jbyte aad[5] = { 0x42, 0x4C, 0x42, 0x76, 0x31 };   /* BLBv1 */
+                (*env)->SetByteArrayRegion(env, jaad, 0, 5, aad);
+                jbyteArray plain = Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(env, cls, jcipher, jkc, jaad);
+                if (plain != NULL) {
+                    jsize plen = (*env)->GetArrayLength(env, plain);
+                    jbyteArray envl = Java_ir_v2rayng_compose_core_NativeSec_openEnvelope(env, cls, plain);
+                    if (envl != NULL) {
+                        out = envl;
+                    } else if (plen > 0) {
+                        /* the Kotlin fallback: an envelope that will not open is stripped of its
+                         * mode byte rather than guessed at, so the caller fails on the payload */
+                        out = (*env)->NewByteArray(env, (jsize) (plen - 1));
+                        if (out) {
+                            jbyte *buf = (jbyte *) malloc((size_t) plen);
+                            if (buf) {
+                                (*env)->GetByteArrayRegion(env, plain, 1, (jsize) (plen - 1), buf);
+                                (*env)->SetByteArrayRegion(env, out, 0, (jsize) (plen - 1), buf);
+                                free(buf);
+                            } else set_step("stego:alloc-out");
+                        }
+                    }
+                }
+            }
+        } else set_step("stego:alloc-cipher");
+    }
+    free(shuf); free(slots);
+    (*env)->ReleaseStringChars(env, jstego, s);
+    return out;
+}
+
+/* ---------------- the one-shot token and the device proof ----------------
+ * Both are byte layouts, not decisions: "blb"|device|0x00|ts(4 BE)|nonce(8), then either the HMAC
+ * (token) or the hardware signature (proof), base64url over ts|nonce|that. They lived in Kotlin,
+ * where the only thing they could do was drift away from the worker; here they sit next to the
+ * HMAC and the identity key, so one file owns the wire bytes. The clock is the same wall clock the
+ * Kotlin used, one second granularity, with the same guarantee that it never repeats a value
+ * inside a process.
+ */
+
+static uint32_t tok_next_ts(void) {
+    static uint32_t last = 0;
+    uint32_t now = (uint32_t) time(NULL);
+    if (now <= last) now = last + 1;
+    last = now;
+    return now;
+}
+
+/** "blb" || device || 0x00 || ts(4) || nonce(8) - caller frees, outlen receives the length */
+static unsigned char *tok_msg(JNIEnv *env, jstring jdevice, uint32_t ts, const jbyte *nonce, int *outlen) {
+    const char *dev = (*env)->GetStringUTFChars(env, jdevice, NULL);
+    if (dev == NULL) return NULL;
+    size_t dlen = strlen(dev);
+    unsigned char *m = (unsigned char *) malloc(3 + dlen + 1 + 4 + 8);
+    if (m) {
+        memcpy(m, "blb", 3);
+        if (dlen) memcpy(m + 3, dev, dlen);
+        m[3 + dlen] = 0x00;
+        m[4 + dlen] = (unsigned char) (ts >> 24);
+        m[5 + dlen] = (unsigned char) (ts >> 16);
+        m[6 + dlen] = (unsigned char) (ts >> 8);
+        m[7 + dlen] = (unsigned char) ts;
+        memcpy(m + 8 + dlen, nonce, 8);
+        *outlen = (int) (12 + dlen);
+    }
+    (*env)->ReleaseStringUTFChars(env, jdevice, dev);
+    return m;
+}
+
+JNIEXPORT jstring JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_tokenFor(JNIEnv *env, jclass cls, jstring jdevice, jbyteArray jkt) {
+    set_step("tok:entered");
+    if (jdevice == NULL || jkt == NULL) { set_step("tok:null-args"); return NULL; }
+    if ((*env)->GetArrayLength(env, jkt) != 32) { set_step("tok:key-size"); return NULL; }
+    jbyteArray jnonce = rnd_bytes(env, 8);
+    if (jnonce == NULL) { set_step("tok:nonce"); return NULL; }
+    jbyte nonce[8];
+    (*env)->GetByteArrayRegion(env, jnonce, 0, 8, nonce);
+    uint32_t ts = tok_next_ts();
+    int mlen = 0;
+    unsigned char *msg = tok_msg(env, jdevice, ts, nonce, &mlen);
+    if (msg == NULL) { set_step("tok:msg"); return NULL; }
+    unsigned char kt[32];
+    (*env)->GetByteArrayRegion(env, jkt, 0, 32, (jbyte *) kt);
+    unsigned char mac[32];
+    hmac_sha256(kt, 32, msg, (size_t) mlen, mac);
+    free(msg);
+    jbyte packed[44];
+    packed[0] = (jbyte) (ts >> 24); packed[1] = (jbyte) (ts >> 16);
+    packed[2] = (jbyte) (ts >> 8);  packed[3] = (jbyte) ts;
+    for (int i = 0; i < 8; i++) packed[4 + i] = nonce[i];
+    for (int i = 0; i < 32; i++) packed[12 + i] = (jbyte) mac[i];
+    jbyteArray jpacked = (*env)->NewByteArray(env, 44);
+    if (jpacked == NULL) { set_step("tok:pack"); return NULL; }
+    (*env)->SetByteArrayRegion(env, jpacked, 0, 44, packed);
+    jstring out = Java_ir_v2rayng_compose_core_NativeSec_b64uEncode(env, cls, jpacked);
+    set_step(out ? "tok:ok" : "tok:encode");
+    return out;
+}
+
+JNIEXPORT jstring JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_proofFor(JNIEnv *env, jclass cls, jstring jdevice) {
+    set_step("proof:entered");
+    if (jdevice == NULL) { set_step("proof:null-args"); return NULL; }
+    jbyteArray jnonce = rnd_bytes(env, 8);
+    if (jnonce == NULL) { set_step("proof:nonce"); return NULL; }
+    jbyte nonce[8];
+    (*env)->GetByteArrayRegion(env, jnonce, 0, 8, nonce);
+    uint32_t ts = tok_next_ts();
+    int mlen = 0;
+    unsigned char *msg = tok_msg(env, jdevice, ts, nonce, &mlen);
+    if (msg == NULL) { set_step("proof:msg"); return NULL; }
+    jbyteArray jmsg = (*env)->NewByteArray(env, (jsize) mlen);
+    if (jmsg == NULL) { free(msg); set_step("proof:msg-array"); return NULL; }
+    (*env)->SetByteArrayRegion(env, jmsg, 0, (jsize) mlen, (const jbyte *) msg);
+    free(msg);
+    jbyteArray sig = Java_ir_v2rayng_compose_core_NativeSec_idSign(env, cls, jmsg);
+    if (sig == NULL) {
+        /* one retry after asking for a usable key: the identity door probes the entry and replaces
+         * one this framework will not sign with - the same two attempts BlobIdentity.sign made */
+        Java_ir_v2rayng_compose_core_NativeSec_idEnsure(env, cls, NULL);
+        sig = Java_ir_v2rayng_compose_core_NativeSec_idSign(env, cls, jmsg);
+    }
+    if (sig == NULL) { set_step("proof:sign"); return NULL; }
+    jsize siglen = (*env)->GetArrayLength(env, sig);
+    jbyteArray spki = Java_ir_v2rayng_compose_core_NativeSec_idSpki(env, cls);
+    int verdict = spki ? Java_ir_v2rayng_compose_core_NativeSec_verify(env, cls, spki, jmsg, sig) : -8;
+    set_step(verdict == 1 ? "proof:self-ok" : (verdict == 0 ? "proof:self-rejected" : "proof:self-error"));
+    jbyte *buf = (jbyte *) malloc((size_t) (12 + siglen));
+    if (buf == NULL) { set_step("proof:alloc"); return NULL; }
+    buf[0] = (jbyte) (ts >> 24); buf[1] = (jbyte) (ts >> 16);
+    buf[2] = (jbyte) (ts >> 8);  buf[3] = (jbyte) ts;
+    for (int i = 0; i < 8; i++) buf[4 + i] = nonce[i];
+    (*env)->GetByteArrayRegion(env, sig, 0, siglen, buf + 12);
+    jbyteArray packed = (*env)->NewByteArray(env, (jsize) (12 + siglen));
+    if (packed == NULL) { free(buf); set_step("proof:pack"); return NULL; }
+    (*env)->SetByteArrayRegion(env, packed, 0, (jsize) (12 + siglen), buf);
+    free(buf);
+    jstring out = Java_ir_v2rayng_compose_core_NativeSec_b64uEncode(env, cls, packed);
+    if (out == NULL) set_step("proof:encode");
+    return out;
 }

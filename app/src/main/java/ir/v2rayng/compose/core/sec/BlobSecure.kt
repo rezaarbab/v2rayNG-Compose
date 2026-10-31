@@ -91,42 +91,16 @@ object BlobSecure {
 
     fun liveSession(): Boolean = load() != null
 
-    /** one-shot token: b64( ts4BE | nonce | hmac(kt, msg) ), msg = "blb"|device|0x00|ts4BE|nonce
-     *  the worker enforces a strictly-monotonic per-device timestamp, so tokens minted in the
-     *  same second are nudged +1 tick to keep consecutive one-shot tokens unique. */
-    @Volatile
-    private var lastTokTs: Int = 0
-
-    private fun nextTs(): Int {
-        var now = (System.currentTimeMillis() / 1000L).toInt()
-        synchronized(this) {
-            if (now <= lastTokTs) now = lastTokTs + 1
-            lastTokTs = now
+    /** one-shot token: b64url( ts4BE | nonce | hmac(kt, msg) ), msg = "blb"|device|0x00|ts4BE|nonce.
+     *  The clock, the nonce and the layout live in blobsec.c; a failure names the step that refused. */
+    fun token(device: String, kt: ByteArray): String =
+        NativeSec.token(device, kt) ?: run {
+            fail("token generation failed (step=" + NativeSec.errInfo() + ")")
+            ""
         }
-        return now
-    }
 
-    private fun tsBytes(ts: Int): ByteArray =
-        byteArrayOf((ts shr 24).toByte(), (ts shr 16).toByte(), (ts shr 8).toByte(), ts.toByte())
-
-    /** 8 random bytes from the library's CSPRNG. If it ever answers nothing, the nonce is zeros -
-     *  and a repeated nonce for the same second makes the worker's own replay guard refuse the
-     *  token, so the worst case is a refused request, not a reused keystream. */
-    private fun newNonce(): ByteArray = NativeSec.random(8) ?: ByteArray(8)
-
-    /** the exact bytes the worker recomputes its mac / verifies its signature over */
-    private fun tokMsg(device: String, ts: ByteArray, nonce: ByteArray): ByteArray =
-        "blb".toByteArray(Charsets.UTF_8) +
-            device.toByteArray(Charsets.UTF_8) + byteArrayOf(0x00) + ts + nonce
-
-    fun token(device: String, kt: ByteArray): String {
-        val ts = tsBytes(nextTs())
-        val nonce = newNonce()
-        return BlobB64.encode(ts + nonce + BlobStego.hmac(kt, tokMsg(device, ts, nonce)))
-    }
-
-    /** What the last proof attempt looked like, so one log line says whether the keystore pair is
-     *  self-consistent here or whether the worker is reading something else. */
+    /** What the last proof attempt looked like: the library's own step, "proof:self-ok" when the
+     *  bytes this device exports open the signature it just made. No key material enters this. */
     @Volatile
     var lastProofNote: String = ""
         private set
@@ -135,51 +109,19 @@ object BlobSecure {
     @Volatile
     private var proofFail: String = ""
 
-    /** Proof that this install owns its hardware key: the same message, signed instead of MACed.
-     *  Sent only on the key endpoint, where the worker checks it against the public key stored for this
-     *  device. null = the keystore refused to sign, so no session can be opened. */
+    /** Proof that this install owns its hardware key: b64url(ts|nonce|ECDSA) over the token message.
+     *  Message layout, signing, the one retry and the self-verify all happen in blobsec.c now.
+     *  null = the keystore refused to sign, so no session can be opened. */
     fun deviceProof(device: String): String? {
-        val ts = tsBytes(nextTs())
-        val nonce = newNonce()
-        val msg = tokMsg(device, ts, nonce)
         proofFail = ""
-        val sig = BlobIdentity.sign(msg) ?: run {
-            // read the recorder before any other native call: it keeps one slot, and the next call
-            // would overwrite the step that just failed
-            proofFail = "sign refused step=" + NativeSec.errInfo() + " id=" + (BlobIdentity.note ?: "-")
+        val proof = NativeSec.proof(device)
+        lastProofNote = "step=" + NativeSec.errInfo()
+        if (proof == null) {
+            proofFail = "proof refused [" + lastProofNote + "], id=" + (BlobIdentity.note ?: "-")
             return null
         }
-        val pub = BlobIdentity.publicKeyB64() ?: run {
-            proofFail = "no public key step=" + NativeSec.errInfo() + " id=" + (BlobIdentity.note ?: "-")
-            return null
-        }
-        val pubDer = BlobB64.decode(pub) ?: run {
-            proofFail = "public key is not base64url"
-            return null
-        }
-        // verify our own signature with the bytes we export as the public key: REJECTED here means
-        // this device's exported key is not the pair that signed (keystore/format), while ok here
-        // plus a refusal from the worker means the two sides read the encoding differently.
-        // The KeyFactory/Signature calls live in blobsec.c; this is only the verdict.
-        val v = NativeSec.verifySpki(pubDer, msg, sig)
-        val self = when (v) {
-            1 -> "self-verify ok"
-            0 -> "self-verify REJECTED"
-            else -> "self-verify error (step=" + NativeSec.errInfo() + ")"
-        }
-        val md = hex3(msg)
-        lastProofNote = self + ", fp " + BlobIdentity.fingerprint() + ", msg " + md + " (" + msg.size + "B), pub " +
-            pubDer.size + "B#" + hex3(pubDer) + ", sig " + sig.size + "B#" + hex3(sig)
         blog("deviceProof: " + lastProofNote)
-        return BlobB64.encode(ts + nonce + sig)
-    }
-
-    /** First three bytes of the SHA-256 of these bytes, hex - enough to prove two blobs are the
-     *  same without putting the key material in a log. */
-    private fun hex3(b: ByteArray): String {
-        val d = NativeSec.sha256(b) ?: return "?"
-        if (d.size < 3) return "?"
-        return d.take(3).joinToString("") { String.format("%02x", it) }
+        return proof
     }
 
     /** ONE line with every answer this handset can give about the secure channel - asked for on

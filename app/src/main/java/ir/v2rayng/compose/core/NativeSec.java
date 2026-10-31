@@ -252,6 +252,42 @@ public final class NativeSec {
         }
     }
 
+    private static native byte[] stegoOpen(String stego, byte[] kc);
+
+    private static native String tokenFor(String device, byte[] kt);
+
+    private static native String proofFor(String device);
+
+    /** the whole payload path in C: carrier text plus session key in, plaintext JSON bytes out */
+    public static byte[] stegoReveal(String stego, byte[] kc) {
+        if (!READY || stego == null || kc == null) return null;
+        try {
+            return stegoOpen(stego, kc);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** base64url(ts(4) | nonce(8) | HMAC(kt, "blb"|device|0x00|ts|nonce)) */
+    public static String token(String device, byte[] kt) {
+        if (!READY || device == null || kt == null) return null;
+        try {
+            return tokenFor(device, kt);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** base64url(ts(4) | nonce(8) | ECDSA over the same message), signed by the hardware key */
+    public static String proof(String device) {
+        if (!READY || device == null) return null;
+        try {
+            return proofFor(device);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     public static String note() {
         return READY ? "sec ok" : "sec library failed its self test";
     }

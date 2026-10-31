@@ -104,28 +104,6 @@ object BlobIdentity {
         }
         return out
     }
-
-    /** DER ECDSA-SHA256 signature over msg, raw bytes - null when this device cannot sign. */
-    fun sign(msg: ByteArray): ByteArray? {
-        val t0 = android.os.SystemClock.elapsedRealtime()
-        if (pubRef == null && !ensure()) return null
-        for (attempt in 0 until 2) {
-            // one operation at a time: some keystore backends reject concurrent use
-            val sig = synchronized(this) { NativeSec.sign(msg) }
-            if (sig != null) {
-                SecJournal.note("identity sign ${sig.size}B ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-                return sig
-            }
-            SecJournal.note(
-                "identity sign ERROR ${android.os.SystemClock.elapsedRealtime() - t0}ms " +
-                    "attempt=$attempt step=" + NativeSec.errInfo()
-            )
-            // a refusal can mean the entry moved under us; ask for a key again and try once more
-            pubRef = null
-            if (!ensure()) return null
-        }
-        return null
-    }
 }
 
 /* inert markers, read by nothing (kept because the build keeps them) */
