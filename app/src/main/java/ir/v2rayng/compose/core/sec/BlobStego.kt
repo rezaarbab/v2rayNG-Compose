@@ -74,7 +74,7 @@ object BlobStego {
         for (i in 0 until cipherLen * 8) data[i] = evalSlot(stego, slots[shuffled[56 + i]])
         val cipher = bytesOfBits(data)
         val plain = blobOpen(cipher, kc)
-            ?: return why("stego: GCM tag fail (wrong key or damaged carrier; sec=" + NativeSec.note() + ")")
+            ?: return why("stego: GCM tag fail (sec=" + NativeSec.note() + ", step=" + NativeSec.errInfo() + ")")
         val jsonU8 = BlobZip.open(plain)
         blog("reveal: OK cipherLen=" + cipherLen)
         return String(jsonU8, Charsets.UTF_8)

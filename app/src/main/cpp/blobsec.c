@@ -377,7 +377,7 @@ Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArr
     jclass cipherCls = find_class_checked(env, CIPH, &err);
     jclass specCls = find_class_checked(env, (const unsigned char *) "javax/crypto/spec/GCMParameterSpec", &err);
     jclass keyCls = find_class_checked(env, (const unsigned char *) "javax/crypto/spec/SecretKeySpec", &err);
-    if (err || cipherCls == NULL || specCls == NULL || keyCls == NULL) return NULL;
+    if (err || cipherCls == NULL || specCls == NULL || keyCls == NULL) { set_step("find-classes"); return NULL; }
 
     jmethodID midGet = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
@@ -391,7 +391,7 @@ Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArr
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jmethodID midKey = (*env)->GetMethodID(env, keyCls, "<init>", "([BLjava/lang/String;)V");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    if (!midGet || !midInit || !midAad || !midFin || !midSpec || !midKey) return NULL;
+    if (!midGet || !midInit || !midAad || !midFin || !midSpec || !midKey) { set_step("method-ids"); return NULL; }
 
     jbyteArray out = NULL;
     jstring transform = (*env)->NewStringUTF(env, (const char *) TRANS);
@@ -414,18 +414,22 @@ Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArr
             jobject spec = (*env)->NewObject(env, specCls, midSpec, 128, iv, 0, 12);
             jobject kobj = (*env)->NewObject(env, keyCls, midKey, jkey, alg);
             jobject c = (*env)->CallStaticObjectMethod(env, cipherCls, midGet, transform);
+            /* returning to Java with an exception still pending turns this into a thrown
+             * NoSuchPaddingException at the call site, which the caller reports as "tag fail" -
+             * record it, clear it, and say which step it was */
+            if (step_failed(env, "getInstance/new-object")) { return NULL; }
             if (spec && kobj && c) {
                 (*env)->CallVoidMethod(env, c, midInit, 2 /* DECRYPT_MODE */, kobj, spec);
-                if (!(*env)->ExceptionCheck(env)) {
+                if (!step_failed(env, "cipher.init")) {
                     if (jaad != NULL) {
                         (*env)->CallVoidMethod(env, c, midAad, jaad);
-                        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+                        if (step_failed(env, "cipher.updateAAD")) out = NULL;
                     }
-                    out = (jbyteArray) (*env)->CallObjectMethod(env, c, midFin, ct);
-                    if ((*env)->ExceptionCheck(env)) {
-                        /* a tag failure is a wrong-key/damaged-carrier answer, not a crash */
-                        (*env)->ExceptionClear(env);
-                        out = NULL;
+                    if (out == NULL) {
+                        out = (jbyteArray) (*env)->CallObjectMethod(env, c, midFin, ct);
+                        /* AEADBadTagException here means a real key/carrier mismatch; anything else
+                         * means this JNI path is wrong, and the two need different fixes */
+                        if (step_failed(env, "cipher.doFinal")) out = NULL;
                     }
                 }
             }
@@ -582,6 +586,63 @@ static jobject make_key(JNIEnv *env, jstring jalias) {
 static const char VAULT_ALIAS[] = "blob-kv-v2";
 static const char VAULT_LEGACY[] = "blob-kv-v1";
 static const unsigned char VAULT_AAD[] = { 0x42, 0x4c, 0x4b, 0x56, 0x31 }; /* BLKV1 */
+
+/* Which step of the Cipher-through-JNI path failed. The known-answer test passing proves
+ * SHA/HMAC/base64 work on this device, so the only thing left is how this library drives
+ * javax.crypto - and "GCM tag fail" is what the caller says for any null it gets back, which hides
+ * whether Cipher.getInstance, the GCMParameterSpec constructor, init, updateAAD or doFinal was the
+ * one that refused. Every step below records its name, and a real Java exception adds its class
+ * name. Reported to the log page by NativeSec.err(); to be deleted once the cause is known. */
+static char g_step[40] = "ok";
+static char g_exc[96] = "";
+
+static void set_step(const char *where) {
+    strncpy(g_step, where, sizeof(g_step) - 1);
+    g_step[sizeof(g_step) - 1] = 0;
+}
+
+static void note_exc(JNIEnv *env) {
+    jthrowable ex = (*env)->ExceptionOccurred(env);
+    if (ex == NULL) { g_exc[0] = 0; return; }
+    (*env)->ExceptionClear(env);
+    jclass oc = (*env)->GetObjectClass(env, ex);
+    jclass clsCls = oc ? (*env)->GetObjectClass(env, oc) : NULL;
+    jmethodID getName = clsCls ? (*env)->GetMethodID(env, clsCls, "getName", "()Ljava/lang/String;") : NULL;
+    if (getName && oc) {
+        jstring nm = (jstring) (*env)->CallObjectMethod(env, oc, getName);
+        if (nm) {
+            const char *c = (*env)->GetStringUTFChars(env, nm, NULL);
+            if (c) {
+                const char *short_name = strrchr(c, '.');
+                strncpy(g_exc, short_name ? short_name + 1 : c, sizeof(g_exc) - 1);
+                g_exc[sizeof(g_exc) - 1] = 0;
+                (*env)->ReleaseStringUTFChars(env, nm, c);
+            }
+            (*env)->DeleteLocalRef(env, nm);
+        }
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (oc) (*env)->DeleteLocalRef(env, oc);
+    if (clsCls) (*env)->DeleteLocalRef(env, clsCls);
+    (*env)->DeleteLocalRef(env, ex);
+}
+
+/* clear any pending exception and record it, returning true when one was raised */
+static int step_failed(JNIEnv *env, const char *where) {
+    if (!(*env)->ExceptionCheck(env)) { set_step(where); return 0; }
+    set_step(where);
+    note_exc(env);
+    return 1;
+}
+
+JNIEXPORT jstring JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_err(JNIEnv *env, jclass cls) {
+    char buf[144];
+    if (g_exc[0] != 0) snprintf(buf, sizeof(buf), "%s | %s", g_step, g_exc);
+    else snprintf(buf, sizeof(buf), "%s", g_step);
+    g_exc[0] = 0;
+    return (*env)->NewStringUTF(env, buf);
+}
 
 static jstring alias_for(JNIEnv *env, jint which) {
     return (*env)->NewStringUTF(env, which == 1 ? VAULT_LEGACY : VAULT_ALIAS);

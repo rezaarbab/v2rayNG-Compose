@@ -106,6 +106,22 @@ public final class NativeSec {
 
     private static native int vaultRoundTrip();
 
+    private static native String err();
+
+    /** which Cipher-through-JNI step ran last, plus any Java exception it met - the reason
+     *  "GCM tag fail" has to be split into "AES/GCM refused", "init threw", "bad tag", etc.
+     *  Named differently from the native on purpose: same name and same (empty) arguments would
+     *  not compile, and a recursive wrapper would blow the stack. */
+    public static String errInfo() {
+        if (!READY) return "not ready";
+        try {
+            String e = err();
+            return e == null ? "?" : e;
+        } catch (Throwable t) {
+            return "err() threw";
+        }
+    }
+
     /** 0 = sealing and opening the same bytes works end to end with this key */
     public static int vaultSelfCheck() {
         if (!READY) return -1;
