@@ -56,12 +56,15 @@ object BlobVault {
                 return true
             }
         }
-        if (NativeSec.dropKey(CURRENT) && NativeSec.vaultOk(CURRENT)) {
+        // only an entry that is really there may be replaced: a keystore that did not answer is not
+        // evidence of a dead key, and dropping a live one would destroy every stored value
+        if (NativeSec.hasKey(CURRENT) && NativeSec.dropKey(CURRENT) && NativeSec.vaultOk(CURRENT)) {
             recoveryNote = "keystore key exists but this device cannot read it - it was replaced, so values stored earlier are gone"
             usable = true
             return true
         }
-        recoveryNote = "the keystore gives no key at all on this device - saving cannot work"
+        recoveryNote = "the keystore gives no key at all on this device - saving cannot work" +
+            " (" + NativeSec.note() + ", " + ir.v2rayng.compose.core.NativeKit.note() + ")"
         SecJournal.note("keystore key UNAVAILABLE ${android.os.SystemClock.elapsedRealtime() - t0}ms")
         return false
     }

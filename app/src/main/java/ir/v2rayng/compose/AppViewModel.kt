@@ -215,8 +215,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 ir.v2rayng.compose.core.XrayBridge.trace("seal failure: " + it)
             }
             ir.v2rayng.compose.core.sec.BlobVault.recoveryNote?.let {
-                log("WARN", "کلید نشست بازیابی شد")
-                ir.v2rayng.compose.core.XrayBridge.trace("keystore recovery: " + it)
+                // this one IS for him: without the note "nothing saves" and "the keystore refused"
+                // are the same one line, and they need different answers
+                log("ERROR", "ذخیره‌سازی امن این دستگاه مشکل دارد: " + it)
             }
             loadRemoteState()
             if (_state.value.servers.isNotEmpty() && effPingStart()) {

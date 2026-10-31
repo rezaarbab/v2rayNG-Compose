@@ -478,10 +478,10 @@ static jobject keystore_open(JNIEnv *env, int *err) {
     jobject ks = getInstance && prov ? (*env)->CallStaticObjectMethod(env, ksCls, getInstance, prov) : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); ks = NULL; *err = 1; }
     if (ks) {
-        jmethodID load = (*env)->GetMethodID(env, ksCls, "load", "(Ljava/security/KeyStore$LoadStoreParameter;)V");  //EXC-CLEARED
+        jmethodID load = (*env)->GetMethodID(env, ksCls, "load", "(Ljava/io/InputStream;[C)V");  //EXC-CLEARED
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         if (load) {
-            (*env)->CallVoidMethod(env, ks, load, NULL);
+            (*env)->CallVoidMethod(env, ks, load, NULL, NULL);
             if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); ks = NULL; *err = 1; }
         } else { *err = 1; }
     }
@@ -529,19 +529,24 @@ static jobject make_key(JNIEnv *env, jstring jalias) {
     if (b) {
         jmethodID mSize = (*env)->GetMethodID(env, bld, "setKeySize", "(I)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        jmethodID mMode = (*env)->GetMethodID(env, bld, "setBlockModes", "(Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+        jmethodID mMode = (*env)->GetMethodID(env, bld, "setBlockModes", "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-        jmethodID mPad = (*env)->GetMethodID(env, bld, "setEncryptionPaddings", "(Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+        jmethodID mPad = (*env)->GetMethodID(env, bld, "setEncryptionPaddings", "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         jmethodID mRnd = (*env)->GetMethodID(env, bld, "setRandomizedEncryptionRequired", "(Z)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         jmethodID mBuild = (*env)->GetMethodID(env, bld, "build", "()Landroid/security/keystore/KeyGenParameterSpec;");  //EXC-CLEARED
         if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         jstring gcm = (*env)->NewStringUTF(env, KGCM), none = (*env)->NewStringUTF(env, KNONE);
+        jclass strCls = need_class(env, "java/lang/String");
+        jobjectArray modeArr = strCls ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
+        jobjectArray padArr = strCls ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
+        if (modeArr && gcm) (*env)->SetObjectArrayElement(env, modeArr, 0, gcm);
+        if (padArr && none) (*env)->SetObjectArrayElement(env, padArr, 0, none);
         jobject spec = NULL;
         if (mSize) b = (*env)->CallObjectMethod(env, b, mSize, 256);
-        if (mMode && gcm) b = (*env)->CallObjectMethod(env, b, mMode, gcm);
-        if (mPad && none) b = (*env)->CallObjectMethod(env, b, mPad, none);
+        if (mMode && modeArr) b = (*env)->CallObjectMethod(env, b, mMode, modeArr);
+        if (mPad && padArr) b = (*env)->CallObjectMethod(env, b, mPad, padArr);
         if (mRnd) b = (*env)->CallObjectMethod(env, b, mRnd, JNI_TRUE);
         if (mBuild) spec = (*env)->CallObjectMethod(env, b, mBuild);
         if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); spec = NULL; }
@@ -726,6 +731,29 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(JNIEnv *env, jclass cls, jbyteA
     (*env)->DeleteLocalRef(env, cipherCls);
     (*env)->DeleteLocalRef(env, specCls);
     return out;
+}
+
+/** is there an entry under this alias at all? - the caller must ask this before dropping,
+ * because "the keystore did not answer" and "there is a key I cannot read" are different events and
+ * only the second one justifies destroying anything. */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_vaultHas(JNIEnv *env, jclass cls, jint which) {
+    jstring jalias = alias_for(env, which);
+    if (jalias == NULL) return 0;
+    int err = 0;
+    jobject ks = keystore_open(env, &err);
+    if (err || ks == NULL) return 0;
+    jclass ksCls = (*env)->GetObjectClass(env, ks);
+    jmethodID has = (*env)->GetMethodID(env, ksCls, "containsAlias", "(Ljava/lang/String;)Z");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jint r = 0;
+    if (has) {
+        r = (*env)->CallBooleanMethod(env, ks, has, jalias) ? 1 : 0;
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); r = 0; }
+    }
+    (*env)->DeleteLocalRef(env, ksCls);
+    (*env)->DeleteLocalRef(env, ks);
+    return r;
 }
 
 /** drop an entry (the recovery path uses it when the keystore holds a key it cannot read) */

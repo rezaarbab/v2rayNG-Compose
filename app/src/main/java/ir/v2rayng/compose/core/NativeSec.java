@@ -102,6 +102,13 @@ public final class NativeSec {
 
     private static native int vaultDrop(int which);
 
+    private static native int vaultHas(int which);
+
+    /** does an entry exist under this alias? ask before dropping anything */
+    public static boolean hasKey(int which) {
+        return READY && vaultHas(which) == 1;
+    }
+
     /** the keystore vault: alias, AAD and cipher all live in blobsec.c; which=1 is the old key */
     public static boolean vaultOk(int which) {
         return READY && vaultReady(which) == 1;
