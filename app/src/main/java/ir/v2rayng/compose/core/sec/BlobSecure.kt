@@ -345,6 +345,8 @@ object BlobSecure {
                                 NativeSec.payloadSealed()?.let { sealed ->
                                     if (sealed.isNotEmpty()) SecurePrefs.set("srvrows", sealed, AppCtx.app)
                                 }
+                                // the list is in the library: drop it from what goes back to Kotlin
+                                opened.remove("servers")
                             }
                         } catch (_: Throwable) {
                         }

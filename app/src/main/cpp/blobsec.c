@@ -3123,3 +3123,21 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadFindHost(JNIEnv *env, jclass cls, 
     (*env)->ReleaseStringUTFChars(env, jaddr, a);
     return found;
 }
+
+/** the link text for one host+port, used only at the moment of a dial or a ping: the list never
+ *  crosses to Kotlin, but a single dial needs the text the core is configured from */
+JNIEXPORT jstring JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_linkForHost(JNIEnv *env, jclass cls, jstring jaddr, jint port) {
+    if (jaddr == NULL) return NULL;
+    const char *a = (*env)->GetStringUTFChars(env, jaddr, NULL);
+    if (a == NULL) return NULL;
+    jstring out = NULL;
+    for (int i = 0; i < g_rows_n; i++) {
+        if (g_rows[i].port == (int) port && strcmp(g_rows[i].addr, a) == 0) {
+            out = (*env)->NewStringUTF(env, g_rows[i].link);
+            break;
+        }
+    }
+    (*env)->ReleaseStringUTFChars(env, jaddr, a);
+    return out;
+}

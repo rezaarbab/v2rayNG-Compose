@@ -266,6 +266,18 @@ public final class NativeSec {
         }
     }
 
+    private static native String linkForHost(String addr, int port);
+
+    /** the link for one host+port, fetched at dial time; null when the store has no such server */
+    public static String linkAtHost(String addr, int port) {
+        if (!READY || addr == null) return null;
+        try {
+            return linkForHost(addr, port);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private static native int payloadFindHost(String addr, int port);
 
     public static int rowOfHost(String addr, int port) {

@@ -1170,16 +1170,27 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         doConnect(target)
     }
 
+    /** the profile carries "addr:port"; the library owns the link, so this is how a dial gets it */
+    private fun addrPortOf(host: String): Pair<String, Int>? {
+        val c = host.lastIndexOf(':')
+        if (c <= 0) return null
+        val port = host.substring(c + 1).trim().toIntOrNull() ?: return null
+        val addr = host.substring(0, c).trim().trim('[', ']')
+        return if (addr.isEmpty() || port <= 0) null else addr to port
+    }
+
     private fun doConnect(target: ServerProfile) {
-        if (target.link != null) {
-            val parsed = ir.v2rayng.compose.core.parseProxyLink(target.link)
+        val dialLink = target.link
+            ?: addrPortOf(target.host)?.let { ir.v2rayng.compose.core.NativeSec.linkAtHost(it.first, it.second) }
+        if (dialLink != null) {
+            val parsed = ir.v2rayng.compose.core.parseProxyLink(dialLink)
             if (parsed == null) {
                 put { s -> s.copy(vpnState = VpnState.BROKEN) }
                 log("ERROR", S.LOG_FAILED)
                 return
             }
             log("INFO", S.LOG_CONNECTING.format(target.name))
-            ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed.copy(name = target.name.ifBlank { parsed.name }), target.link)
+            ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed.copy(name = target.name.ifBlank { parsed.name }), dialLink)
             return
         }
         // No config on this row: there is nothing to connect to, so say that instead of pretending.
@@ -1292,10 +1303,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 for (srv in targets) {
                     launch(Dispatchers.IO) {
                         sem.withPermit {
-                            val parsed = srv.link?.let { l -> try { ir.v2rayng.compose.core.parseProxyLink(l) } catch (_: Exception) { null } }
+                            val pingLink = srv.link ?: addrPortOf(srv.host)?.let {
+                                ir.v2rayng.compose.core.NativeSec.linkAtHost(it.first, it.second)
+                            }
+                            val parsed = pingLink?.let { l -> try { ir.v2rayng.compose.core.parseProxyLink(l) } catch (_: Exception) { null } }
                             val (ms, msErr) = when {
                                 parsed != null -> probePing(parsed, srv.name)
-                                srv.link != null -> {
+                                pingLink != null -> {
                                     null to "config"
                                 }
                                 else -> {

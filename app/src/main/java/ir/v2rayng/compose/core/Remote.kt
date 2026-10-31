@@ -401,20 +401,41 @@ object Remote {
     /** Map a syncPayloadObj response (plain or decrypted) into the app model. */
     private fun mapSyncPayload(res: JSONObject): Result {
         val servers = ArrayList<ServerEntry>()
-        val arr = res.optJSONArray("servers") ?: org.json.JSONArray()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            servers.add(
-                ServerEntry(
-                    id = "rem-" + o.optString("id"),
-                    name = o.optString("name", "srv"),
-                    address = o.optString("address", ""),
-                    port = o.optInt("port", 443),
-                    link = o.optString("link", "").takeIf { it.isNotBlank() },
-                    category = o.optString("category", ""),
-                    msg = o.optString("msg", ""),
-                ),
-            )
+        val arr = res.optJSONArray("servers")
+        if (arr == null) {
+            // the list lives in the library now: same rows, same order, no link in this process
+            val n = NativeSec.payloadRows()
+            for (i in 0 until n) {
+                val addr = NativeSec.payloadText(i, 2)
+                val port = NativeSec.payloadPortOf(i)
+                if (addr.isEmpty() || port <= 0) continue
+                servers.add(
+                    ServerEntry(
+                        id = "rem-" + NativeSec.payloadText(i, 0),
+                        name = NativeSec.payloadText(i, 1).ifBlank { "srv" },
+                        address = addr,
+                        port = port,
+                        link = null,
+                        category = NativeSec.payloadText(i, 3),
+                        msg = NativeSec.payloadText(i, 4),
+                    ),
+                )
+            }
+        } else {
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                servers.add(
+                    ServerEntry(
+                        id = "rem-" + o.optString("id"),
+                        name = o.optString("name", "srv"),
+                        address = o.optString("address", ""),
+                        port = o.optInt("port", 443),
+                        link = o.optString("link", "").takeIf { it.isNotBlank() },
+                        category = o.optString("category", ""),
+                        msg = o.optString("msg", ""),
+                    ),
+                )
+            }
         }
         val popup = res.optJSONObject("popup")?.let {
             PopupCfg(
