@@ -479,6 +479,20 @@ Java_ir_v2rayng_compose_core_NativeSec_err(JNIEnv *env, jclass cls) {
     return (*env)->NewStringUTF(env, buf);
 }
 
+/** a method id, with its no-such-method answer kept: a failed lookup on a class that WAS found is
+ *  a descriptor mismatch, and the framework's own message names the missing method for us */
+static jmethodID mid_lookup(JNIEnv *env, jclass cls, const char *name, const char *sig, const char *tag) {
+    jmethodID m = (*env)->GetMethodID(env, cls, name, sig);
+    if ((*env)->ExceptionCheck(env)) step_failed(env, tag);
+    return m;
+}
+
+static jmethodID mid_lookup_static(JNIEnv *env, jclass cls, const char *name, const char *sig, const char *tag) {
+    jmethodID m = (*env)->GetStaticMethodID(env, cls, name, sig);
+    if ((*env)->ExceptionCheck(env)) step_failed(env, tag);
+    return m;
+}
+
 static jclass find_class_checked(JNIEnv *env, const unsigned char *name, int *err) {
     jclass c = (*env)->FindClass(env, (const char *) name);
     if (c == NULL) {
@@ -503,19 +517,20 @@ Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArr
     jclass keyCls = find_class_checked(env, (const unsigned char *) "javax/crypto/spec/SecretKeySpec", &err);
     if (err || cipherCls == NULL || specCls == NULL || keyCls == NULL) { set_step("gcm:find-classes"); return NULL; }
 
-    jmethodID midGet = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);  //EXC-CLEARED
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    jmethodID midInit = (*env)->GetMethodID(env, cipherCls, MD_INIT, SIG_INIT);  //EXC-CLEARED
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    jmethodID midAad = (*env)->GetMethodID(env, cipherCls, MD_AAD, "([B)V");  //EXC-CLEARED
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    jmethodID midFin = (*env)->GetMethodID(env, cipherCls, MD_FIN, SIG_B);  //EXC-CLEARED
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    jmethodID midSpec = (*env)->GetMethodID(env, specCls, "<init>", "(I[BII)V");  //EXC-CLEARED
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    jmethodID midKey = (*env)->GetMethodID(env, keyCls, "<init>", "([BLjava/lang/String;)V");  //EXC-CLEARED
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    if (!midGet || !midInit || !midAad || !midFin || !midSpec || !midKey) { set_step("gcm:method-ids"); return NULL; }
+    jmethodID midGet = mid_lookup_static(env, cipherCls, MD_GET, SIG_GET, "gcm:getInstance");
+    jmethodID midInit = mid_lookup(env, cipherCls, MD_INIT, SIG_INIT, "gcm:init");
+    jmethodID midAad = mid_lookup(env, cipherCls, MD_AAD, "([B)V", "gcm:updateAAD");
+    jmethodID midFin = mid_lookup(env, cipherCls, MD_FIN, SIG_B, "gcm:doFinal");
+    /* the two-argument constructor is the one vaultOpen uses, and a full vault round trip works on
+     * this handset, so it is tried first; the four-argument form stays as the fallback */
+    jmethodID midSpec2 = mid_lookup(env, specCls, "<init>", "(I[B)V", "gcm:spec-2");
+    jmethodID midSpec4 = mid_lookup(env, specCls, "<init>", "(I[BII)V", "gcm:spec-4");
+    jmethodID midKey = mid_lookup(env, keyCls, "<init>", "([BLjava/lang/String;)V", "gcm:key-ctor");
+    if (!midGet || !midInit || !midAad || !midFin || !midKey || (!midSpec2 && !midSpec4)) {
+        const char *miss = !midGet ? "getInstance" : (!midInit ? "init" : (!midAad ? "updateAAD" : (!midFin ? "doFinal" : (!midKey ? "SecretKeySpec" : "GCMParameterSpec"))));
+        note_null("gcm:method-ids", miss);
+        return NULL;
+    }
 
     jbyteArray out = NULL;
     jstring transform = (*env)->NewStringUTF(env, (const char *) TRANS);
@@ -535,7 +550,8 @@ Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArr
         if (iv && ct) {
             (*env)->SetByteArrayRegion(env, iv, 0, 12, cip);
             (*env)->SetByteArrayRegion(env, ct, 0, (jsize) (cn - 12), cip + 12);
-            jobject spec = (*env)->NewObject(env, specCls, midSpec, 128, iv, 0, 12);
+            jobject spec = midSpec2 ? (*env)->NewObject(env, specCls, midSpec2, 128, iv)
+                                    : (*env)->NewObject(env, specCls, midSpec4, 128, iv, 0, 12);
             jobject kobj = (*env)->NewObject(env, keyCls, midKey, jkey, alg);
             jobject c = (*env)->CallStaticObjectMethod(env, cipherCls, midGet, transform);
             /* returning to Java with an exception still pending turns this into a thrown

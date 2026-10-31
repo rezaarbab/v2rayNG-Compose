@@ -220,6 +220,10 @@ object BlobSecure {
         tag("chain", (if (ch == null || ch.size < 6) "null"
         else "n=" + ch[0] + " att=" + ch[1] + " self=" + ch[3] + " ext=" + ch[5]) + "/" + st())
         tag("stage", BlobVault.lastStage.replace(' ', '_').take(44) + "/" + st())
+        // sizes and remaining life only - a session key never appears in a log
+        tag("sess", live?.let {
+            "kc" + it.kc.size + "/kt" + it.kt.size + "/" + ((it.exp - System.currentTimeMillis()) / 1000L) + "s"
+        } ?: "none")
         tag("verify", (SecurePrefs.verifyNote ?: "-").replace(' ', '_').take(40))
         tag("rng", (try { NativeSec.random(8)?.size ?: -1 } catch (t: Throwable) { -2 }).toString())
         tag("why", (lastReason ?: "-").replace(' ', '_').take(44))
