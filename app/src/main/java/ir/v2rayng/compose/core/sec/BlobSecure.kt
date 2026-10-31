@@ -112,16 +112,31 @@ object BlobSecure {
     /** Proof that this install owns its hardware key: b64url(ts|nonce|ECDSA) over the token message.
      *  Message layout, signing, the one retry and the self-verify all happen in blobsec.c now.
      *  null = the keystore refused to sign, so no session can be opened. */
-    fun deviceProof(device: String): String? {
+    /** The proof and the public bytes that made it, from one native call - a cached pub is the only
+     *  way these two can disagree, and that is a 403 the worker reports as "signature does not
+     *  match" (signature by the new key, pub line still the old one). */
+    fun deviceProof(device: String): Pair<String, String>? {
         proofFail = ""
-        val proof = NativeSec.proof(device)
+        val pair = NativeSec.proofAndPub(device)
         lastProofNote = "step=" + NativeSec.errInfo()
-        if (proof == null) {
+        val proof = pair?.getOrNull(0)
+        if (proof.isNullOrEmpty()) {
             proofFail = "proof refused [" + lastProofNote + "], id=" + (BlobIdentity.note ?: "-")
             return null
         }
+        val pub = pair.getOrNull(1) ?: ""
+        if (pub.isNotEmpty()) {
+            BlobIdentity.adoptPub(pub)
+            // the worker prints "pub 91B#xxxxxx" for the key it verified under; printing the same
+            // digest here turns "signature does not match" into a one-glance comparison
+            val der = BlobB64.decode(pub)
+            val d = der?.let { NativeSec.sha256(it) }
+            if (d != null && d.size >= 3) {
+                lastProofNote += " pub#" + d.take(3).joinToString("") { String.format("%02x", it) }
+            }
+        }
         blog("deviceProof: " + lastProofNote)
-        return proof
+        return proof to pub
     }
 
     /** ONE line with every answer this handset can give about the secure channel - asked for on
@@ -182,17 +197,19 @@ object BlobSecure {
     private fun issueKeys(base: String, body: JSONObject): Session? {
         return try {
             val device = body.getString("device")
-            // proof FIRST: sign() replaces an unreadable keystore key and retries, and a key that
-            // was just replaced has a different public half - reading pub before that happened
-            // sends the dead key with a signature made by the new one, which the worker can only
-            // report as "signature does not match"
-            val proof = deviceProof(device) ?: run {
+            // proof FIRST, and the pub comes back with it: the identity door can replace an entry
+            // this framework will not sign with, and a key replaced inside that call has a new
+            // public half - the worker can only answer a mismatched pair with "signature does not
+            // match", which is exactly what one build reported
+            val proofPair = deviceProof(device) ?: run {
                 blog("issueKeys: keystore signing failed")
                 fail("device identity signature failed (keystore)" +
                     if (proofFail.isEmpty()) "" else " [" + proofFail + "]")
                 return null
             }
-            val pub = BlobIdentity.publicKeyB64() ?: run {
+            val proof = proofPair.first
+            val pub = proofPair.second
+            if (pub.isEmpty()) {
                 blog("issueKeys: this device has no keystore identity key")
                 fail("no device identity key (" + (BlobIdentity.note ?: "keystore unavailable") + ")")
                 return null

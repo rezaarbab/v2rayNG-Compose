@@ -71,6 +71,14 @@ object BlobIdentity {
     /** Short human-readable handle for the panel - the public key itself is too long to compare. */
     fun fingerprint(): String = idSeed().take(16)
 
+    /** Adopt the public bytes the library just signed with. The identity door may replace an entry
+     *  this framework will not use, and everything this process prints or sends about the key must
+     *  then be the new one - a stale copy here is a 403, not a cosmetic difference. */
+    fun adoptPub(b64: String) {
+        val b = BlobB64.decode(b64)
+        if (b != null && b.isNotEmpty()) pubRef = b
+    }
+
     /** 32 hex chars over the public key - a device id nobody can invent or copy off another phone. */
     fun idSeed(): String {
         // the very first call also creates the key, so the panel already has the fingerprint on the

@@ -256,7 +256,7 @@ public final class NativeSec {
 
     private static native String tokenFor(String device, byte[] kt);
 
-    private static native String proofFor(String device);
+    private static native String[] proofFor(String device);
 
     /** the whole payload path in C: carrier text plus session key in, plaintext JSON bytes out */
     public static byte[] stegoReveal(String stego, byte[] kc) {
@@ -278,8 +278,10 @@ public final class NativeSec {
         }
     }
 
-    /** base64url(ts(4) | nonce(8) | ECDSA over the same message), signed by the hardware key */
-    public static String proof(String device) {
+    /** {proof, base64url(spki)} from one call: base64url(ts(4) | nonce(8) | ECDSA) and the public
+     *  bytes that made it. They must come from the same instant - a pub cached before the identity
+     *  door replaced a key is a signature the worker cannot match. */
+    public static String[] proofAndPub(String device) {
         if (!READY || device == null) return null;
         try {
             return proofFor(device);

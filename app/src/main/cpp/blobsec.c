@@ -2089,7 +2089,7 @@ Java_ir_v2rayng_compose_core_NativeSec_tokenFor(JNIEnv *env, jclass cls, jstring
     return out;
 }
 
-JNIEXPORT jstring JNICALL
+JNIEXPORT jobjectArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_proofFor(JNIEnv *env, jclass cls, jstring jdevice) {
     set_step("proof:entered");
     if (jdevice == NULL) { set_step("proof:null-args"); return NULL; }
@@ -2127,7 +2127,20 @@ Java_ir_v2rayng_compose_core_NativeSec_proofFor(JNIEnv *env, jclass cls, jstring
     if (packed == NULL) { free(buf); set_step("proof:pack"); return NULL; }
     (*env)->SetByteArrayRegion(env, packed, 0, (jsize) (12 + siglen), buf);
     free(buf);
-    jstring out = Java_ir_v2rayng_compose_core_NativeSec_b64uEncode(env, cls, packed);
-    if (out == NULL) set_step("proof:encode");
-    return out;
+    jstring proof = Java_ir_v2rayng_compose_core_NativeSec_b64uEncode(env, cls, packed);
+    /* the public bytes travel with the proof: they are the ones that signed, even when the identity
+     * door had to replace the key a moment ago. Kotlin used to read its own cached copy, which is a
+     * 403 the worker reports as "signature does not match": the signature was by the new key, the
+     * pub line was the old one. */
+    jstring pub = spki ? Java_ir_v2rayng_compose_core_NativeSec_b64uEncode(env, cls, spki) : NULL;
+    jclass strCls = need_class(env, "java/lang/String");
+    jobjectArray pair = strCls ? (*env)->NewObjectArray(env, 2, strCls, NULL) : NULL;
+    if (pair) {
+        if (proof) (*env)->SetObjectArrayElement(env, pair, 0, proof);
+        if (pub) (*env)->SetObjectArrayElement(env, pair, 1, pub);
+    } else {
+        set_step("proof:pair");
+    }
+    if (proof == NULL) set_step("proof:encode");
+    return pair;
 }
