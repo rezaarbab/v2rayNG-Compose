@@ -450,9 +450,35 @@ function bl_endpoint(link) {
   return { host: seg.slice(0, c), port: Number(seg.slice(c + 1)) || 443 };
 }
 
+/** the trap row name, in the three modes the panel offers:
+ *  real   - derived from the real row it was built from (the original behaviour);
+ *  fixed  - one name the admin typed, the same on every device;
+ *  random - drawn per device from a small pool, but STABLE for that device (a name that changes
+ *           between syncs is the one thing a leaker would notice).
+ */
+function bl_fnv1a(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 0x01000193) >>> 0; }
+  return h >>> 0;
+}
+
+const BL_NAME_POOL = ["آلمان", "فرانسه", "هلند", "فنلاند", "ترکیه", "امارات", "سوئد", "اتریش", "لهستان", "رومانی"];
+
+function bl_canaryName(real, mode, fixed, device) {
+  if (mode === "fixed") {
+    const f = String(fixed || "").trim().slice(0, 64);
+    return f || "srv";
+  }
+  if (mode === "random") {
+    const h = bl_fnv1a(String(device) + "|" + String(real.name || real.link || ""));
+    return BL_NAME_POOL[h % BL_NAME_POOL.length] + " " + (10 + (h >>> 8) % 90);
+  }
+  return (real.name || "srv") + (Math.random() < 0.5 ? " " + (2 + Math.floor(Math.random() * 7)) : "");
+}
+
 /** One trap row built from one real server row. Same shape, one thing changed:
  *  credential always (when it is a recognisable one), host/port when the admin set a sink. */
-function bl_canaryLink(real, sinkHosts) {
+function bl_canaryLink(real, sinkHosts, nameMode, fixedName, device) {
   const link = String(real.link || "");
   if (!link || !link.includes("://")) return null;
   const ep = bl_endpoint(link);
@@ -465,8 +491,8 @@ function bl_canaryLink(real, sinkHosts) {
   out = out.split(ep.host).join(host);
   out = bl_mutate(out);
   if (out === link) return null;
-  // the fragment is the name the victim client shows - keep it in the same style as the list
-  const name = (real.name || "srv") + (Math.random() < 0.5 ? " " + (2 + Math.floor(Math.random() * 7)) : "");
+  // the fragment is the name the victim client shows - style comes from the panel mode
+  const name = bl_canaryName(real, nameMode, fixedName, device);
   const hash = out.lastIndexOf("#");
   const base = hash >= 0 ? out.slice(0, hash) : out;
   out = base + "#" + encodeURIComponent(name);
@@ -476,8 +502,10 @@ function bl_canaryLink(real, sinkHosts) {
 
 /** Ensure the device owns `want` traps and hand them back in the same shape as listServers. */
 async function canaryFor(env, device, shared) {
-  const cfg = await getSettings(env, ["canary_on", "canary_count", "canary_hosts"]);
+  const cfg = await getSettings(env, ["canary_on", "canary_count", "canary_hosts", "canary_name_mode", "canary_name"]);
   if (cfg.canary_on !== "1") return [];
+  const nameMode = String(cfg.canary_name_mode || "real");
+  const fixedName = String(cfg.canary_name || "");
   const want = Math.max(0, Math.min(12, Number(cfg.canary_count || 3)));
   let mine = [];
   try {
@@ -500,7 +528,7 @@ async function canaryFor(env, device, shared) {
     let gen = null;
     // ss:// links carry an opaque base64 blob and can only be changed by port/name, so one draw
     // sometimes yields nothing - try a few different sources before giving up on the slot
-    for (let t = 0; t < 3 && !gen; t++) gen = bl_canaryLink(bl_pick(pool), sinkHosts);
+    for (let t = 0; t < 3 && !gen; t++) gen = bl_canaryLink(bl_pick(pool), sinkHosts, nameMode, fixedName, device);
     if (!gen) continue;
     const ord = 1000 + Math.floor(Math.random() * 90000); // scattered among the real rows
     try {
@@ -1285,7 +1313,7 @@ async function adminApi(env, b, request) {
           } }), { headers: jsonHeaders() });
       }
       case "canary.state": {
-        const c = await getSettings(env, ["canary_on", "canary_count", "canary_hosts", "info_min"]);
+        const c = await getSettings(env, ["canary_on", "canary_count", "canary_hosts", "info_min", "canary_name_mode", "canary_name"]);
         let tot = 0;
         try {
           tot = Number((await env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE COALESCE(owner,'')<>'' AND active=1").first()).c);
@@ -1306,7 +1334,7 @@ async function adminApi(env, b, request) {
           locks = Number((await env.DB.prepare("SELECT COUNT(*) c FROM auth_lock WHERE until>?1").bind(Date.now()).first()).c);
         } catch (e) {}
         return okJson({
-          canary: { on: c.canary_on === "1" ? "1" : "0", count: c.canary_count || "3", hosts: c.canary_hosts || "" },
+          canary: { on: c.canary_on === "1" ? "1" : "0", count: c.canary_count || "3", hosts: c.canary_hosts || "", nameMode: c.canary_name_mode || "real", name: c.canary_name || "" },
           infoMin: c.info_min === "1" ? "1" : "0",
           trapTotal: tot,
           legacyClients: legacyC,
@@ -1378,6 +1406,8 @@ async function adminApi(env, b, request) {
         await setSetting(env, "canary_on", b.on ? "1" : "0");
         await setSetting(env, "canary_count", String(Math.max(0, Math.min(12, Number(b.count || 0)))));
         await setSetting(env, "canary_hosts", String(b.hosts || "").slice(0, 500));
+        await setSetting(env, "canary_name_mode", (b.nameMode === "fixed" || b.nameMode === "random") ? b.nameMode : "real");
+        await setSetting(env, "canary_name", String(b.name || "").slice(0, 64));
         await setSetting(env, "info_min", b.infoMin ? "1" : "0");
         return okJson();
       }
@@ -1977,6 +2007,8 @@ function panelPage(env) {
 <div><div class=lbl>ارسال سرور تله</div><label class=switch><input type=checkbox id=cy_on><span></span></label> <span class=note>روشن باشد</span></div>
 <div><div class=lbl>تعداد برای هر دستگاه (۰ تا ۱۲)</div><input id=cy_count type=number min=0 max=12 value=3></div>
 <div><div class=lbl>میزبان مخصوص تله‌ها (اختیاری، با کاما)</div><input id=cy_hosts placeholder="خالی = همان میزبان‌های واقعی"></div>
+<div><div class=lbl>نام سرورهای تله</div><select id=cy_name_mode><option value=real>مثل نام سرورهای واقعی (تصادفی)</option><option value=fixed>یک نام ثابت برای همه دستگاه‌ها</option><option value=random>تصادفیِ ثابت برای هر دستگاه</option></select></div>
+<div><div class=lbl>نام ثابت (فقط در حالت «یک نام ثابت»)</div><input id=cy_name placeholder="مثلاً: سرور اصلی"></div>
 </div>
 <div style="margin-top:12px"><label class=switch><input type=checkbox id=im_on><span></span></label>
 <span class=note>&nbsp;حداقل اطلاعات دستگاه ذخیره شود (فقط برند/مدل/نسخه اندروید/شناسه‌ها؛ اثر انگشت سخت‌افزاری، IMEI‌مانندها، IPهای تاریخی و جزئیات build other نشود). خاموش = اطلاعات کامل برای تشخیص نشتی.</span></div>
@@ -2408,6 +2440,8 @@ async function loadCanary(){const j=await api({action:'canary.state'});const c=j
  if($('cy_on'))$('cy_on').checked=String(c.on)==='1';
  if($('cy_count'))$('cy_count').value=String(c.count||3);
  if($('cy_hosts'))$('cy_hosts').value=String(c.hosts||'');
+ if($('cy_name_mode'))$('cy_name_mode').value=String(c.nameMode||'real');
+ if($('cy_name'))$('cy_name').value=String(c.name||'');
  if($('im_on'))$('im_on').checked=String(c.infoMin)==='1';
  if($('cy_cnt'))$('cy_cnt').textContent=(Number(j.trapTotal)||0)+' سرور تله فعال · '+((j.legacyClients==null)?'?':j.legacyClients)+' دستگاه با نشست قدیمی';
  const d=j.diag||{};
@@ -2419,7 +2453,7 @@ async function loadCanary(){const j=await api({action:'canary.state'});const c=j
   '<br><span class=note>'+(ar.secret==='set'?'رمز SESSION_SEAL (یا BLOB_ROOT) تنظیم است - نشست‌های تازه رمزنگاری می‌شوند':'<b style=color:red>هیچ رمز SESSION_SEAL/BLOB_ROOT روی ورکر تنظیم نیست، پس کلیدهای نشست متن روشن می‌مانند</b>')+
   ' · قفل تلاش لاگین فعال='+(j.loginLocks||0)+'</span>'}
 async function saveCanary(){await api({action:'canary.set',on:$('cy_on').checked,count:Number($('cy_count').value||0),
- hosts:$('cy_hosts').value,infoMin:$('im_on').checked});
+ hosts:$('cy_hosts').value,nameMode:$('cy_name_mode').value,name:$('cy_name').value,infoMin:$('im_on').checked});
  toast('ذخیره شد - سرورهای تله در همگام‌سازی بعدی هر دستگاه ساخته میشوند');loadCanary()}
 async function purgeData(){const n=Number($('pr_days').value||30);
  if(!confirm('رویدادهای قدیمی‌تر از '+n+' روز حذف شوند؟ (تاریخچهٔ ریکوست دستگاه‌ها می‌رود، خود دستگاه‌ها می‌مانند)'))return;
