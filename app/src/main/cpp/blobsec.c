@@ -364,7 +364,7 @@ static const char SIG_B[] = "([B)[B";
 
 static jclass find_class_checked(JNIEnv *env, const unsigned char *name, int *err) {
     jclass c = (*env)->FindClass(env, (const char *) name);
-    if (c == NULL) { *err = 1; }
+    if (c == NULL) { *err = 1; if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); }
     return c;
 }
 
@@ -380,12 +380,18 @@ Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArr
     jclass keyCls = find_class_checked(env, (const unsigned char *) "javax/crypto/spec/SecretKeySpec", &err);
     if (err || cipherCls == NULL || specCls == NULL || keyCls == NULL) return NULL;
 
-    jmethodID midGet = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);
-    jmethodID midInit = (*env)->GetMethodID(env, cipherCls, MD_INIT, SIG_INIT);
-    jmethodID midAad = (*env)->GetMethodID(env, cipherCls, MD_AAD, "([B)V");
-    jmethodID midFin = (*env)->GetMethodID(env, cipherCls, MD_FIN, SIG_B);
-    jmethodID midSpec = (*env)->GetMethodID(env, specCls, "<init>", "(I[BII)V");
-    jmethodID midKey = (*env)->GetMethodID(env, keyCls, "<init>", "([BLjava/lang/String;)V");
+    jmethodID midGet = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID midInit = (*env)->GetMethodID(env, cipherCls, MD_INIT, SIG_INIT);  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID midAad = (*env)->GetMethodID(env, cipherCls, MD_AAD, "([B)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID midFin = (*env)->GetMethodID(env, cipherCls, MD_FIN, SIG_B);  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID midSpec = (*env)->GetMethodID(env, specCls, "<init>", "(I[BII)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jmethodID midKey = (*env)->GetMethodID(env, keyCls, "<init>", "([BLjava/lang/String;)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     if (!midGet || !midInit || !midAad || !midFin || !midSpec || !midKey) return NULL;
 
     jbyteArray out = NULL;
@@ -466,12 +472,14 @@ static jclass need_class(JNIEnv *env, const char *name) {
 static jobject keystore_open(JNIEnv *env, int *err) {
     jclass ksCls = need_class(env, KS_CLS);
     if (!ksCls) { *err = 1; return NULL; }
-    jmethodID getInstance = (*env)->GetStaticMethodID(env, ksCls, "getInstance", "(Ljava/lang/String;)Ljava/security/KeyStore;");
+    jmethodID getInstance = (*env)->GetStaticMethodID(env, ksCls, "getInstance", "(Ljava/lang/String;)Ljava/security/KeyStore;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jstring prov = (*env)->NewStringUTF(env, PROVIDER);
     jobject ks = getInstance && prov ? (*env)->CallStaticObjectMethod(env, ksCls, getInstance, prov) : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); ks = NULL; *err = 1; }
     if (ks) {
-        jmethodID load = (*env)->GetMethodID(env, ksCls, "load", "(Ljava/security/KeyStore$LoadStoreParameter;)V");
+        jmethodID load = (*env)->GetMethodID(env, ksCls, "load", "(Ljava/security/KeyStore$LoadStoreParameter;)V");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         if (load) {
             (*env)->CallVoidMethod(env, ks, load, NULL);
             if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); ks = NULL; *err = 1; }
@@ -487,14 +495,16 @@ static jobject read_key(JNIEnv *env, jstring jalias) {
     jobject ks = keystore_open(env, &err);
     if (err || ks == NULL) return NULL;
     jclass ksCls = (*env)->GetObjectClass(env, ks);
-    jmethodID getEntry = (*env)->GetMethodID(env, ksCls, "getEntry", "(Ljava/lang/String;[Ljava/security/KeyStore$ProtectionParameter;)Ljava/security/KeyStore$Entry;");
+    jmethodID getEntry = (*env)->GetMethodID(env, ksCls, "getEntry", "(Ljava/lang/String;Ljava/security/KeyStore$ProtectionParameter;)Ljava/security/KeyStore$Entry;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jobject entry = getEntry ? (*env)->CallObjectMethod(env, ks, getEntry, jalias, NULL) : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); entry = NULL; }
     jobject key = NULL;
     if (entry) {
         jclass skCls = need_class(env, SKS_CLS);
         if (skCls && (*env)->IsInstanceOf(env, entry, skCls)) {
-            jmethodID getSecret = (*env)->GetMethodID(env, skCls, "getSecretKey", "()Ljavax/crypto/SecretKey;");
+            jmethodID getSecret = (*env)->GetMethodID(env, skCls, "getSecretKey", "()Ljavax/crypto/SecretKey;");  //EXC-CLEARED
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             if (getSecret) key = (*env)->CallObjectMethod(env, entry, getSecret);
             if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); key = NULL; }
         }
@@ -512,17 +522,21 @@ static jobject make_key(JNIEnv *env, jstring jalias) {
     jclass bld = need_class(env, KG_CLS);
     jclass kgc = need_class(env, KEYGEN_CLS);
     if (!kp || !bld || !kgc) return NULL;
-    jmethodID mAlg = (*env)->GetStaticMethodID(env, kp, "getKeyAlgorithm", "()Ljava/lang/String;");
-    (void) mAlg; /* the AES name is spelled below; the field accessor is not needed from native */
     jstring sAes = (*env)->NewStringUTF(env, KAES);
-    jmethodID ctor = (*env)->GetMethodID(env, bld, "<init>", "(Ljava/lang/String;I)V");
+    jmethodID ctor = (*env)->GetMethodID(env, bld, "<init>", "(Ljava/lang/String;I)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jobject b = ctor ? (*env)->NewObject(env, bld, ctor, jalias, PURPOSE_ENC_DEC) : NULL;
     if (b) {
-        jmethodID mSize = (*env)->GetMethodID(env, bld, "setKeySize", "(I)Landroid/security/keystore/KeyGenParameterSpec$Builder;");
-        jmethodID mMode = (*env)->GetMethodID(env, bld, "setBlockModes", "(Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");
-        jmethodID mPad = (*env)->GetMethodID(env, bld, "setEncryptionPaddings", "(Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");
-        jmethodID mRnd = (*env)->GetMethodID(env, bld, "setRandomizedEncryptionRequired", "(Z)Landroid/security/keystore/KeyGenParameterSpec$Builder;");
-        jmethodID mBuild = (*env)->GetMethodID(env, bld, "build", "()Landroid/security/keystore/KeyGenParameterSpec;");
+        jmethodID mSize = (*env)->GetMethodID(env, bld, "setKeySize", "(I)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID mMode = (*env)->GetMethodID(env, bld, "setBlockModes", "(Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID mPad = (*env)->GetMethodID(env, bld, "setEncryptionPaddings", "(Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID mRnd = (*env)->GetMethodID(env, bld, "setRandomizedEncryptionRequired", "(Z)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID mBuild = (*env)->GetMethodID(env, bld, "build", "()Landroid/security/keystore/KeyGenParameterSpec;");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         jstring gcm = (*env)->NewStringUTF(env, KGCM), none = (*env)->NewStringUTF(env, KNONE);
         jobject spec = NULL;
         if (mSize) b = (*env)->CallObjectMethod(env, b, mSize, 256);
@@ -532,13 +546,16 @@ static jobject make_key(JNIEnv *env, jstring jalias) {
         if (mBuild) spec = (*env)->CallObjectMethod(env, b, mBuild);
         if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); spec = NULL; }
         if (spec) {
-            jmethodID kgi = (*env)->GetStaticMethodID(env, kgc, "getInstance", "(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;");
+            jmethodID kgi = (*env)->GetStaticMethodID(env, kgc, "getInstance", "(Ljava/lang/String;Ljava/lang/String;)Ljavax/crypto/KeyGenerator;");  //EXC-CLEARED
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             jstring prov = (*env)->NewStringUTF(env, PROVIDER);
             jobject kg = kgi && sAes && prov ? (*env)->CallStaticObjectMethod(env, kgc, kgi, sAes, prov) : NULL;
             if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); kg = NULL; }
             if (kg) {
-                jmethodID kinit = (*env)->GetMethodID(env, kgc, "init", "(Ljava/security/spec/AlgorithmParameterSpec;)V");
-                jmethodID kgen = (*env)->GetMethodID(env, kgc, "generateKey", "()Ljavax/crypto/SecretKey;");
+                jmethodID kinit = (*env)->GetMethodID(env, kgc, "init", "(Ljava/security/spec/AlgorithmParameterSpec;)V");  //EXC-CLEARED
+                if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+                jmethodID kgen = (*env)->GetMethodID(env, kgc, "generateKey", "()Ljavax/crypto/SecretKey;");  //EXC-CLEARED
+                if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
                 if (kinit) (*env)->CallVoidMethod(env, kg, kinit, spec);
                 if (!(*env)->ExceptionCheck(env) && kgen) {
                     jobject k = (*env)->CallObjectMethod(env, kg, kgen);
@@ -601,15 +618,20 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultSeal(JNIEnv *env, jclass cls, jbyteA
     jclass cipherCls = need_class(env, (const char *) CIPH);
     jclass srCls = need_class(env, SRND_CLS);
     if (!cipherCls || !srCls) return NULL;
-    jmethodID getInst = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);
+    jmethodID getInst = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jstring tr = (*env)->NewStringUTF(env, (const char *) TRANS);
     jobject c = getInst && tr ? (*env)->CallStaticObjectMethod(env, cipherCls, getInst, tr) : NULL;
     jbyteArray out = NULL;
     if (c) {
-        jmethodID initEnc = (*env)->GetMethodID(env, cipherCls, MD_INIT, "(ILjava/security/Key;)V");
-        jmethodID aad = (*env)->GetMethodID(env, cipherCls, MD_AAD, "([B)V");
-        jmethodID fin = (*env)->GetMethodID(env, cipherCls, MD_FIN, SIG_B);
-        jmethodID getIv = (*env)->GetMethodID(env, cipherCls, "getIV", "()[B");
+        jmethodID initEnc = (*env)->GetMethodID(env, cipherCls, MD_INIT, "(ILjava/security/Key;)V");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID aad = (*env)->GetMethodID(env, cipherCls, MD_AAD, "([B)V");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID fin = (*env)->GetMethodID(env, cipherCls, MD_FIN, SIG_B);  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID getIv = (*env)->GetMethodID(env, cipherCls, "getIV", "()[B");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         if (initEnc && aad && fin && getIv) {
             (*env)->CallVoidMethod(env, c, initEnc, 1 /* ENCRYPT_MODE */, cached_key);
             if (!(*env)->ExceptionCheck(env)) {
@@ -674,15 +696,20 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(JNIEnv *env, jclass cls, jbyteA
         (*env)->GetByteArrayRegion(env, jblob, 0, n, raw);
         (*env)->SetByteArrayRegion(env, iv, 0, 12, raw);
         (*env)->SetByteArrayRegion(env, ct, 0, (jsize) (n - 12), raw + 12);
-        jmethodID specCtor = (*env)->GetMethodID(env, specCls, "<init>", "(I[B)V");
-        jmethodID getInst = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);
+        jmethodID specCtor = (*env)->GetMethodID(env, specCls, "<init>", "(I[B)V");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID getInst = (*env)->GetStaticMethodID(env, cipherCls, MD_GET, SIG_GET);  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         jstring tr = (*env)->NewStringUTF(env, (const char *) TRANS);
         jobject spec = specCtor ? (*env)->NewObject(env, specCls, specCtor, 128, iv) : NULL;
         jobject c = getInst && tr ? (*env)->CallStaticObjectMethod(env, cipherCls, getInst, tr) : NULL;
         if (spec && c) {
-            jmethodID init = (*env)->GetMethodID(env, cipherCls, MD_INIT, "(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V");
-            jmethodID aad = (*env)->GetMethodID(env, cipherCls, MD_AAD, "([B)V");
-            jmethodID fin = (*env)->GetMethodID(env, cipherCls, MD_FIN, SIG_B);
+            jmethodID init = (*env)->GetMethodID(env, cipherCls, MD_INIT, "(ILjava/security/Key;Ljava/security/spec/AlgorithmParameterSpec;)V");  //EXC-CLEARED
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            jmethodID aad = (*env)->GetMethodID(env, cipherCls, MD_AAD, "([B)V");  //EXC-CLEARED
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            jmethodID fin = (*env)->GetMethodID(env, cipherCls, MD_FIN, SIG_B);  //EXC-CLEARED
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             if (init && aad && fin) {
                 (*env)->CallVoidMethod(env, c, init, 2 /* DECRYPT_MODE */, key, spec);
                 if (!(*env)->ExceptionCheck(env)) {
@@ -710,7 +737,8 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultDrop(JNIEnv *env, jclass cls, jint w
     jobject ks = keystore_open(env, &err);
     if (err || ks == NULL) return 0;
     jclass ksCls = (*env)->GetObjectClass(env, ks);
-    jmethodID del = (*env)->GetMethodID(env, ksCls, "deleteEntry", "(Ljava/lang/String;)V");
+    jmethodID del = (*env)->GetMethodID(env, ksCls, "deleteEntry", "(Ljava/lang/String;)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     int done = 0;
     if (del) {
         (*env)->CallVoidMethod(env, ks, del, jalias);
@@ -742,14 +770,16 @@ static jobject read_private(JNIEnv *env, jstring jalias) {
     jobject ks = keystore_open(env, &err);
     if (err || ks == NULL) return NULL;
     jclass ksCls = (*env)->GetObjectClass(env, ks);
-    jmethodID getEntry = (*env)->GetMethodID(env, ksCls, "getEntry", "(Ljava/lang/String;[Ljava/security/KeyStore$ProtectionParameter;)Ljava/security/KeyStore$Entry;");
+    jmethodID getEntry = (*env)->GetMethodID(env, ksCls, "getEntry", "(Ljava/lang/String;Ljava/security/KeyStore$ProtectionParameter;)Ljava/security/KeyStore$Entry;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jobject entry = getEntry ? (*env)->CallObjectMethod(env, ks, getEntry, jalias, NULL) : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); entry = NULL; }
     jobject key = NULL;
     if (entry) {
         jclass pke = need_class(env, "java/security/KeyStore$PrivateKeyEntry");
         if (pke && (*env)->IsInstanceOf(env, entry, pke)) {
-            jmethodID g = (*env)->GetMethodID(env, pke, "getPrivateKey", "()Ljava/security/PrivateKey;");
+            jmethodID g = (*env)->GetMethodID(env, pke, "getPrivateKey", "()Ljava/security/PrivateKey;");  //EXC-CLEARED
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             if (g) key = (*env)->CallObjectMethod(env, entry, g);
             if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); key = NULL; }
         }
@@ -768,20 +798,27 @@ static jobject build_spec(JNIEnv *env, jbyteArray challenge) {
     jclass kp = need_class(env, KP_CLS);
     if (!bld || !ec || !kp) return NULL;
     jstring jalias = id_alias(env);
-    jmethodID ctor = (*env)->GetMethodID(env, bld, "<init>", "(Ljava/lang/String;I)V");
+    jmethodID ctor = (*env)->GetMethodID(env, bld, "<init>", "(Ljava/lang/String;I)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jobject b = ctor ? (*env)->NewObject(env, bld, ctor, jalias, PURPOSE_SIGN_VERIFY) : NULL;
     jobject spec = NULL;
     if (b) {
-        jmethodID ecCtor = (*env)->GetMethodID(env, ec, "<init>", "(Ljava/lang/String;)V");
+        jmethodID ecCtor = (*env)->GetMethodID(env, ec, "<init>", "(Ljava/lang/String;)V");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         jstring curve = (*env)->NewStringUTF(env, ID_CURVE);
         jobject ecSpec = ecCtor && curve ? (*env)->NewObject(env, ec, ecCtor, curve) : NULL;
-        jmethodID mEc = (*env)->GetMethodID(env, bld, "setAlgorithmParameterSpec", "(Ljava/security/spec/AlgorithmParameterSpec;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");
-        jmethodID mDig = (*env)->GetMethodID(env, bld, "setDigests", "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");
-        jmethodID mAtt = (*env)->GetMethodID(env, bld, "setAttestationChallenge", "([B)Landroid/security/keystore/KeyGenParameterSpec$Builder;");
-        jmethodID mBuild = (*env)->GetMethodID(env, bld, "build", "()Landroid/security/keystore/KeyGenParameterSpec;");
+        jmethodID mEc = (*env)->GetMethodID(env, bld, "setAlgorithmParameterSpec", "(Ljava/security/spec/AlgorithmParameterSpec;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID mDig = (*env)->GetMethodID(env, bld, "setDigests", "([Ljava/lang/String;)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID mAtt = (*env)->GetMethodID(env, bld, "setAttestationChallenge", "([B)Landroid/security/keystore/KeyGenParameterSpec$Builder;");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID mBuild = (*env)->GetMethodID(env, bld, "build", "()Landroid/security/keystore/KeyGenParameterSpec;");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         if (mEc && ecSpec) b = (*env)->CallObjectMethod(env, b, mEc, ecSpec);
         if (mDig) {
-            jobjectArray digests = (*env)->NewObjectArray(env, 1, (*env)->FindClass(env, "java/lang/String"), NULL);
+            jclass strCls = need_class(env, "java/lang/String");
+            jobjectArray digests = strCls ? (*env)->NewObjectArray(env, 1, strCls, NULL) : NULL;
             jstring d = (*env)->NewStringUTF(env, ID_SHA256);
             if (digests && d) {
                 (*env)->SetObjectArrayElement(env, digests, 0, d);
@@ -798,15 +835,18 @@ static jobject build_spec(JNIEnv *env, jbyteArray challenge) {
 static int make_pair(JNIEnv *env, jobject spec) {
     jclass kpg = need_class(env, "java/security/KeyPairGenerator");
     if (!kpg || spec == NULL) return 0;
-    jmethodID getInst = (*env)->GetStaticMethodID(env, kpg, "getInstance", "(Ljava/lang/String;Ljava/lang/String;)Ljava/security/KeyPairGenerator;");
+    jmethodID getInst = (*env)->GetStaticMethodID(env, kpg, "getInstance", "(Ljava/lang/String;Ljava/lang/String;)Ljava/security/KeyPairGenerator;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jstring ecName = (*env)->NewStringUTF(env, ID_EC);
     jstring prov = (*env)->NewStringUTF(env, PROVIDER);
     jobject gen = getInst && ecName && prov ? (*env)->CallStaticObjectMethod(env, kpg, getInst, ecName, prov) : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); gen = NULL; }
     int done = 0;
     if (gen) {
-        jmethodID init = (*env)->GetMethodID(env, kpg, "initialize", "(Ljava/security/spec/AlgorithmParameterSpec;)V");
-        jmethodID mk = (*env)->GetMethodID(env, kpg, "generateKeyPair", "()Ljava/security/KeyPair;");
+        jmethodID init = (*env)->GetMethodID(env, kpg, "initialize", "(Ljava/security/spec/AlgorithmParameterSpec;)V");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID mk = (*env)->GetMethodID(env, kpg, "generateKeyPair", "()Ljava/security/KeyPair;");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         if (init) (*env)->CallVoidMethod(env, gen, init, spec);
         if (!(*env)->ExceptionCheck(env) && mk) {
             jobject kp = (*env)->CallObjectMethod(env, gen, mk);
@@ -840,15 +880,19 @@ Java_ir_v2rayng_compose_core_NativeSec_idSign(JNIEnv *env, jclass cls, jbyteArra
     if (key == NULL) return NULL;
     jclass sigCls = need_class(env, "java/security/Signature");
     if (!sigCls) return NULL;
-    jmethodID getInst = (*env)->GetStaticMethodID(env, sigCls, "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;");
+    jmethodID getInst = (*env)->GetStaticMethodID(env, sigCls, "getInstance", "(Ljava/lang/String;)Ljava/security/Signature;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jstring algo = (*env)->NewStringUTF(env, "SHA256withECDSA");
     jobject s = getInst && algo ? (*env)->CallStaticObjectMethod(env, sigCls, getInst, algo) : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); s = NULL; }
     jbyteArray out = NULL;
     if (s) {
-        jmethodID initSign = (*env)->GetMethodID(env, sigCls, "initSign", "(Ljava/security/PrivateKey;)V");
-        jmethodID update = (*env)->GetMethodID(env, sigCls, "update", "([BII)V");
-        jmethodID sign = (*env)->GetMethodID(env, sigCls, "sign", "()[B");
+        jmethodID initSign = (*env)->GetMethodID(env, sigCls, "initSign", "(Ljava/security/PrivateKey;)V");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID update = (*env)->GetMethodID(env, sigCls, "update", "([BII)V");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        jmethodID sign = (*env)->GetMethodID(env, sigCls, "sign", "()[B");  //EXC-CLEARED
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
         if (initSign) (*env)->CallVoidMethod(env, s, initSign, key);
         if (!(*env)->ExceptionCheck(env) && update) {
             jsize n = (*env)->GetArrayLength(env, jmsg);
@@ -870,7 +914,8 @@ Java_ir_v2rayng_compose_core_NativeSec_idSpki(JNIEnv *env, jclass cls) {
     jobject ks = keystore_open(env, &err);
     if (err || ks == NULL) return NULL;
     jclass ksCls = (*env)->GetObjectClass(env, ks);
-    jmethodID getCert = (*env)->GetMethodID(env, ksCls, "getCertificate", "(Ljava/lang/String;)Ljava/security/cert/Certificate;");
+    jmethodID getCert = (*env)->GetMethodID(env, ksCls, "getCertificate", "(Ljava/lang/String;)Ljava/security/cert/Certificate;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jobject cert = getCert && jalias ? (*env)->CallObjectMethod(env, ks, getCert, jalias) : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); cert = NULL; }
     jbyteArray out = NULL;
@@ -879,12 +924,14 @@ Java_ir_v2rayng_compose_core_NativeSec_idSpki(JNIEnv *env, jclass cls) {
         if (xcls && (*env)->IsInstanceOf(env, cert, xcls)) {
             /* the certificate's own encoded form is the whole cert; the worker imports the SPKI,
              * so take getPublicKey().getEncoded() instead */
-            jmethodID pubOf = (*env)->GetMethodID(env, xcls, "getPublicKey", "()Ljava/security/PublicKey;");
+            jmethodID pubOf = (*env)->GetMethodID(env, xcls, "getPublicKey", "()Ljava/security/PublicKey;");  //EXC-CLEARED
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             jobject pub = pubOf ? (*env)->CallObjectMethod(env, cert, pubOf) : NULL;
             if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); pub = NULL; }
             if (pub) {
                 jclass keyCls = (*env)->GetObjectClass(env, pub);
-                jmethodID enc = (*env)->GetMethodID(env, keyCls, "getEncoded", "()[B");
+                jmethodID enc = (*env)->GetMethodID(env, keyCls, "getEncoded", "()[B");  //EXC-CLEARED
+                if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
                 if (enc) out = (jbyteArray) (*env)->CallObjectMethod(env, pub, enc);
                 if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); out = NULL; }
             }
@@ -902,7 +949,8 @@ Java_ir_v2rayng_compose_core_NativeSec_idDrop(JNIEnv *env, jclass cls) {
     jobject ks = keystore_open(env, &err);
     if (err || ks == NULL) return 0;
     jclass ksCls = (*env)->GetObjectClass(env, ks);
-    jmethodID del = (*env)->GetMethodID(env, ksCls, "deleteEntry", "(Ljava/lang/String;)V");
+    jmethodID del = (*env)->GetMethodID(env, ksCls, "deleteEntry", "(Ljava/lang/String;)V");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     int done = 0;
     if (del) {
         (*env)->CallVoidMethod(env, ks, del, jalias);
@@ -940,10 +988,11 @@ Java_ir_v2rayng_compose_core_NativeSec_idChain(JNIEnv *env, jclass cls) {
     jobject ks = keystore_open(env, &err);
     if (err || ks == NULL) return NULL;
     jclass ksCls = (*env)->GetObjectClass(env, ks);
-    jmethodID getChain = (*env)->GetMethodID(env, ksCls, "getCertificateChain", "(Ljava/lang/String;)[Ljava/security/cert/Certificate;");
+    jmethodID getChain = (*env)->GetMethodID(env, ksCls, "getCertificateChain", "(Ljava/lang/String;)[Ljava/security/cert/Certificate;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     jobjectArray chain = getChain && jalias ? (jobjectArray) (*env)->CallObjectMethod(env, ks, getChain, jalias) : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); chain = NULL; }
-    jclass strCls = (*env)->FindClass(env, "java/lang/String");
+    jclass strCls = need_class(env, "java/lang/String");
     jobjectArray out = strCls ? (*env)->NewObjectArray(env, 6, strCls, NULL) : NULL;
     if (out == NULL) return NULL;
     char buf[64];
@@ -962,10 +1011,13 @@ Java_ir_v2rayng_compose_core_NativeSec_idChain(JNIEnv *env, jclass cls) {
         jobject leaf = (*env)->GetObjectArrayElement(env, chain, 0);
         jclass xcls = need_class(env, "java/security/cert/X509Certificate");
         if (leaf && xcls && (*env)->IsInstanceOf(env, leaf, xcls)) {
-            jmethodID getIssuer = (*env)->GetMethodID(env, xcls, "getIssuerX500Principal", "()Ljavax/security/auth/x500/X500Principal;");
-            jmethodID getSubject = (*env)->GetMethodID(env, xcls, "getSubjectX500Principal", "()Ljavax/security/auth/x500/X500Principal;");
+            jmethodID getIssuer = (*env)->GetMethodID(env, xcls, "getIssuerX500Principal", "()Ljavax/security/auth/x500/X500Principal;");  //EXC-CLEARED
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            jmethodID getSubject = (*env)->GetMethodID(env, xcls, "getSubjectX500Principal", "()Ljavax/security/auth/x500/X500Principal;");  //EXC-CLEARED
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             jclass prinCls = need_class(env, "javax/security/auth/x500/X500Principal");
-            jmethodID getName = prinCls ? (*env)->GetMethodID(env, prinCls, "getName", "()Ljava/lang/String;") : NULL;
+            jmethodID getName = prinCls ? (*env)->GetMethodID(env, prinCls, "getName", "()Ljava/lang/String;") : NULL;  //EXC-CLEARED
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             jobject iss = getIssuer ? (*env)->CallObjectMethod(env, leaf, getIssuer) : NULL;
             jobject sub = getSubject ? (*env)->CallObjectMethod(env, leaf, getSubject) : NULL;
             if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
@@ -986,7 +1038,8 @@ Java_ir_v2rayng_compose_core_NativeSec_idChain(JNIEnv *env, jclass cls) {
                 }
             }
             if (subName[0] && strcmp(subName, issuer) == 0) selfSigned[0] = '1';
-            jmethodID getExt = (*env)->GetMethodID(env, xcls, "getExtensionValue", "(Ljava/lang/String;)[B");
+            jmethodID getExt = (*env)->GetMethodID(env, xcls, "getExtensionValue", "(Ljava/lang/String;)[B");  //EXC-CLEARED
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
             jstring oid = (*env)->NewStringUTF(env, "1.3.6.1.4.1.11129.2.1.17");
             if (getExt && oid) {
                 jbyteArray ext = (jbyteArray) (*env)->CallObjectMethod(env, leaf, getExt, oid);
