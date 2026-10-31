@@ -2104,6 +2104,11 @@ Java_ir_v2rayng_compose_core_NativeSec_proofFor(JNIEnv *env, jclass cls, jstring
     jbyteArray jmsg = (*env)->NewByteArray(env, (jsize) mlen);
     if (jmsg == NULL) { free(msg); set_step("proof:msg-array"); return NULL; }
     (*env)->SetByteArrayRegion(env, jmsg, 0, (jsize) mlen, (const jbyte *) msg);
+    /* the three numbers the worker prints for the same attempt - message digest, signature digest
+     * and the device byte count - computed here so one paste compares both sides instead of arguing */
+    char info[96];
+    unsigned char md[32];
+    sha256(msg, (size_t) mlen, md);
     free(msg);
     jbyteArray sig = Java_ir_v2rayng_compose_core_NativeSec_idSign(env, cls, jmsg);
     if (sig == NULL) {
@@ -2133,11 +2138,26 @@ Java_ir_v2rayng_compose_core_NativeSec_proofFor(JNIEnv *env, jclass cls, jstring
      * 403 the worker reports as "signature does not match": the signature was by the new key, the
      * pub line was the old one. */
     jstring pub = spki ? Java_ir_v2rayng_compose_core_NativeSec_b64uEncode(env, cls, spki) : NULL;
+    /* the three numbers the worker prints for this same attempt - message digest/length,
+     * signature digest/length, and the device byte count - so one paste compares both sides
+     * instead of another round of analysis */
+    if (siglen > 0 && siglen <= 512) {
+        jbyte sbytes[512];
+        (*env)->GetByteArrayRegion(env, sig, 0, siglen, sbytes);
+        unsigned char sd[32];
+        sha256((const unsigned char *) sbytes, (size_t) siglen, sd);
+        snprintf(info, sizeof(info), "msg#%02x%02x%02x/%dB sig#%02x%02x%02x/%dB dev%dB",
+                 md[0], md[1], md[2], (int) mlen, sd[0], sd[1], sd[2], (int) siglen, (int) (mlen - 12));
+    } else {
+        snprintf(info, sizeof(info), "msg#%02x%02x%02x/%dB sig=?", md[0], md[1], md[2], (int) mlen);
+    }
+    jstring jinfo = (*env)->NewStringUTF(env, info);
     jclass strCls = need_class(env, "java/lang/String");
-    jobjectArray pair = strCls ? (*env)->NewObjectArray(env, 2, strCls, NULL) : NULL;
+    jobjectArray pair = strCls ? (*env)->NewObjectArray(env, 3, strCls, NULL) : NULL;
     if (pair) {
         if (proof) (*env)->SetObjectArrayElement(env, pair, 0, proof);
         if (pub) (*env)->SetObjectArrayElement(env, pair, 1, pub);
+        if (jinfo) (*env)->SetObjectArrayElement(env, pair, 2, jinfo);
     } else {
         set_step("proof:pair");
     }

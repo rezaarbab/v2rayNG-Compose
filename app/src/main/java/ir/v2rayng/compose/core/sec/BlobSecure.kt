@@ -125,6 +125,7 @@ object BlobSecure {
             return null
         }
         val pub = pair.getOrNull(1) ?: ""
+        pair.getOrNull(2)?.let { if (it.isNotEmpty()) lastProofNote += " " + it }
         if (pub.isNotEmpty()) {
             BlobIdentity.adoptPub(pub)
             // the worker prints "pub 91B#xxxxxx" for the key it verified under; printing the same
