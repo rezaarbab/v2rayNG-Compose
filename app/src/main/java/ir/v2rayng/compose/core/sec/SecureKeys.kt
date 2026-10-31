@@ -112,17 +112,41 @@ object SecurePrefs {
     /** Keys whose stored value this device can no longer decrypt (its keystore key changed). */
     fun unreadableReport(): String? = unreadableSet().takeIf { it.isNotEmpty() }?.joinToString(",")
 
+    /** Why the last prove-the-write-landed check failed, for the log page: "MISMATCH" alone cannot
+     *  be acted on, and logcat is intentionally empty, so the reason has to reach the user's
+     *  screen or the next build is another guess. */
+    @Volatile
+    var verifyNote: String? = null
+        private set
+
     /** Prove a write landed instead of assuming it - reads prefs directly, bypassing the memo. */
     fun verify(key: String, expected: String, context: Context? = null): Boolean {
         val t0 = android.os.SystemClock.elapsedRealtime()
         val ok = try {
-            val raw = sp(context).getString(key, null) ?: return false.also { note("verify ${key}: ABSENT") }
-            BlobVault.unseal(raw)?.toString(Charsets.UTF_8) == expected
+            val raw = sp(context).getString(key, null)
+            if (raw == null) {
+                verifyNote = "$key: nothing stored"
+                note("verify ${key}: ABSENT")
+                return false
+            }
+            val out = BlobVault.unseal(raw)
+            when {
+                out == null -> {
+                    verifyNote = "stored ${raw.length}ch cannot be opened (${BlobVault.lastStage})"
+                    false
+                }
+                out.toString(Charsets.UTF_8) == expected -> true
+                else -> {
+                    verifyNote = "opened ${out.size} bytes, expected ${expected.length} chars"
+                    false
+                }
+            }
         } catch (_: Exception) {
+            verifyNote = "verify threw"
             false
         }
         note("verify ${key} ${if (ok) "OK" else "MISMATCH"} ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-        return ok
+        ok
     }
 
     /** null = absent (or unreadable); falls back to legacy plaintext and migrates it */

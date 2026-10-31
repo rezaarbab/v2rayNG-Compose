@@ -444,11 +444,15 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             delay(120)
             store.save(_settings.value)
             if (SettingsStore.lastSaveVerified == false) {
-                log("ERROR", "تنظیمات ذخیره نشد - دستگاه نوشت را تأیید نکرد")
+                // the reason is carried here on purpose: logcat is empty by his rule, and without
+                // it "the device did not confirm the write" has four possible causes and no way to
+                // tell them apart from the phone
+                val why = ir.v2rayng.compose.core.sec.SecurePrefs.verifyNote ?: "بدون دلیل"
+                log("ERROR", "تنظیمات ذخیره نشد - دستگاه نوشت را تأیید نکرد: $why")
                 ir.v2rayng.compose.core.NotifyKit.alarm(
                     AppCtx.app,
                     "تنظیمات ذخیره نشد",
-                    "اپ نوشت ولی همان مقدار از دیسک برنگشت؛ اگر تنظیماتت پریده، علت همین است.",
+                    "اپ نوشت ولی همان مقدار از دیسک برنگشت - علت: $why",
                 )
             }
         }

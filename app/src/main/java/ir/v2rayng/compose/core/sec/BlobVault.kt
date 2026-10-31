@@ -69,14 +69,24 @@ object BlobVault {
         return false
     }
 
+    /** Where the last unseal stopped, for the log page - "cannot be opened" alone does not say
+     *  whether the base64, the length, the keystore or the tag is what refused. */
+    @Volatile
+    var lastStage: String = ""
+        private set
+
     /** returns base64url(iv || ct) or null when the keystore refuses */
     fun seal(plain: ByteArray): String? {
-        if (!ready()) return null
+        if (!ready()) {
+            lastStage = "seal: no key"
+            return null
+        }
         val t0 = android.os.SystemClock.elapsedRealtime()
         // one operation at a time: concurrent use of a keystore key fails on some devices
         val out = synchronized(this) { NativeSec.seal(plain) }
         if (out == null) {
             usable = false
+            lastStage = "seal: native refused"
             SecJournal.note("seal ERROR ${plain.size}B ${android.os.SystemClock.elapsedRealtime() - t0}ms")
             return null
         }
@@ -85,23 +95,35 @@ object BlobVault {
     }
 
     fun unseal(raw: String): ByteArray? {
-        val blob = BlobB64.decode(raw) ?: return null
-        if (blob.size < 13) return null
+        val blob = BlobB64.decode(raw)
+        if (blob == null) {
+            lastStage = "base64"
+            return null
+        }
+        if (blob.size < 13) {
+            lastStage = "too short (${blob.size}B)"
+            return null
+        }
         val t0 = android.os.SystemClock.elapsedRealtime()
-        if (ready()) {
-            val out = synchronized(this) { NativeSec.unseal(blob, CURRENT) }
-            if (out != null) {
-                SecJournal.note("unseal ${out.size}B ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-                return out
-            }
+        if (!ready()) {
+            lastStage = "no key"
+            return null
+        }
+        val out = synchronized(this) { NativeSec.unseal(blob, CURRENT) }
+        if (out != null) {
+            lastStage = "ok"
+            SecJournal.note("unseal ${out.size}B ${android.os.SystemClock.elapsedRealtime() - t0}ms")
+            return out
         }
         // written before the StrongBox key was dropped - open it with the old key; the next seal
         // rewrites it under the new one, so this path disappears after the first save
         val viaOld = synchronized(this) { NativeSec.unseal(blob, LEGACY) }
         if (viaOld != null) {
+            lastStage = "ok (legacy key)"
             SecJournal.note("unseal ${viaOld.size}B with LEGACY key ${android.os.SystemClock.elapsedRealtime() - t0}ms (will be resealed)")
             return viaOld
         }
+        lastStage = "tag fail with both keys (${blob.size}B stored)"
         SecJournal.note("unseal BadPadding ${android.os.SystemClock.elapsedRealtime() - t0}ms")
         return null
     }
