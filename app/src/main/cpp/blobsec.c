@@ -353,7 +353,6 @@ static const unsigned char CIPH[] = {
 };
 static const unsigned char TRANS[] = { 0x41, 0x45, 0x53, 0x2f, 0x47, 0x43, 0x4d, 0x2f, 0x4e, 0x6f, 0x50, 0x61, 0x64, 0x64, 0x69, 0x6e, 0x67, 0x00 };
 static const unsigned char ALG[] = { 0x41, 0x45, 0x53, 0x00 };
-static const unsigned char MN_GET[] = { 0x67, 0x65, 0x74, 0x49, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x00 };
 static const char MD_GET[] = "getInstance";
 static const char MD_INIT[] = "init";
 static const char MD_AAD[] = "updateAAD";
@@ -690,7 +689,7 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(JNIEnv *env, jclass cls, jbyteA
     }
     if (key == NULL) return NULL;
     jclass cipherCls = need_class(env, (const char *) CIPH);
-    jclass specCls = need_class(env, (const unsigned char *) "javax/crypto/spec/GCMParameterSpec");
+    jclass specCls = need_class(env, "javax/crypto/spec/GCMParameterSpec");
     if (!cipherCls || !specCls) return NULL;
     jbyte *raw = (jbyte *) malloc((size_t) n);
     jbyteArray iv = (*env)->NewByteArray(env, 12);
@@ -731,6 +730,37 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(JNIEnv *env, jclass cls, jbyteA
     (*env)->DeleteLocalRef(env, cipherCls);
     (*env)->DeleteLocalRef(env, specCls);
     return out;
+}
+
+/** seal then open the same bytes, in this library, with this key: 0 means the vault path
+ * works end to end. Without this, "the stored value cannot be opened" has two readings - the code is
+ * wrong, or the value was sealed under a key that no longer exists (which already happened once). */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_vaultRoundTrip(JNIEnv *env, jclass cls) {
+    if (Java_ir_v2rayng_compose_core_NativeSec_vaultReady(env, cls, 0) == 0) return 2;
+    jbyte sample[24];
+    for (int i = 0; i < 24; i++) sample[i] = (jbyte) (i * 7 + 1);
+    jbyteArray plain = (*env)->NewByteArray(env, 24);
+    if (plain == NULL) return 3;
+    (*env)->SetByteArrayRegion(env, plain, 0, 24, sample);
+    jbyteArray sealed = Java_ir_v2rayng_compose_core_NativeSec_vaultSeal(env, cls, plain);
+    if (sealed == NULL) return 4;
+    jbyteArray back = Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(env, cls, sealed, 0);
+    jint r = 5;
+    if (back != NULL && (*env)->GetArrayLength(env, back) == 24) {
+        jbyte *a = (jbyte *) malloc(24);
+        jbyte *bb = (jbyte *) malloc(24);
+        if (a && bb) {
+            (*env)->GetByteArrayRegion(env, plain, 0, 24, a);
+            (*env)->GetByteArrayRegion(env, back, 0, 24, bb);
+            r = (memcmp(a, bb, 24) == 0) ? 0 : 6;
+        }
+        free(a); free(bb);
+    }
+    (*env)->DeleteLocalRef(env, plain);
+    (*env)->DeleteLocalRef(env, sealed);
+    if (back) (*env)->DeleteLocalRef(env, back);
+    return r;
 }
 
 /** is there an entry under this alias at all? - the caller must ask this before dropping,

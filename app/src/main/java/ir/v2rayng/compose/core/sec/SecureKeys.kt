@@ -122,31 +122,29 @@ object SecurePrefs {
     /** Prove a write landed instead of assuming it - reads prefs directly, bypassing the memo. */
     fun verify(key: String, expected: String, context: Context? = null): Boolean {
         val t0 = android.os.SystemClock.elapsedRealtime()
-        val ok = try {
-            val raw = sp(context).getString(key, null)
-            if (raw == null) {
+        val raw = try { sp(context).getString(key, null) } catch (_: Exception) { null }
+        val storedLen = raw?.length ?: 0
+        val out: ByteArray? = raw?.let { BlobVault.unseal(it) }
+        val ok = when {
+            raw == null -> {
                 verifyNote = "$key: nothing stored"
-                note("verify ${key}: ABSENT")
-                return false
+                false
             }
-            val out = BlobVault.unseal(raw)
-            when {
-                out == null -> {
-                    verifyNote = "stored ${raw.length}ch cannot be opened (${BlobVault.lastStage})"
-                    false
-                }
-                out.toString(Charsets.UTF_8) == expected -> true
-                else -> {
-                    verifyNote = "opened ${out.size} bytes, expected ${expected.length} chars"
-                    false
-                }
+            out == null -> {
+                // the self check is what separates "the native vault is broken" (check != 0) from
+                // "this value was sealed under a key that no longer exists" (check == 0)
+                verifyNote = "stored ${storedLen}ch cannot be opened (${BlobVault.lastStage}; " +
+                    "selfcheck=" + ir.v2rayng.compose.core.NativeSec.vaultSelfCheck() + ")"
+                false
             }
-        } catch (_: Exception) {
-            verifyNote = "verify threw"
-            false
+            out.toString(Charsets.UTF_8) == expected -> true
+            else -> {
+                verifyNote = "opened ${out.size}B, expected ${expected.length}ch"
+                false
+            }
         }
         note("verify ${key} ${if (ok) "OK" else "MISMATCH"} ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-        ok
+        return ok
     }
 
     /** null = absent (or unreadable); falls back to legacy plaintext and migrates it */

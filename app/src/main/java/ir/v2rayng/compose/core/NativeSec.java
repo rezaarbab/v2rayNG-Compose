@@ -104,6 +104,18 @@ public final class NativeSec {
 
     private static native int vaultHas(int which);
 
+    private static native int vaultRoundTrip();
+
+    /** 0 = sealing and opening the same bytes works end to end with this key */
+    public static int vaultSelfCheck() {
+        if (!READY) return -1;
+        try {
+            return vaultRoundTrip();
+        } catch (Throwable t) {
+            return -2;
+        }
+    }
+
     /** does an entry exist under this alias? ask before dropping anything */
     public static boolean hasKey(int which) {
         return READY && vaultHas(which) == 1;
