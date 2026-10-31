@@ -234,7 +234,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 log("ERROR", "ذخیره‌سازی امن این دستگاه مشکل دارد: " + it)
                 broke += "recover "
             }
-            if (broke.isNotEmpty()) logDiag("startup:" + broke.trim())
             loadRemoteState()
             if (_state.value.servers.isNotEmpty() && effPingStart()) {
                 pingServers(null, effFlagStart())
@@ -465,7 +464,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 // tell them apart from the phone
                 val why = ir.v2rayng.compose.core.sec.SecurePrefs.verifyNote ?: "بدون دلیل"
                 log("ERROR", "تنظیمات ذخیره نشد - دستگاه نوشت را تأیید نکرد: $why")
-                logDiag("save:" + why)
                 ir.v2rayng.compose.core.NotifyKit.alarm(
                     AppCtx.app,
                     "تنظیمات ذخیره نشد",
@@ -620,26 +618,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
     }
 
-    /** TEMPORARY, on his request ("ی لاگ کامل بزار"): instead of one cause per build, the first
-     *  failure of a kind prints the whole state of the secure channel - library gate, vault round
-     *  trip, identity key, signature, self-verify, chain counts, nonce source, and the step the C
-     *  library stopped at. Deduplicated by reason, runs on IO because it touches the keystore, and
-     *  goes away together with the step recorder in blobsec.c. */
-    private var diagFor: String? = null
-
-    private suspend fun logDiag(what: String) {
-        if (diagFor == what) return
-        diagFor = what
-        val line = withContext(Dispatchers.IO) {
-            try {
-                ir.v2rayng.compose.core.sec.BlobSecure.diag()
-            } catch (t: Throwable) {
-                "diag threw " + t.javaClass.simpleName
-            }
-        }
-        log("WARN", "DIAG(" + what + ")" + line)
-    }
-
     private suspend fun handleSyncFail() {
         val online = withContext(Dispatchers.IO) { netOnline() }
         val reason = Remote.lastFail ?: "unknown"
@@ -651,7 +629,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             srvFailToast()
             log("WARN", "لیست سرور گرفته نشد: $short")
             // the network answered and the payload did not arrive: print the full state once
-            logDiag(reason)
         } else {
             netToast()
             log("WARN", "اینترنت قطع است - لیست سرور گرفته نشد: $short")
@@ -758,11 +735,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 } else {
                     val r0why = Remote.lastFail ?: "unknown"
                     log("WARN", "لیست سرور گرفته نشد: " + r0why.take(170))
-                    logDiag(r0why)
                 }
             } catch (e: Exception) {
                 log("WARN", "لیست سرور گرفته نشد: " + e.javaClass.simpleName)
-                logDiag("throw:" + e.javaClass.simpleName)
             }
             delay(120_000L)
             while (true) {
@@ -1137,13 +1112,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         val clean = ir.v2rayng.compose.core.LogSanitize.clean(msg)
         val line = LogLine(TimeKit.now(), level, clean)
         put { s -> s.copy(logs = (s.logs + line).takeLast(400)) }
-        // the keystore timings were sent to blog(), which is empty by his rule - so they vanished.
-        // They belong on the same page the user pastes from, under the error that needs them.
-        // Re-entering log() with ERROR is safe: drain() clears, so the second pass has nothing.
-        if (level == "ERROR") {
-            val j = ir.v2rayng.compose.core.sec.SecJournal.drain().takeLast(10).joinToString(" | ")
-            if (j.isNotEmpty()) log("ERROR", "SEC " + j)
-        }
     }
 
     fun toggleVpn() {

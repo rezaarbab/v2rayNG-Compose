@@ -2783,6 +2783,8 @@ static void payload_reset(void) {
     g_rows_n = 0;
 }
 
+static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len);
+
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_payloadLoad(JNIEnv *env, jclass cls, jstring jstego, jbyteArray jkc) {
     payload_reset();
@@ -2794,63 +2796,9 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadLoad(JNIEnv *env, jclass cls, jstr
     jbyte *buf = (jbyte *) malloc((size_t) plen);
     if (buf == NULL) { set_step("payload:alloc"); return -1; }
     (*env)->GetByteArrayRegion(env, plain, 0, plen, buf);
-    /* the payload is UTF-8 JSON produced by the worker; NewStringUTF is how it becomes a String
-     * for org.json, and every byte the app has ever had in a name (Persian, ASCII) survives it */
-    jstring jjson = (*env)->NewStringUTF(env, (const char *) buf);
+    int n = payload_parse_bytes(env, buf, plen);
     free(buf);
-    if (jjson == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); set_step("payload:string"); return -1; }
-
-    jclass jsonCls = need_class(env, "org/json/JSONObject");
-    jclass arrCls = need_class(env, "org/json/JSONArray");
-    jmethodID ctor = jsonCls ? (*env)->GetMethodID(env, jsonCls, "<init>", "(Ljava/lang/String;)V") : NULL;
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    jobject root = (jsonCls && ctor) ? (*env)->NewObject(env, jsonCls, ctor, jjson) : NULL;
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); root = NULL; }
-    if (root == NULL) { set_step("payload:json"); return -1; }
-    jmethodID getArr = (*env)->GetMethodID(env, jsonCls, "optJSONArray", "(Ljava/lang/String;)Lorg/json/JSONArray;");  //EXC-CLEARED
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    jstring kServers = (*env)->NewStringUTF(env, "servers");
-    jobject arr = (getArr && kServers) ? (*env)->CallObjectMethod(env, root, getArr, kServers) : NULL;
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); arr = NULL; }
-    if (arr == NULL || arrCls == NULL) { set_step("payload:servers"); return 0; }
-    jmethodID arrLen = (*env)->GetMethodID(env, arrCls, "length", "()I");  //EXC-CLEARED
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    jmethodID arrGet = (*env)->GetMethodID(env, arrCls, "optJSONObject", "(I)Lorg/json/JSONObject;");  //EXC-CLEARED
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
-    if (!arrLen || !arrGet) { set_step("payload:array-methods"); return -1; }
-    int n = (*env)->CallIntMethod(env, arr, arrLen);
-    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); n = 0; }
-    if (n < 0) n = 0;
-    if (n > PLR_MAX) n = PLR_MAX;
-    if (n == 0) { set_step("payload:empty"); return 0; }
-    g_rows = (plr_t *) calloc((size_t) n, sizeof(plr_t));
-    if (g_rows == NULL) { set_step("payload:alloc-rows"); return -1; }
-    int kept = 0;
-    for (int i = 0; i < n; i++) {
-        jobject o = (*env)->CallObjectMethod(env, arr, arrGet, i);
-        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); o = NULL; }
-        if (o == NULL) continue;
-        plr_t *r = &g_rows[kept];
-        pl_json_str(env, o, jsonCls, "id", "", r->id, PLR_ID);
-        pl_json_str(env, o, jsonCls, "name", "", r->name, PL_NAME);
-        pl_json_str(env, o, jsonCls, "address", "", r->addr, PL_ADDR);
-        pl_json_str(env, o, jsonCls, "category", "", r->cat, PLR_CAT);
-        pl_json_str(env, o, jsonCls, "msg", "", r->msg, PL_MISC);
-        pl_json_str(env, o, jsonCls, "link", "", r->link, PLR_LINK);
-        r->port = pl_json_int(env, o, jsonCls, "port", 0);
-        (*env)->DeleteLocalRef(env, o);
-        if (r->addr[0] == 0 || r->port <= 0) continue;
-        kept++;
-    }
-    (*env)->DeleteLocalRef(env, arr);
-    (*env)->DeleteLocalRef(env, root);
-    if (kServers) (*env)->DeleteLocalRef(env, kServers);
-    if (jsonCls) (*env)->DeleteLocalRef(env, jsonCls);
-    if (arrCls) (*env)->DeleteLocalRef(env, arrCls);
-    g_rows_n = kept;
-    if (kept == 0) set_step("payload:no-usable-rows");
-    else set_step("payload:ok");
-    return kept;
+    return n;
 }
 
 JNIEXPORT jint JNICALL

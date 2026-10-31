@@ -140,59 +140,6 @@ object BlobSecure {
         return proof to pub
     }
 
-    /** ONE line with every answer this handset can give about the secure channel - asked for on
-     *  2026-10-31 so that a failing build says everything at once instead of one cause per build.
-     *  It never destroys anything: no call here drops or replaces a key. It can create the vault
-     *  key on a device that has never saved a setting, which is what the first save would do.
-     *  No value that leaves the device appears - sizes, counts, verdicts and the step name only.
-     *  It costs a few keystore round trips, so the caller runs it off the main thread, once per
-     *  distinct failure. TEMPORARY, and deleted with the step recorder in blobsec.c. */
-    fun diag(): String {
-        val sb = StringBuilder()
-        fun st(): String = try { NativeSec.errInfo() } catch (t: Throwable) { "?" }
-        fun tag(k: String, v: String) {
-            sb.append(' ').append(k).append('=').append(v)
-        }
-        tag("lib", NativeSec.note())
-        tag("gate", try { NativeKit.note() } catch (t: Throwable) { "?" })
-        // the seal-then-open round trip inside the library: 0 = the vault path works end to end
-        tag("round", (try { NativeSec.vaultSelfCheck() } catch (t: Throwable) { -9 }).toString() + "/" + st())
-        tag("kv", (try { NativeSec.vaultOk(0) } catch (t: Throwable) { false }).toString() + "/" + st())
-        tag("has", (if (try { NativeSec.hasKey(0) } catch (t: Throwable) { false }) "1" else "0") +
-            "-" + (if (try { NativeSec.hasKey(1) } catch (t: Throwable) { false }) "1" else "0") + "/" + st())
-        val sp = try { NativeSec.spki() } catch (t: Throwable) { null }
-        tag("spki", (sp?.size ?: -1).toString() + "/" + st())
-        // a fixed non-secret message: the signature that follows is opened again below with the
-        // public bytes this device exports, which separates "the key is dead" from "we disagree
-        // about the encoding" - the second one is the worker's problem, the first one is ours
-        val probe = "blb-diag".toByteArray(Charsets.UTF_8)
-        val sg = try { NativeSec.sign(probe) } catch (t: Throwable) { null }
-        tag("sig", (sg?.size ?: -1).toString() + "/" + st())
-        val vv = if (sp != null && sg != null) {
-            try { NativeSec.verifySpki(sp, probe, sg) } catch (t: Throwable) { -9 }
-        } else -8
-        tag("ver", vv.toString() + "/" + st())
-        // labelled, not "1.1.0.1" - the log scrubber reads a dotted quadruple as an address and
-        // hides it, which is how the chain counts disappeared from one paste
-        val ch = try { NativeSec.chain() } catch (t: Throwable) { null }
-        tag("chain", (if (ch == null || ch.size < 6) "null"
-        else "n=" + ch[0] + " att=" + ch[1] + " self=" + ch[3] + " ext=" + ch[5]) + "/" + st())
-        tag("stage", BlobVault.lastStage.replace(' ', '_').take(44) + "/" + st())
-        // sizes and remaining life only - a session key never appears in a log
-        tag("sess", live?.let {
-            "kc" + it.kc.size + "/kt" + it.kt.size + "/" + ((it.exp - System.currentTimeMillis()) / 1000L) + "s"
-        } ?: "none")
-        tag("verify", (SecurePrefs.verifyNote ?: "-").replace(' ', '_').take(40))
-        tag("rng", (try { NativeSec.random(8)?.size ?: -1 } catch (t: Throwable) { -2 }).toString())
-        tag("why", (lastReason ?: "-").replace(' ', '_').take(44))
-        tag("proof", lastProofNote.replace(' ', '_').take(56))
-        tag("idnote", (BlobIdentity.note ?: "-").replace(' ', '_').take(40))
-        tag("os", android.os.Build.VERSION.SDK_INT.toString() + "/" +
-            android.os.Build.BRAND.take(8).replace(' ', '_') + "/" +
-            android.os.Build.MODEL.take(14).replace(' ', '_'))
-        return sb.toString()
-    }
-
     /** the key endpoint - get fresh 60-minute keys from the worker, persist via BlobVault.
      *  Returns the newly stored session, or null when the worker refuses. */
     private fun issueKeys(base: String, body: JSONObject): Session? {
