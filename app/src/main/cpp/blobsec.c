@@ -3205,6 +3205,8 @@ static void scr_ipv4(sbuf *o, const unsigned char *s, int n) {
                     while (q < n && scr_digit(s[q]) && d < 6) { q++; d++; }
                     if (d >= 1 && d <= 5) end = q;
                 }
+                /* the regex engine backtracks the optional :port when the end boundary fails */
+                if (r_end_bad(s, n, end) && end > p) end = p;
                 if (end == n || !scr_word(s[end])) {
                     scr_put(o, s, last, i);
                     sb_add(o, "[ip]");
@@ -3243,16 +3245,19 @@ static void scr_ipv6(sbuf *o, const unsigned char *s, int n) {
                 last = q;
                 continue;
             }
-            /* short form: hex:...::... with hex/colon/dot tail */
-            int r2 = i, seenColon = 0, seenDouble = 0;
+            /* short form: hex{1,4} ':' [hex:]* "::" [hex:.]* - the match must end on a hex
+             * digit, because the trailing  needs a word char before it (that is why the regex
+             * leaves a trailing colon in place) */
+            int r2 = (p < n && s[p] == ':') ? p + 1 : p;
+            int runStart = r2, seenDouble = 0;
             while (r2 < n && (scr_hex(s[r2]) || s[r2] == ':' || s[r2] == '.')) {
-                if (s[r2] == ':') {
-                    if (seenColon && s[r2 - 1] == ':') seenDouble = 1;
-                    seenColon = 1;
-                }
+                if (s[r2] == ':' && r2 > runStart && s[r2 - 1] == ':') seenDouble = 1;
                 r2++;
             }
-            if (first >= 1 && first <= 4 && seenDouble && (r2 == n || !scr_word(s[r2]))) {
+            int end2 = r2;
+            while (end2 > runStart && !scr_hex(s[end2 - 1])) end2--;
+            if (first >= 1 && first <= 4 && seenDouble && end2 > runStart + 2 && (end2 == n || !scr_word(s[end2]))) {
+                r2 = end2;
                 scr_put(o, s, last, i);
                 sb_add(o, "[ip]");
                 i = r2;
@@ -3263,6 +3268,10 @@ static void scr_ipv6(sbuf *o, const unsigned char *s, int n) {
         i++;
     }
     scr_put(o, s, last, n);
+}
+
+static int r_end_bad(const unsigned char *s, int n, int end) {
+    return end < n && scr_word(s[end]);
 }
 
 static int scr_tld_ok(const unsigned char *s, int from, int to) {
@@ -3292,7 +3301,8 @@ static void scr_domains(sbuf *o, const unsigned char *s, int n) {
                 }
                 break;
             }
-            if (dot > 0 && labels >= 1) {
+            /* the Kotlin pattern needs label(.label)+.tld: at least two dots */
+            if (dot > 0 && labels >= 2) {
                 int tldEnd = p;
                 if (tldEnd > dot + 1 && scr_tld_ok(s, dot + 1, tldEnd)) {
                     int end = tldEnd;
@@ -3301,6 +3311,7 @@ static void scr_domains(sbuf *o, const unsigned char *s, int n) {
                         while (q < n && scr_digit(s[q]) && d < 6) { q++; d++; }
                         if (d >= 1 && d <= 5) end = q;
                     }
+                    if (r_end_bad(s, n, end) && end > tldEnd) end = tldEnd;
                     if (end == n || !scr_word(s[end])) {
                         scr_put(o, s, last, i);
                         sb_add(o, "[host]");
@@ -3375,7 +3386,7 @@ static void scr_json_port(sbuf *o, const unsigned char *s, int n) {
                     int d0 = p;
                     while (p < n && scr_digit(s[p])) p++;
                     if (p > d0) {
-                        scr_put(o, s, last, p);
+                        scr_put(o, s, last, d0);
                         sb_add(o, "0");
                         i = p;
                         last = p;
