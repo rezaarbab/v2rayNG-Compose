@@ -3108,3 +3108,18 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadFind(JNIEnv *env, jclass cls, jstr
     (*env)->ReleaseStringUTFChars(env, jid, id);
     return found;
 }
+
+/** row index by host and port - the connect and ping paths already have these two values, so the
+ *  id never has to be threaded through five call chains to reach them */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_payloadFindHost(JNIEnv *env, jclass cls, jstring jaddr, jint port) {
+    if (jaddr == NULL) return -1;
+    const char *a = (*env)->GetStringUTFChars(env, jaddr, NULL);
+    if (a == NULL) return -1;
+    int found = -1;
+    for (int i = 0; i < g_rows_n; i++) {
+        if (g_rows[i].port == (int) port && strcmp(g_rows[i].addr, a) == 0) { found = i; break; }
+    }
+    (*env)->ReleaseStringUTFChars(env, jaddr, a);
+    return found;
+}

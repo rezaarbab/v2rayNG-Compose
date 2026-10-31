@@ -317,7 +317,12 @@ class XrayVpnService : VpnService() {
             lastDown = 0
             zeroStreak = 0
             controller = Libv2ray.newCoreController(callback)
-            controller?.startLoop(buildXrayConfig(link), tunFd)
+            // the config is built by the library from the stored server row; the Kotlin builder is
+            // only the fallback for a row the store does not have yet
+            val cfg = ir.v2rayng.compose.core.NativeSec.coreConfig(
+                ir.v2rayng.compose.core.NativeSec.rowOfHost(link.address, link.port), 0, 0,
+            ) ?: buildXrayConfig(link)
+            controller?.startLoop(cfg, tunFd)
             tunnelUp = true
             connectedSince = System.currentTimeMillis()
             lastNotifiedSec = -1L

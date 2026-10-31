@@ -266,6 +266,17 @@ public final class NativeSec {
         }
     }
 
+    private static native int payloadFindHost(String addr, int port);
+
+    public static int rowOfHost(String addr, int port) {
+        if (!READY || addr == null) return -1;
+        try {
+            return payloadFindHost(addr, port);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
     private static native String coreConfigForRow(int row, int mode, int socksPort);
 
     /** the config for a stored row as a String: libv2ray startLoop only takes one, so this is the

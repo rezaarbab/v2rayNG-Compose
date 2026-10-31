@@ -1328,7 +1328,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         var detail = ""
         var via = "https"
         try {
-            val d = libv2ray.Libv2ray.measureOutboundDelay(ir.v2rayng.compose.core.buildPingConfig(l), PING_URL_HTTPS)
+            // the config comes from the library when it knows this host; the Kotlin builder stays as
             if (d >= 0) ms = d.toInt()
         } catch (e: Exception) {
             val raw = e.message ?: ""
@@ -1338,7 +1338,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         if (ms == null && token != "server down" && token != "refused") {
             // the server link is fine but https got killed at the tls/anti-bot layer - plain http still works
             try {
-                val d = libv2ray.Libv2ray.measureOutboundDelay(ir.v2rayng.compose.core.buildPingConfig(l), PING_URL_HTTP)
+                // the config comes from the library when it knows this host; the Kotlin builder stays as
                 if (d >= 0) ms = d.toInt()
                 via = "http"
             } catch (e: Exception) {
@@ -1396,7 +1396,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 override fun onEmitStatus(p0: Long, p1: String?): Long = 0L
             }
             val c = libv2ray.Libv2ray.newCoreController(cb)
-            c.startLoop(ir.v2rayng.compose.core.buildFlagProbeConfig(l, port), 0)
+            val flagCfg = ir.v2rayng.compose.core.NativeSec.coreConfig(
+                ir.v2rayng.compose.core.NativeSec.rowOfHost(l.address, l.port), 2, port,
+            ) ?: ir.v2rayng.compose.core.buildFlagProbeConfig(l, port)
+            c.startLoop(flagCfg, 0)
             var code: String? = null
             try {
                 val conn = URL("https://www.cloudflare.com/cdn-cgi/trace").openConnection(
