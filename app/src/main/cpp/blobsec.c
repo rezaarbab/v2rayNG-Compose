@@ -2168,3 +2168,177 @@ Java_ir_v2rayng_compose_core_NativeSec_proofFor(JNIEnv *env, jclass cls, jstring
     if (proof == NULL) set_step("proof:encode");
     return pair;
 }
+
+/* ---------------- the server link, parsed here ----------------
+ * First stage of moving the server off Kotlin: the parser that turns a link into fields runs in C,
+ * so the credential never has to be returned to a Kotlin method that a tracer can read. The Kotlin
+ * parser stays in place until the config builder and the sync result also move (stage 3) - the
+ * branch is only merged when all three land, because a half-moved parser would drop servers.
+ *
+ * Covers vless:// and trojan:// (same shape: cred@host:port?params#name). vmess:// (base64 JSON)
+ * and ss:// (base64 credentials) follow in the next commit on this branch.
+ */
+#define PL_NAME 160
+#define PL_ADDR 256
+#define PL_CRED 256
+#define PL_MISC 256
+
+static char pl_name[PL_NAME];
+static char pl_addr[PL_ADDR];
+static char pl_cred[PL_CRED];
+static char pl_security[32], pl_type[24], pl_flow[32], pl_sni[PL_MISC], pl_fp[24];
+static char pl_pbk[PL_MISC], pl_sid[PL_MISC], pl_spx[PL_MISC], pl_path[PL_MISC];
+static char pl_host[PL_MISC], pl_eh[PL_MISC], pl_method[32];
+static int pl_port, pl_kind, pl_alter, pl_ed;
+static int pl_ok;
+
+/** percent-decoding, '+'-to-space, UTF-8 left alone; returns 0 when it does not fit */
+static int pl_udecode(const char *in, int n, char *out, int cap) {
+    int o = 0;
+    for (int i = 0; i < n; i++) {
+        unsigned char c = (unsigned char) in[i];
+        if (c == '%' && i + 2 < n) {
+            int hi = in[i + 1], lo = in[i + 2];
+            int hv = (hi >= '0' && hi <= '9') ? hi - '0' : (hi >= 'a' && hi <= 'f') ? hi - 'a' + 10 : (hi >= 'A' && hi <= 'F') ? hi - 'A' + 10 : -1;
+            int lv = (lo >= '0' && lo <= '9') ? lo - '0' : (lo >= 'a' && lo <= 'f') ? lo - 'a' + 10 : (lo >= 'A' && lo <= 'F') ? lo - 'A' + 10 : -1;
+            if (hv >= 0 && lv >= 0) { if (o + 1 >= cap) return 0; out[o++] = (char) ((hv << 4) | lv); i += 2; continue; }
+        }
+        if (c == '+') { if (o + 1 >= cap) return 0; out[o++] = ' '; continue; }
+        if (o + 1 >= cap) return 0;
+        out[o++] = (char) c;
+    }
+    out[o] = 0;
+    return 1;
+}
+
+static void pl_copy(char *dst, int cap, const char *src, int n) {
+    if (n >= cap) n = cap - 1;
+    if (n > 0) memcpy(dst, src, (size_t) n);
+    dst[n] = 0;
+}
+
+/** one query parameter, decoded; empty when absent */
+static int pl_param(const char *q, int qn, const char *key, char *out, int cap) {
+    int klen = (int) strlen(key);
+    int i = 0;
+    while (i < qn) {
+        int start = i;
+        while (i < qn && q[i] != '&') i++;
+        int end = i;
+        if (end - start > klen && q[start + klen] == '=' && memcmp(q + start, key, (size_t) klen) == 0) {
+            return pl_udecode(q + start + klen + 1, end - start - klen - 1, out, cap);
+        }
+        i++;
+    }
+    return 0;
+}
+
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_plParse(JNIEnv *env, jclass cls, jstring jlink) {
+    pl_ok = 0;
+    pl_name[0] = pl_addr[0] = pl_cred[0] = 0;
+    if (jlink == NULL) return 0;
+    const char *s = (*env)->GetStringUTFChars(env, jlink, NULL);
+    if (s == NULL) return 0;
+    int n = (int) strlen(s);
+    int p = 0;
+    if (n > 7 && (s[0] == 'v' || s[0] == 't')) {
+        if (n > 8 && memcmp(s, "vless://", 8) == 0) { pl_kind = 0; p = 8; }
+        else if (n > 9 && memcmp(s, "trojan://", 9) == 0) { pl_kind = 1; p = 9; }
+    }
+    if (!(pl_kind == 0 || pl_kind == 1) || p == 0) { (*env)->ReleaseStringUTFChars(env, jlink, s); return 0; }
+    int hashAt = -1, qAt = -1, atAt = -1;
+    for (int i = p; i < n; i++) {
+        if (s[i] == '#') { hashAt = i; break; }
+        if (s[i] == '?' && qAt < 0) qAt = i;
+        if (s[i] == '@' && atAt < 0) atAt = i;
+    }
+    int mainEnd = hashAt >= 0 ? hashAt : n;
+    /* name from the fragment */
+    if (hashAt >= 0) { pl_udecode(s + hashAt + 1, n - hashAt - 1, pl_name, PL_NAME); }
+    if (atAt < 0 || atAt >= mainEnd) { (*env)->ReleaseStringUTFChars(env, jlink, s); return 0; }
+    pl_copy(pl_cred, PL_CRED, s + p, atAt - p);
+    /* host:port - take the last ':' before '?' and after the '@' */
+    int hostStart = atAt + 1;
+    int hpEnd = qAt >= 0 ? qAt : mainEnd;
+    int slash = -1;
+    for (int i = hostStart; i < hpEnd; i++) if (s[i] == '/') slash = i;
+    int hostFrom = slash >= 0 ? slash + 1 : hostStart;
+    int colon = -1;
+    for (int i = hostFrom; i < hpEnd; i++) if (s[i] == ':') colon = i;
+    if (colon <= hostFrom) { (*env)->ReleaseStringUTFChars(env, jlink, s); return 0; }
+    int hs = hostFrom, he = colon;
+    if (he - hs >= 2 && s[hs] == '[' && s[he - 1] == ']') { hs++; he--; }
+    pl_copy(pl_addr, PL_ADDR, s + hs, he - hs);
+    int port = 0;
+    for (int i = colon + 1; i < hpEnd; i++) {
+        if (s[i] < '0' || s[i] > '9') { port = 0; break; }
+        port = port * 10 + (s[i] - '0');
+        if (port > 65535) { port = 0; break; }
+    }
+    if (pl_addr[0] == 0 || port <= 0) { (*env)->ReleaseStringUTFChars(env, jlink, s); return 0; }
+    pl_port = port;
+    /* parameters */
+    const char *q = NULL;
+    int qn = 0;
+    if (qAt >= 0) { q = s + qAt + 1; qn = mainEnd - qAt - 1; }
+    pl_security[0] = pl_type[0] = pl_flow[0] = pl_sni[0] = pl_fp[0] = pl_pbk[0] = 0;
+    pl_sid[0] = pl_spx[0] = pl_path[0] = pl_host[0] = pl_eh[0] = pl_method[0] = 0;
+    pl_alter = 0;
+    pl_ed = 0;
+    if (q) {
+        pl_param(q, qn, "security", pl_security, sizeof(pl_security));
+        pl_param(q, qn, "type", pl_type, sizeof(pl_type));
+        pl_param(q, qn, "flow", pl_flow, sizeof(pl_flow));
+        pl_param(q, qn, "sni", pl_sni, sizeof(pl_sni));
+        pl_param(q, qn, "fp", pl_fp, sizeof(pl_fp));
+        pl_param(q, qn, "pbk", pl_pbk, sizeof(pl_pbk));
+        pl_param(q, qn, "sid", pl_sid, sizeof(pl_sid));
+        pl_param(q, qn, "spx", pl_spx, sizeof(pl_spx));
+        pl_param(q, qn, "path", pl_path, sizeof(pl_path));
+        pl_param(q, qn, "host", pl_host, sizeof(pl_host));
+        pl_param(q, qn, "eh", pl_eh, sizeof(pl_eh));
+        char tmp[32];
+        if (pl_param(q, qn, "ed", tmp, sizeof(tmp))) { pl_ed = atoi(tmp); }
+    }
+    if (pl_security[0] == 0) { strcpy(pl_security, pl_kind == 1 ? "tls" : "none"); }
+    if (pl_type[0] == 0) { strcpy(pl_type, "tcp"); }
+    (*env)->ReleaseStringUTFChars(env, jlink, s);
+    pl_ok = 1;
+    return 1;
+}
+
+/** fields as UTF-8 bytes: 0 name, 1 address, 2 credential, 3 security, 4 type, 5 flow, 6 sni,
+ *  7 fp, 8 pbk, 9 sid, 10 spx, 11 path, 12 host header, 13 early-data header, 14 method */
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_plStr(JNIEnv *env, jclass cls, jint which) {
+    const char *src = "";
+    switch (which) {
+        case 0: src = pl_name; break;    case 1: src = pl_addr; break;
+        case 2: src = pl_cred; break;    case 3: src = pl_security; break;
+        case 4: src = pl_type; break;    case 5: src = pl_flow; break;
+        case 6: src = pl_sni; break;     case 7: src = pl_fp; break;
+        case 8: src = pl_pbk; break;     case 9: src = pl_sid; break;
+        case 10: src = pl_spx; break;    case 11: src = pl_path; break;
+        case 12: src = pl_host; break;   case 13: src = pl_eh; break;
+        case 14: src = pl_method; break;
+        default: src = ""; break;
+    }
+    int n = (int) strlen(src);
+    jbyteArray out = (*env)->NewByteArray(env, n);
+    if (out && n) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) src);
+    return out;
+}
+
+/** ints: 0 port, 1 kind (0 vless, 1 trojan), 2 alterId, 3 early data, 4 parsed-ok */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_plInt(JNIEnv *env, jclass cls, jint which) {
+    switch (which) {
+        case 0: return pl_port;
+        case 1: return pl_kind;
+        case 2: return pl_alter;
+        case 3: return pl_ed;
+        case 4: return pl_ok;
+        default: return 0;
+    }
+}

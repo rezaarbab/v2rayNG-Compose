@@ -252,6 +252,41 @@ public final class NativeSec {
         }
     }
 
+    private static native int plParse(String link);
+
+    private static native byte[] plStr(int which);
+
+    private static native int plInt(int which);
+
+    /** stage 1 of the server-in-C move: the link is parsed inside the library; the Kotlin side
+     *  only asks for the fields it displays. Not wired to the UI yet (branch server-in-c). */
+    public static boolean parseLink(String link) {
+        if (!READY || link == null) return false;
+        try {
+            return plParse(link) == 1;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    public static byte[] linkField(int which) {
+        if (!READY) return null;
+        try {
+            return plStr(which);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    public static int linkInt(int which) {
+        if (!READY) return 0;
+        try {
+            return plInt(which);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
     private static native byte[] stegoOpen(String stego, byte[] kc);
 
     private static native String tokenFor(String device, byte[] kt);
