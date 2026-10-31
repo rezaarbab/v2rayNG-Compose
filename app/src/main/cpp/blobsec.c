@@ -2233,6 +2233,176 @@ static int pl_param(const char *q, int qn, const char *key, char *out, int cap) 
     return 0;
 }
 
+
+/* ---- vmess:// and ss:// ----
+ * vmess carries a base64 of a JSON object; ss carries base64 credentials (or a fully base64 body).
+ * The base64 alphabet accepts both the standard and the url-safe variants, the JSON is read with
+ * org.json through JNI (the same library the Kotlin used, so no hand-written parser can disagree),
+ * and the field mapping follows parseVmess/parseSs in XrayCore.kt.
+ */
+
+static int pl_b64(const char *in, int n, char *out, int cap) {
+    int o = 0, val = 0, bits = 0;
+    for (int i = 0; i < n; i++) {
+        char c = in[i];
+        int d;
+        if (c >= 'A' && c <= 'Z') d = c - 'A';
+        else if (c >= 'a' && c <= 'z') d = c - 'a' + 26;
+        else if (c >= '0' && c <= '9') d = c - '0' + 52;
+        else if (c == '+' || c == '-') d = 62;
+        else if (c == '/' || c == '_') d = 63;
+        else continue;
+        val = (val << 6) | d;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (o + 1 >= cap) return 0;
+            out[o++] = (char) ((val >> bits) & 0xff);
+        }
+    }
+    out[o] = 0;
+    return o;
+}
+
+/** optString(field, default) through org.json, copied as UTF-8 */
+static void pl_json_str(JNIEnv *env, jobject obj, jclass jsonCls, const char *key, const char *def, char *out, int cap) {
+    jmethodID m = (*env)->GetMethodID(env, jsonCls, "optString", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    jstring k = (*env)->NewStringUTF(env, key);
+    jstring d = (*env)->NewStringUTF(env, def);
+    if (m && k && d) {
+        jstring v = (jstring) (*env)->CallObjectMethod(env, obj, m, k, d);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); v = NULL; }
+        if (v) {
+            const char *c = (*env)->GetStringUTFChars(env, v, NULL);
+            if (c) { pl_copy(out, cap, c, (int) strlen(c)); (*env)->ReleaseStringUTFChars(env, v, c); }
+            (*env)->DeleteLocalRef(env, v);
+        }
+    }
+    if (k) (*env)->DeleteLocalRef(env, k);
+    if (d) (*env)->DeleteLocalRef(env, d);
+}
+
+static int pl_json_int(JNIEnv *env, jobject obj, jclass jsonCls, const char *key, int def) {
+    jmethodID m = (*env)->GetMethodID(env, jsonCls, "optInt", "(Ljava/lang/String;I)I");
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); }
+    jstring k = (*env)->NewStringUTF(env, key);
+    int v = def;
+    if (m && k) {
+        v = (*env)->CallIntMethod(env, obj, m, k, def);
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); v = def; }
+    }
+    if (k) (*env)->DeleteLocalRef(env, k);
+    return v;
+}
+
+static int pl_parse_vmess(JNIEnv *env, const char *s, int n, int p) {
+    char *b64 = (char *) malloc((size_t) (n - p + 1));
+    char *json = (char *) malloc((size_t) (n - p + 1));
+    int ok = 0;
+    if (b64 && json) {
+        pl_copy(b64, n - p + 1, s + p, n - p);
+        if (pl_b64(b64, (int) strlen(b64), json, n - p + 1) > 0) {
+            jclass jsonCls = need_class(env, "org/json/JSONObject");
+            jstring jjs = jsonCls ? (*env)->NewStringUTF(env, json) : NULL;
+            jobject obj = (jsonCls && jjs) ? (*env)->NewObject(env, jsonCls, (*env)->GetMethodID(env, jsonCls, "<init>", "(Ljava/lang/String;)V"), jjs) : NULL;
+            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); obj = NULL; }
+            if (obj) {
+                int port = pl_json_int(env, obj, jsonCls, "port", -1);
+                pl_json_str(env, obj, jsonCls, "add", "", pl_addr, PL_ADDR);
+                pl_json_str(env, obj, jsonCls, "id", "", pl_cred, PL_CRED);
+                pl_json_str(env, obj, jsonCls, "ps", "", pl_name, PL_NAME);
+                pl_json_str(env, obj, jsonCls, "scy", "auto", pl_method, sizeof(pl_method));
+                pl_json_str(env, obj, jsonCls, "tls", "none", pl_security, sizeof(pl_security));
+                pl_json_str(env, obj, jsonCls, "net", "tcp", pl_type, sizeof(pl_type));
+                pl_json_str(env, obj, jsonCls, "sni", "", pl_sni, sizeof(pl_sni));
+                pl_alter = pl_json_int(env, obj, jsonCls, "aid", 0);
+                if (port > 0 && port <= 65535 && pl_addr[0] && pl_cred[0]) {
+                    pl_port = port;
+                    pl_kind = 2;
+                    if (pl_security[0] == 0) strcpy(pl_security, "none");
+                    if (pl_type[0] == 0) strcpy(pl_type, "tcp");
+                    ok = 1;
+                }
+            }
+            if (jjs) (*env)->DeleteLocalRef(env, jjs);
+            if (obj) (*env)->DeleteLocalRef(env, obj);
+            if (jsonCls) (*env)->DeleteLocalRef(env, jsonCls);
+        }
+    }
+    free(b64);
+    free(json);
+    return ok;
+}
+
+static int pl_parse_ss(JNIEnv *env, const char *s, int n, int p) {
+    int hashAt = -1;
+    for (int i = p; i < n; i++) if (s[i] == '#') { hashAt = i; break; }
+    int mainEnd = hashAt >= 0 ? hashAt : n;
+    if (hashAt >= 0) pl_udecode(s + hashAt + 1, n - hashAt - 1, pl_name, PL_NAME);
+    int qAt = -1;
+    for (int i = p; i < mainEnd; i++) if (s[i] == '?') { qAt = i; break; }
+    int bodyEnd = qAt >= 0 ? qAt : mainEnd;
+    int at = -1;
+    for (int i = p; i < bodyEnd; i++) if (s[i] == '@') at = i;
+    char hostPart[PL_ADDR];
+    int hostLen = 0;
+    char method[32] = "", pass[PL_CRED] = "";
+    if (at >= p) {
+        /* cred may be base64 or percent-encoded */
+        char cred[PL_CRED];
+        char dec[PL_CRED];
+        pl_udecode(s + p, at - p, cred, sizeof(cred));
+        if (pl_b64(cred, (int) strlen(cred), dec, sizeof(dec)) <= 0) strcpy(dec, cred);
+        char *c = strchr(dec, ':');
+        if (c == NULL || c == dec) return 0;
+        pl_copy(method, sizeof(method), dec, (int) (c - dec));
+        pl_copy(pass, PL_CRED, c + 1, (int) strlen(c + 1));
+        hostLen = bodyEnd - (at + 1);
+        if (hostLen >= PL_ADDR) hostLen = PL_ADDR - 1;
+        memcpy(hostPart, s + at + 1, (size_t) hostLen);
+        hostPart[hostLen] = 0;
+    } else {
+        /* whole body is base64: cred@host:port inside */
+        char dec[4096];
+        char b[4096];
+        int blen = bodyEnd - p;
+        if (blen >= (int) sizeof(b)) blen = (int) sizeof(b) - 1;
+        memcpy(b, s + p, (size_t) blen);
+        b[blen] = 0;
+        if (pl_b64(b, blen, dec, sizeof(dec)) <= 0) return 0;
+        char *at2 = strrchr(dec, '@');
+        char *colon2 = strrchr(dec, ':');
+        if (at2 == NULL || colon2 == NULL || colon2 <= at2) return 0;
+        char *cc = memchr(dec, ':', (size_t) (at2 - dec));
+        if (cc == NULL || cc == dec) return 0;
+        pl_copy(method, sizeof(method), dec, (int) (cc - dec));
+        pl_copy(pass, PL_CRED, cc + 1, (int) (at2 - cc - 1));
+        pl_copy(hostPart, PL_ADDR, at2 + 1, (int) strlen(at2 + 1));
+        hostLen = (int) strlen(hostPart);
+    }
+    int colon = -1;
+    for (int i = 0; i < hostLen; i++) if (hostPart[i] == ':') colon = i;
+    if (colon <= 0) return 0;
+    int hs = 0, he = colon;
+    if (he - hs >= 2 && hostPart[hs] == '[' && hostPart[he - 1] == ']') { hs++; he--; }
+    pl_copy(pl_addr, PL_ADDR, hostPart + hs, he - hs);
+    int port = 0;
+    for (int i = colon + 1; i < hostLen; i++) {
+        if (hostPart[i] < '0' || hostPart[i] > '9') { port = 0; break; }
+        port = port * 10 + (hostPart[i] - '0');
+        if (port > 65535) { port = 0; break; }
+    }
+    if (pl_addr[0] == 0 || port <= 0 || method[0] == 0 || pass[0] == 0) return 0;
+    pl_port = port;
+    pl_kind = 3;
+    strcpy(pl_method, method);
+    pl_copy(pl_cred, PL_CRED, pass, (int) strlen(pass));
+    strcpy(pl_security, "none");
+    strcpy(pl_type, "tcp");
+    return 1;
+}
+
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_plParse(JNIEnv *env, jclass cls, jstring jlink) {
     pl_ok = 0;
@@ -2245,6 +2415,10 @@ Java_ir_v2rayng_compose_core_NativeSec_plParse(JNIEnv *env, jclass cls, jstring 
     if (n > 7 && (s[0] == 'v' || s[0] == 't')) {
         if (n > 8 && memcmp(s, "vless://", 8) == 0) { pl_kind = 0; p = 8; }
         else if (n > 9 && memcmp(s, "trojan://", 9) == 0) { pl_kind = 1; p = 9; }
+    }
+    if (p == 0) {
+        if (n > 9 && memcmp(s, "vmess://", 9) == 0) { int ok = pl_parse_vmess(env, s, n, 9); (*env)->ReleaseStringUTFChars(env, jlink, s); pl_ok = ok; return ok; }
+        if (n > 5 && memcmp(s, "ss://", 5) == 0) { int ok = pl_parse_ss(env, s, n, 5); (*env)->ReleaseStringUTFChars(env, jlink, s); pl_ok = ok; return ok; }
     }
     if (!(pl_kind == 0 || pl_kind == 1) || p == 0) { (*env)->ReleaseStringUTFChars(env, jlink, s); return 0; }
     int hashAt = -1, qAt = -1, atAt = -1;
@@ -2405,13 +2579,23 @@ static void sb_direct(sbuf *s) {
 
 static void sb_outbound(sbuf *s) {
     sb_add(s, "{\"tag\":\"proxy\",\"protocol\":");
-    sb_str(s, pl_kind == 0 ? "vless" : pl_kind == 1 ? "trojan" : "vless");
+    sb_str(s, pl_kind == 0 ? "vless" : pl_kind == 1 ? "trojan" : pl_kind == 2 ? "vmess" : "shadowsocks");
     sb_add(s, ",\"settings\":");
     if (pl_kind == 1) {
         sb_add(s, "{\"servers\":[{\"address\":");
         sb_str(s, pl_addr);
         sb_add(s, ",\"port\":");
         sb_num(s, pl_port);
+        sb_add(s, ",\"password\":");
+        sb_str(s, pl_cred);
+        sb_add(s, ",\"level\":0}]}");
+    } else if (pl_kind == 3) {
+        sb_add(s, "{\"servers\":[{\"address\":");
+        sb_str(s, pl_addr);
+        sb_add(s, ",\"port\":");
+        sb_num(s, pl_port);
+        sb_add(s, ",\"method\":");
+        sb_str(s, pl_method);
         sb_add(s, ",\"password\":");
         sb_str(s, pl_cred);
         sb_add(s, ",\"level\":0}]}");
@@ -2422,10 +2606,19 @@ static void sb_outbound(sbuf *s) {
         sb_num(s, pl_port);
         sb_add(s, ",\"users\":[{\"id\":");
         sb_str(s, pl_cred);
-        sb_add(s, ",\"encryption\":\"none\",\"level\":0");
-        if (pl_flow[0]) { sb_add(s, ",\"flow\":"); sb_str(s, pl_flow); }
+        if (pl_kind == 2) {
+            sb_add(s, ",\"alterId\":");
+            sb_num(s, pl_alter);
+            sb_add(s, ",\"security\":");
+            sb_str(s, pl_method[0] ? pl_method : "auto");
+            sb_add(s, ",\"level\":0");
+        } else {
+            sb_add(s, ",\"encryption\":\"none\",\"level\":0");
+            if (pl_flow[0]) { sb_add(s, ",\"flow\":"); sb_str(s, pl_flow); }
+        }
         sb_add(s, "}]}]}");
     }
+    if (pl_kind == 3) { sb_add(s, "}"); return; }
     sb_add(s, ",\"streamSettings\":");
     sb_add(s, "{\"network\":");
     sb_str(s, pl_type);
