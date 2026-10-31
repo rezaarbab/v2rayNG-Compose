@@ -2684,31 +2684,38 @@ static void sb_socks(sbuf *s, int port) {
 }
 
 /** mode 0 = full tunnel, 1 = ping only, 2 = flag probe through a local socks port */
+/** the config text, assembled once and shared by the file writer and the string entry */
+static int config_build(sbuf *s, int mode, int socksPort) {
+    s.b = NULL; s.n = 0; s.cap = 0;
+    sb_add(s, "{\"log\":{\"loglevel\":\"warning\"}");
+    if (mode == 0) {
+        sb_add(s, ",\"inbounds\":[{\"tag\":\"tun-in\",\"protocol\":\"tun\",\"settings\":{\"name\":\"utun42\",\"desc\":\"Blob\",\"mtu\":1500}},");
+        sb_socks(s, 10890);
+        sb_add(s, "]");
+    } else if (mode == 2) {
+        sb_add(s, ",\"inbounds\":[");
+        sb_socks(s, socksPort);
+        sb_add(s, "]");
+    }
+    sb_add(s, ",\"outbounds\":[");
+    sb_outbound(s);
+    sb_add(s, ",");
+    sb_direct(s);
+    sb_add(s, "],\"routing\":");
+    sb_routing(s);
+    if (mode == 0) {
+        sb_add(s, ",\"stats\":{},\"policy\":{\"levels\":{\"0\":{\"statsUserUplink\":true,\"statsUserDownlink\":true}}},\"system\":{\"statsOutboundUplink\":true,\"statsOutboundDownlink\":true}");
+    }
+    sb_add(s, "}");
+    (void) socksPort;
+    return s->b != NULL;
+}
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_coreWriteConfig(JNIEnv *env, jclass cls, jstring jpath, jint mode, jint socksPort) {
     if (jpath == NULL || !pl_ok) return 0;
     sbuf s;
     s.b = NULL; s.n = 0; s.cap = 0;
-    sb_add(&s, "{\"log\":{\"loglevel\":\"warning\"}");
-    if (mode == 0) {
-        sb_add(&s, ",\"inbounds\":[{\"tag\":\"tun-in\",\"protocol\":\"tun\",\"settings\":{\"name\":\"utun42\",\"desc\":\"Blob\",\"mtu\":1500}},");
-        sb_socks(&s, 10890);
-        sb_add(&s, "]");
-    } else if (mode == 2) {
-        sb_add(&s, ",\"inbounds\":[");
-        sb_socks(&s, socksPort);
-        sb_add(&s, "]");
-    }
-    sb_add(&s, ",\"outbounds\":[");
-    sb_outbound(&s);
-    sb_add(&s, ",");
-    sb_direct(&s);
-    sb_add(&s, "],\"routing\":");
-    sb_routing(&s);
-    if (mode == 0) {
-        sb_add(&s, ",\"stats\":{},\"policy\":{\"levels\":{\"0\":{\"statsUserUplink\":true,\"statsUserDownlink\":true}}},\"system\":{\"statsOutboundUplink\":true,\"statsOutboundDownlink\":true}");
-    }
-    sb_add(&s, "}");
+    if (!config_build(&s, mode, socksPort)) { free(s.b); return 0; }
     int ok = 0;
     if (s.b != NULL) {
         const char *path = (*env)->GetStringUTFChars(env, jpath, NULL);
@@ -2723,6 +2730,24 @@ Java_ir_v2rayng_compose_core_NativeSec_coreWriteConfig(JNIEnv *env, jclass cls, 
         free(s.b);
     }
     return ok ? 1 : 0;
+}
+/** the same config as a String, because libv2ray startLoop only takes one: this single call is
+ *  the floor this core API sets, and the comment is here so nobody reads it as an oversight. */
+JNIEXPORT jstring JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_coreConfigForRow(JNIEnv *env, jclass cls, jint row, jint mode, jint socksPort) {
+    if (row < 0 || row >= g_rows_n) return NULL;
+    jstring jlink = (*env)->NewStringUTF(env, g_rows[row].link);
+    if (jlink == NULL) return NULL;
+    int ok = Java_ir_v2rayng_compose_core_NativeSec_plParse(env, cls, jlink);
+    (*env)->DeleteLocalRef(env, jlink);
+    if (ok != 1) { set_step("cfgforrow:parse"); return NULL; }
+    sbuf s;
+    s.b = NULL; s.n = 0; s.cap = 0;
+    if (!config_build(&s, mode, socksPort)) { free(s.b); set_step("cfgforrow:build"); return NULL; }
+    jstring out = (*env)->NewStringUTF(env, s.b);
+    free(s.b);
+    if (out) set_step("cfgforrow:ok");
+    return out;
 }
 
 /* ---------------- the server list, kept here ----------------

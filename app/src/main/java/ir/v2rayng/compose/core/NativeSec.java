@@ -266,6 +266,19 @@ public final class NativeSec {
         }
     }
 
+    private static native String coreConfigForRow(int row, int mode, int socksPort);
+
+    /** the config for a stored row as a String: libv2ray startLoop only takes one, so this is the
+     *  single place a config text crosses to Kotlin - a property of that API, stated on purpose */
+    public static String coreConfig(int row, int mode, int socksPort) {
+        if (!READY || row < 0) return null;
+        try {
+            return coreConfigForRow(row, mode, socksPort);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private static native int coreWriteConfigRow(int row, String path, int mode, int socksPort);
 
     private static native int payloadFind(String id);
