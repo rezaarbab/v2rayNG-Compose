@@ -2684,9 +2684,27 @@ static void sb_socks(sbuf *s, int port) {
 }
 
 /** mode 0 = full tunnel, 1 = ping only, 2 = flag probe through a local socks port */
+#define PLR_MAX 256
+#define PLR_ID 64
+#define PLR_CAT 64
+#define PLR_LINK 2048
+#define PLR_MISC 256
+
+typedef struct {
+    char id[PLR_ID];
+    char name[PL_NAME];
+    char addr[PL_ADDR];
+    int port;
+    char cat[PLR_CAT];
+    char msg[PL_MISC];
+    char link[PLR_LINK];
+} plr_t;
+
+static plr_t *g_rows;
+static int g_rows_n;
+
 /** the config text, assembled once and shared by the file writer and the string entry */
 static int config_build(sbuf *s, int mode, int socksPort) {
-    s.b = NULL; s.n = 0; s.cap = 0;
     sb_add(s, "{\"log\":{\"loglevel\":\"warning\"}");
     if (mode == 0) {
         sb_add(s, ",\"inbounds\":[{\"tag\":\"tun-in\",\"protocol\":\"tun\",\"settings\":{\"name\":\"utun42\",\"desc\":\"Blob\",\"mtu\":1500}},");
@@ -2759,23 +2777,6 @@ Java_ir_v2rayng_compose_core_NativeSec_coreConfigForRow(JNIEnv *env, jclass cls,
  * Sealing the rows for the next start is the following commit; until then this store lives for
  * the process, which is exactly what the branch's stage 3 needs to wire the list through.
  */
-#define PLR_MAX 256
-#define PLR_ID 64
-#define PLR_CAT 64
-#define PLR_LINK 2048
-
-typedef struct {
-    char id[PLR_ID];
-    char name[PL_NAME];
-    char addr[PL_ADDR];
-    int port;
-    char cat[PLR_CAT];
-    char msg[PL_MISC];
-    char link[PLR_LINK];
-} plr_t;
-
-static plr_t *g_rows;
-static int g_rows_n;
 
 static void payload_reset(void) {
     if (g_rows) { free(g_rows); g_rows = NULL; }
