@@ -2052,7 +2052,11 @@ static unsigned char *tok_msg(JNIEnv *env, jstring jdevice, uint32_t ts, const j
         m[6 + dlen] = (unsigned char) (ts >> 8);
         m[7 + dlen] = (unsigned char) ts;
         memcpy(m + 8 + dlen, nonce, 8);
-        *outlen = (int) (12 + dlen);
+        /* 3 (blb) + device + 1 (0x00) + 4 (ts) + 8 (nonce) = 16 + dlen. This said 12 + dlen for
+         * one build, which cut the last four nonce bytes out of the message that got signed and
+         * MACed: the app signed 28 bytes, the worker rebuilt 32, and both reported the pair as a
+         * signature mismatch. The allocation was right, the length was not. */
+        *outlen = (int) (16 + dlen);
     }
     (*env)->ReleaseStringUTFChars(env, jdevice, dev);
     return m;
@@ -2147,7 +2151,7 @@ Java_ir_v2rayng_compose_core_NativeSec_proofFor(JNIEnv *env, jclass cls, jstring
         unsigned char sd[32];
         sha256((const unsigned char *) sbytes, (size_t) siglen, sd);
         snprintf(info, sizeof(info), "msg#%02x%02x%02x/%dB sig#%02x%02x%02x/%dB dev%dB",
-                 md[0], md[1], md[2], (int) mlen, sd[0], sd[1], sd[2], (int) siglen, (int) (mlen - 12));
+                 md[0], md[1], md[2], (int) mlen, sd[0], sd[1], sd[2], (int) siglen, (int) (mlen - 16));
     } else {
         snprintf(info, sizeof(info), "msg#%02x%02x%02x/%dB sig=?", md[0], md[1], md[2], (int) mlen);
     }
