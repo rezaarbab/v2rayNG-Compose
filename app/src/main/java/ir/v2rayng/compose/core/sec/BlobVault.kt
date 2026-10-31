@@ -78,7 +78,7 @@ object BlobVault {
     /** returns base64url(iv || ct) or null when the keystore refuses */
     fun seal(plain: ByteArray): String? {
         if (!ready()) {
-            lastStage = "seal: no key"
+            lastStage = "seal: no key [selfcheck=" + NativeSec.vaultSelfCheck() + " " + NativeSec.note() + "]"
             return null
         }
         val t0 = android.os.SystemClock.elapsedRealtime()
@@ -86,7 +86,9 @@ object BlobVault {
         val out = synchronized(this) { NativeSec.seal(plain) }
         if (out == null) {
             usable = false
-            lastStage = "seal: native refused"
+            // -1 = the library did not pass its own known-answer test, so nothing it does can be
+            // trusted; -2 = it did not load at all; 2..6 = where the seal/open round trip stopped
+            lastStage = "seal: native refused [selfcheck=" + NativeSec.vaultSelfCheck() + " " + NativeSec.note() + "]"
             SecJournal.note("seal ERROR ${plain.size}B ${android.os.SystemClock.elapsedRealtime() - t0}ms")
             return null
         }
