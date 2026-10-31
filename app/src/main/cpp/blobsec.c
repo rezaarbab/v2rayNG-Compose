@@ -3055,3 +3055,31 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadRestore(JNIEnv *env, jclass cls, j
     }
     (void) jplaintext;
 }
+
+/* ---- the two calls the wiring needs ---- */
+
+/** write the config for a stored row: the link is parsed here, from memory, and never returned */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_coreWriteConfigRow(JNIEnv *env, jclass cls, jint row, jstring jpath, jint mode, jint socksPort) {
+    if (row < 0 || row >= g_rows_n || jpath == NULL) return 0;
+    jstring jlink = (*env)->NewStringUTF(env, g_rows[row].link);
+    if (jlink == NULL) return 0;
+    int ok = Java_ir_v2rayng_compose_core_NativeSec_plParse(env, cls, jlink);
+    (*env)->DeleteLocalRef(env, jlink);
+    if (ok != 1) { set_step("cfgrow:parse"); return 0; }
+    return Java_ir_v2rayng_compose_core_NativeSec_coreWriteConfig(env, cls, jpath, mode, socksPort);
+}
+
+/** row index for a display id, -1 when it is not in the store (a stale list, a deleted row) */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_payloadFind(JNIEnv *env, jclass cls, jstring jid) {
+    if (jid == NULL) return -1;
+    const char *id = (*env)->GetStringUTFChars(env, jid, NULL);
+    if (id == NULL) return -1;
+    int found = -1;
+    for (int i = 0; i < g_rows_n; i++) {
+        if (strcmp(g_rows[i].id, id) == 0) { found = i; break; }
+    }
+    (*env)->ReleaseStringUTFChars(env, jid, id);
+    return found;
+}

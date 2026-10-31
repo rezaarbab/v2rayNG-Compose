@@ -266,6 +266,29 @@ public final class NativeSec {
         }
     }
 
+    private static native int coreWriteConfigRow(int row, String path, int mode, int socksPort);
+
+    private static native int payloadFind(String id);
+
+    /** the config for a stored row, written by the library; the link never leaves it */
+    public static boolean writeCoreConfigFor(int row, String path, int mode, int socksPort) {
+        if (!READY || path == null || row < 0) return false;
+        try {
+            return coreWriteConfigRow(row, path, mode, socksPort) == 1;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    public static int rowOf(String id) {
+        if (!READY || id == null) return -1;
+        try {
+            return payloadFind(id);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
     private static native int payloadLoadCy(byte[] blob, byte[] kc);
 
     private static native String payloadSealAll();
