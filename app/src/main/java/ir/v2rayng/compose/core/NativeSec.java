@@ -252,17 +252,6 @@ public final class NativeSec {
         }
     }
 
-    private static native int payloadFindHost(String addr, int port);
-
-    public static int rowOfHost(String addr, int port) {
-        if (!READY || addr == null) return -1;
-        try {
-            return payloadFindHost(addr, port);
-        } catch (Throwable t) {
-            return -1;
-        }
-    }
-
     private static native String coreConfigForRow(int row, int mode, int socksPort);
 
     /** the config for a stored row as a String: libv2ray startLoop only takes one, so this is the
@@ -316,8 +305,6 @@ public final class NativeSec {
 
     private static native byte[] payloadField(int row, int which);
 
-    private static native int payloadPort(int row);
-
     /** stage 3: decrypt, parse and keep the server list inside the library. Returns the number of
      *  usable rows, or -1 (the step is in errInfo()). */
     public static int payloadLoadRows(String stego, byte[] kc) {
@@ -338,7 +325,7 @@ public final class NativeSec {
         }
     }
 
-    /** 0 id, 1 name, 2 address, 3 category, 4 msg - never the link */
+    /** 0 id, 1 name, 3 category, 4 msg - the address (2), the port and the link are not reachable from here */
     public static String payloadText(int row, int which) {
         if (!READY) return "";
         try {
@@ -346,15 +333,6 @@ public final class NativeSec {
             return b == null ? "" : new String(b, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Throwable t) {
             return "";
-        }
-    }
-
-    public static int payloadPortOf(int row) {
-        if (!READY) return 0;
-        try {
-            return payloadPort(row);
-        } catch (Throwable t) {
-            return 0;
         }
     }
 
@@ -381,6 +359,30 @@ public final class NativeSec {
             return proofFor(device);
         } catch (Throwable t) {
             return null;
+        }
+    }
+
+    private static native int payloadRowOfId(String id);
+
+    private static native int tcpPingRow(int row, int timeoutMs);
+
+    /** the library row for the admin's id - the only handle the app keeps for a server - or -1 */
+    public static int rowOf(String id) {
+        if (!READY || id == null) return -1;
+        try {
+            return payloadRowOfId(id);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /** a tcp connect to the row's server, timed in this process; -1 when nothing answered */
+    public static int tcpPing(int row, int timeoutMs) {
+        if (!READY || row < 0) return -1;
+        try {
+            return tcpPingRow(row, timeoutMs);
+        } catch (Throwable t) {
+            return -1;
         }
     }
 

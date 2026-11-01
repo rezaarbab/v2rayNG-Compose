@@ -185,12 +185,7 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                 )
-                                Text(
-                                    text = sel.host,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                                // no address under the name: the app knows this server by its id only
                             }
                             PingChip(sel.ping, sel.pingErr)
                         }

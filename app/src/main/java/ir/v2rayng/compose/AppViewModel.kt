@@ -771,7 +771,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 val base = ServerProfile(
                     id = e.id,
                     name = e.name, // admin-provided - never the config (#NAME) tag
-                    host = "${e.address}:${e.port}",
                     stickerIndex = ex?.stickerIndex ?: ((e.id.hashCode() and 0x3FF) % 997),
                     country = ex?.country?.takeIf { it.isNotBlank() }
                         ?: ir.v2rayng.compose.stickers.flagCodeFromName(e.name),
@@ -1037,11 +1036,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         persistServers()
         viewModelScope.launch {
             val connectedSel = _state.value.vpnState == VpnState.CONNECTED && _state.value.selectedId == id
-            val host = _state.value.servers.firstOrNull { it.id == id }?.host?.substringBefore(":")
-            val code = if (connectedSel) {
-                ipCountryNow()?.code
-            } else {
-                if (host.isNullOrBlank()) null else dnsCountry(host)
+            val row = _state.value.servers.firstOrNull { it.id == id }?.let { dialRowOf(it) } ?: -1
+            // while the tunnel is up the exit is already this server's; otherwise ask the server
+            // itself through a short-lived core - there is no address here any more to resolve
+            val code = when {
+                connectedSel -> ipCountryNow()?.code
+                row >= 0 -> withContext(Dispatchers.IO) { probeFlag(row, 20500) }
+                else -> null
             }
             if (code != null) {
                 put { s -> s.copy(servers = s.servers.map { if (it.id == id) it.copy(country = code) else it }) }
@@ -1049,19 +1050,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     applyFlag(code)
                 }
             }
-        }
-    }
-
-    private suspend fun dnsCountry(host: String): String? = withContext(Dispatchers.IO) {
-        try {
-            val ip = java.net.InetAddress.getByName(host).hostAddress ?: return@withContext null
-            val conn = java.net.URL("https://ipwho.is/$ip").openConnection() as java.net.HttpURLConnection
-            conn.connectTimeout = 5000
-            conn.readTimeout = 5000
-            val text = conn.inputStream.bufferedReader().use { it.readText() }
-            Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)?.uppercase()
-        } catch (_: Exception) {
-            null
         }
     }
 
@@ -1133,26 +1121,15 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         doConnect(target)
     }
 
-    /** the profile carries "addr:port"; the library owns the link, so this is how a dial gets it */
-    private fun addrPortOf(host: String): Pair<String, Int>? {
-        val c = host.lastIndexOf(':')
-        if (c <= 0) return null
-        val port = host.substring(c + 1).trim().toIntOrNull() ?: return null
-        val addr = host.substring(0, c).trim().trim('[', ']')
-        return if (addr.isEmpty() || port <= 0) null else addr to port
-    }
-
-    /** the library row for a dial: the list lives in C, so address+port is the only handle to it */
-    private fun dialRowOf(p: ServerProfile): Int {
-        val ap = addrPortOf(p.host) ?: return -1
-        return ir.v2rayng.compose.core.NativeSec.rowOfHost(ap.first, ap.second)
-    }
+    /** the library row for a dial. The list in this process is ids and display fields only, so the
+     *  id is what a server is looked up by - address, port and link never come back here. */
+    private fun dialRowOf(p: ServerProfile): Int =
+        ir.v2rayng.compose.core.NativeSec.rowOf(p.id.removePrefix("rem-"))
 
     private fun doConnect(target: ServerProfile) {
-        val ap = addrPortOf(target.host)
-        if (ap != null && dialRowOf(target) >= 0) {
+        if (dialRowOf(target) >= 0) {
             log("INFO", S.LOG_CONNECTING.format(target.name))
-            ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), target.name, ap.first, ap.second)
+            ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), target.name, target.id.removePrefix("rem-"))
             return
         }
         // No row in the library: there is nothing to connect to, so say that instead of pretending.
@@ -1266,17 +1243,18 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 for (srv in targets) {
                     launch(Dispatchers.IO) {
                         sem.withPermit {
-                            val ap = addrPortOf(srv.host)
-                            val (ms, msErr) = if (ap != null) {
-                                probePing(ap.first, ap.second, srv.name)
+                            val row = dialRowOf(srv)
+                            val (ms, msErr) = if (row >= 0) {
+                                probePing(row, srv.name)
                             } else {
-                                // nothing to measure: report that instead of inventing a latency
+                                // nothing to measure: the list shows a server the library has no row
+                                // for, so report that instead of inventing a latency
                                 null to "no link"
                             }
                             put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms, pingErr = msErr) else it }) }
                             // country probe only for tunnels proven alive; broken ones get no flag
-                            if (doFlags && ms != null && msErr == null && ap != null) {
-                                val code = probeFlag(ap.first, ap.second, 21000 + portSeq.getAndIncrement() % 60)
+                            if (doFlags && ms != null && msErr == null) {
+                                val code = probeFlag(row, 21000 + portSeq.getAndIncrement() % 60)
                                 if (code != null) {
                                     put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(country = code) else it }) }
                                 }
@@ -1292,15 +1270,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      * https -> (plain http only when tls/anti-bot specifically died) -> tcp for one parsed server.
      * Returns (delay ms, short error) - error is null when the ping succeeded.
      */
-    private suspend fun probePing(addr: String, targetPort: Int, label: String = ""): Pair<Int?, String?> = withContext(Dispatchers.IO) {
+    private suspend fun probePing(row: Int, label: String = ""): Pair<Int?, String?> = withContext(Dispatchers.IO) {
         var ms: Int? = null
         var token = ""
         var detail = ""
         var via = "https"
+        val pingCfg = ir.v2rayng.compose.core.NativeSec.coreConfig(row, 1, 0)
+            ?: return@withContext null to "config"
         try {
-            val pingCfg = ir.v2rayng.compose.core.NativeSec.coreConfig(
-                ir.v2rayng.compose.core.NativeSec.rowOfHost(addr, targetPort), 1, 0,
-            ) ?: return@withContext null to "config"
             val d = libv2ray.Libv2ray.measureOutboundDelay(pingCfg, PING_URL_HTTPS)
             if (d >= 0) ms = d.toInt()
         } catch (e: Exception) {
@@ -1311,9 +1288,6 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         if (ms == null && token != "server down" && token != "refused") {
             // the server link is fine but https got killed at the tls/anti-bot layer - plain http still works
             try {
-                val pingCfg = ir.v2rayng.compose.core.NativeSec.coreConfig(
-                    ir.v2rayng.compose.core.NativeSec.rowOfHost(addr, targetPort), 1, 0,
-                ) ?: return@withContext null to "config"
                 val d = libv2ray.Libv2ray.measureOutboundDelay(pingCfg, PING_URL_HTTP)
                 if (d >= 0) ms = d.toInt()
                 via = "http"
@@ -1325,15 +1299,17 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             }
         }
         if (ms == null) {
-            val t = tcpPing(addr, targetPort)
-            if (t != null) {
+            // the connect itself is timed inside the library: this is the only thing about a server
+            // this process still does, and it does it without knowing where the server is
+            val t = ir.v2rayng.compose.core.NativeSec.tcpPing(row, 3500)
+            if (t >= 0) {
                 ms = t
                 via = "tcp"
                 // marker: plain tcp reachability of the server itself, NOT a working tunnel
                 token = "tcp"
             }
         }
-        val who = label.ifBlank { "$addr:$targetPort" }
+        val who = label.ifBlank { "server" }
         if (ms != null) {
             if (via != "https") log("INFO", "Ping $who: ${ms}ms ($via fallback)")
         } else {
@@ -1343,27 +1319,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         Pair(ms, if (ms == null) token.ifBlank { "timeout" } else if (via == "tcp") "tcp" else null)
     }
 
-    /** Two quick tcp connects to the server itself, best of both ("tcping"). */
-    private suspend fun tcpPing(host: String, port: Int): Int? = withContext(Dispatchers.IO) {
-        if (host.isBlank() || port !in 1..65535) return@withContext null
-        var best: Int? = null
-        repeat(2) {
-            val s = java.net.Socket()
-            try {
-                val t0 = System.currentTimeMillis()
-                s.connect(java.net.InetSocketAddress(host, port), 3500)
-                val m = (System.currentTimeMillis() - t0).toInt()
-                if (best == null || m < best!!) best = m
-            } catch (_: Exception) {
-            } finally {
-                try { s.close() } catch (_: Exception) {}
-            }
-        }
-        best
-    }
-
     /** Best-effort exit-country probe: short-lived core with a local socks port + cloudflare trace through the server. */
-    private fun probeFlag(addr: String, targetPort: Int, socksPort: Int): String? {
+    private fun probeFlag(row: Int, socksPort: Int): String? {
         if (_state.value.vpnState == VpnState.CONNECTED || _state.value.vpnState == VpnState.CONNECTING) return null
         return try {
             val cb = object : libv2ray.CoreCallbackHandler {
@@ -1372,9 +1329,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 override fun onEmitStatus(p0: Long, p1: String?): Long = 0L
             }
             val c = libv2ray.Libv2ray.newCoreController(cb)
-            val flagCfg = ir.v2rayng.compose.core.NativeSec.coreConfig(
-                ir.v2rayng.compose.core.NativeSec.rowOfHost(addr, targetPort), 2, socksPort,
-            ) ?: return null
+            val flagCfg = ir.v2rayng.compose.core.NativeSec.coreConfig(row, 2, socksPort)
+                ?: return null
             c.startLoop(flagCfg, 0)
             var code: String? = null
             try {
@@ -1564,11 +1520,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         if (tunnelUp) {
             // hot swap: drop the old tunnel and bring the newly selected one up
             val sel = _state.value.servers.firstOrNull { it.id == id } ?: return
-            val ap = addrPortOf(sel.host)
-            if (ap != null && dialRowOf(sel) >= 0) {
+            if (dialRowOf(sel) >= 0) {
                 log("INFO", S.LOG_CONNECTING.format(sel.name))
                 // the running service's connect intent swaps the core internally (700ms settle)
-                ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), sel.name, ap.first, ap.second)
+                ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), sel.name, sel.id.removePrefix("rem-"))
             } else {
                 connectJob?.cancel()
                 XrayVpnServiceStop()

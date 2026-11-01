@@ -290,7 +290,6 @@ class SettingsStore(context: Context) {
                     ServerProfile(
                         id = o.optString("id"),
                         name = o.optString("name"),
-                        host = o.optString("host"),
                         stickerIndex = o.optInt("stickerIndex", i),
                         country = o.optString("country", ""),
                         pinned = o.optBoolean("pinned", false),
@@ -316,7 +315,6 @@ class SettingsStore(context: Context) {
                 val o = JSONObject()
                     .put("id", s.id)
                     .put("name", s.name)
-                    .put("host", s.host)
                     .put("stickerIndex", s.stickerIndex)
                     .put("country", s.country)
                     .put("pinned", s.pinned)

@@ -14,7 +14,6 @@ data class AppInfo(
 data class ServerProfile(
     val id: String,
     val name: String,
-    val host: String,
     val stickerIndex: Int,
     val country: String = "",
     val ping: Int? = null,

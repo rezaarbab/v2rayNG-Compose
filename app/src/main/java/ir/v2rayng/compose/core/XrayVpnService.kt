@@ -20,8 +20,7 @@ class XrayVpnService : VpnService() {
     companion object {
         const val ACTION_CONNECT = "ir.blob.vpn.CONNECT"
         const val ACTION_STOP = "ir.blob.vpn.STOP"
-        private const val EXTRA_ADDR = "addr"
-        private const val EXTRA_PORT = "port"
+        private const val EXTRA_ID = "srv"
         private const val EXTRA_NAME = "name"
 
         /** Whether a tunnel is actually held by this process. The bridge state can outlive the
@@ -31,16 +30,15 @@ class XrayVpnService : VpnService() {
 
         /** What to dial while the previous tunnel is still settling. It is deliberately not a row
          *  number: a sync can rewrite the library store inside those 700 ms, so the row is looked
-         *  up again at dial time from the same address+port. */
+         *  up again at dial time from the same admin id. */
         private var pending: Dial? = null
 
-        fun start(context: android.content.Context, name: String, address: String, port: Int) {
-            pending = Dial(name, address, port)
+        fun start(context: android.content.Context, name: String, id: String) {
+            pending = Dial(name, id)
             context.startForegroundService(
                 Intent(context, XrayVpnService::class.java)
                     .setAction(ACTION_CONNECT)
-                    .putExtra(EXTRA_ADDR, address)
-                    .putExtra(EXTRA_PORT, port)
+                    .putExtra(EXTRA_ID, id)
                     .putExtra(EXTRA_NAME, name),
             )
         }
@@ -50,7 +48,7 @@ class XrayVpnService : VpnService() {
         }
     }
 
-    private data class Dial(val name: String, val address: String, val port: Int)
+    private data class Dial(val name: String, val id: String)
 
     private var controller: CoreController? = null
     private var tunFd = -1
@@ -134,18 +132,17 @@ class XrayVpnService : VpnService() {
                 return START_NOT_STICKY
             }
             else -> {
-                val addr = intent?.getStringExtra(EXTRA_ADDR)
-                val port = intent?.getIntExtra(EXTRA_PORT, -1) ?: -1
+                val sid = intent?.getStringExtra(EXTRA_ID)
                 val nm = intent?.getStringExtra(EXTRA_NAME)
-                val target = if (!addr.isNullOrBlank() && port > 0) Dial(nm.orEmpty(), addr, port) else pending
+                val target = if (!sid.isNullOrBlank()) Dial(nm.orEmpty(), sid) else pending
                 if (target == null) {
                     stopForegroundCompat()
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                // the list lives in the library: address+port is only a key into it, and a server
-                // the store does not have cannot be dialed - say so instead of starting an empty core
-                val row = NativeSec.rowOfHost(target.address, target.port)
+                // the list lives in the library and the app only knows its ids: the row behind this
+                // id is looked up here, and a server the store does not have cannot be dialed
+                val row = NativeSec.rowOf(target.id)
                 if (row < 0) {
                     refuseNoRow()
                     stopForegroundCompat()
@@ -160,7 +157,7 @@ class XrayVpnService : VpnService() {
                     pending = target
                     mainHandler.postDelayed({
                         if (controller == null && tunFd < 0) {
-                            val swapRow = NativeSec.rowOfHost(target.address, target.port)
+                            val swapRow = NativeSec.rowOf(target.id)
                             if (swapRow >= 0) {
                                 val swapName = dialName(target, swapRow)
                                 startForegroundCompat(swapName)

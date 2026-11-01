@@ -15,6 +15,12 @@
 #include <zlib.h>
 #include <stdint.h>
 #include <time.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+#include <fcntl.h>
+#include <errno.h>
 
 /* ---------------- SHA-256 (FIPS 180-4) ---------------- */
 
@@ -2750,8 +2756,9 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadCount(JNIEnv *env, jclass cls) {
     return g_rows_n;
 }
 
-/** display fields only: 0 id, 1 name, 2 address, 3 category, 4 msg. The link is deliberately not
- *  reachable from here - that is the whole point of the move. */
+/** display fields only: 0 id, 1 name, 3 category, 4 msg. The address, the port and the link are
+ *  deliberately not reachable from here - the app finds a row by its id and uses it inside this
+ *  file, which is what the whole move was for. */
 JNIEXPORT jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_payloadField(JNIEnv *env, jclass cls, jint row, jint which) {
     if (row < 0 || row >= g_rows_n) return NULL;
@@ -2760,7 +2767,6 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadField(JNIEnv *env, jclass cls, jin
     switch (which) {
         case 0: src = r->id; break;
         case 1: src = r->name; break;
-        case 2: src = r->addr; break;
         case 3: src = r->cat; break;
         case 4: src = r->msg; break;
         default: src = ""; break;
@@ -2771,12 +2777,71 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadField(JNIEnv *env, jclass cls, jin
     return out;
 }
 
+
+
+/* the row for the id the admin gave a server. This is now the handle the app keeps: the list on
+ * screen is ids and display fields, and the address, the port and the link are only ever read here. */
 JNIEXPORT jint JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_payloadPort(JNIEnv *env, jclass cls, jint row) {
-    if (row < 0 || row >= g_rows_n) return 0;
-    return g_rows[row].port;
+Java_ir_v2rayng_compose_core_NativeSec_payloadRowOfId(JNIEnv *env, jclass cls, jstring jid) {
+    if (jid == NULL) return -1;
+    const char *id = (*env)->GetStringUTFChars(env, jid, NULL);
+    if (id == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return -1; }
+    int found = -1;
+    for (int i = 0; i < g_rows_n; i++) {
+        if (strcmp(g_rows[i].id, id) == 0) { found = i; break; }
+    }
+    (*env)->ReleaseStringUTFChars(env, jid, id);
+    return found;
 }
 
+/** two quick tcp connects to the server itself, best of both, timed. The Kotlin did this with a
+ *  Socket, which meant the address and the port had to exist in Kotlin; now the row is enough and
+ *  the answer is a number. -1 means nothing answered inside the timeout. */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_tcpPingRow(JNIEnv *env, jclass cls, jint row, jint timeoutMs) {
+    if (row < 0 || row >= g_rows_n || timeoutMs <= 0) return -1;
+    char portbuf[8];
+    snprintf(portbuf, sizeof(portbuf), "%d", g_rows[row].port);
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(g_rows[row].addr, portbuf, &hints, &res) != 0 || res == NULL) return -1;
+    int best = -1;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        if (fd < 0) continue;
+        int fl = fcntl(fd, F_GETFL, 0);
+        if (fl >= 0) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+        struct timespec t0;
+        struct timespec t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        int ms = -1;
+        if (connect(fd, res->ai_addr, res->ai_addrlen) == 0) {
+            ms = 0;
+        } else if (errno == EINPROGRESS) {
+            fd_set wf;
+            FD_ZERO(&wf);
+            FD_SET(fd, &wf);
+            struct timeval tv;
+            tv.tv_sec = timeoutMs / 1000;
+            tv.tv_usec = (timeoutMs % 1000) * 1000;
+            if (select(fd + 1, NULL, &wf, NULL, &tv) > 0) {
+                int err = 0;
+                socklen_t len = sizeof(err);
+                if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err == 0) {
+                    clock_gettime(CLOCK_MONOTONIC, &t1);
+                    ms = (int) ((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000);
+                }
+            }
+        }
+        close(fd);
+        if (ms >= 0 && (best < 0 || ms < best)) best = ms;
+    }
+    freeaddrinfo(res);
+    return best;
+}
 
 /* ---- the "cy" payload and the sealed row store ----
  * cy is the same JSON without a carrier: it is opened with gcm and parsed through the same row
@@ -3000,23 +3065,6 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadRestore(JNIEnv *env, jclass cls, j
     }
     (void) jplaintext;
 }
-
-
-/** row index by host and port - the connect and ping paths already have these two values, so the
- *  id never has to be threaded through five call chains to reach them */
-JNIEXPORT jint JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_payloadFindHost(JNIEnv *env, jclass cls, jstring jaddr, jint port) {
-    if (jaddr == NULL) return -1;
-    const char *a = (*env)->GetStringUTFChars(env, jaddr, NULL);
-    if (a == NULL) return -1;
-    int found = -1;
-    for (int i = 0; i < g_rows_n; i++) {
-        if (g_rows[i].port == (int) port && strcmp(g_rows[i].addr, a) == 0) { found = i; break; }
-    }
-    (*env)->ReleaseStringUTFChars(env, jaddr, a);
-    return found;
-}
-
 
 /* ---------------- the log scrubber, in C ----------------
  * Stage 1 of moving LogSanitize here: the nine rules run over UTF-8 bytes in the same order the

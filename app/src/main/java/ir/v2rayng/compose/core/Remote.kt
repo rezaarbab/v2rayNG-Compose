@@ -21,8 +21,6 @@ object Remote {
     data class ServerEntry(
         val id: String,
         val name: String,
-        val address: String,
-        val port: Int,
         val category: String,
         val msg: String = "",
     )
@@ -399,19 +397,17 @@ object Remote {
 
     /** Map a syncPayloadObj response (plain or decrypted) into the app model. */
     private fun mapSyncPayload(res: JSONObject): Result {
-        // the list lives in the library: same rows, same order, and no link ever enters this file
+        // what a server is made of in this process: an id, a name and two display strings. The
+        // address, the port and the link stay inside the library, and the row is found by id.
         val servers = ArrayList<ServerEntry>()
         val n = NativeSec.payloadRows()
         for (i in 0 until n) {
-            val addr = NativeSec.payloadText(i, 2)
-            val port = NativeSec.payloadPortOf(i)
-            if (addr.isEmpty() || port <= 0) continue
+            val lid = NativeSec.payloadText(i, 0)
+            if (lid.isEmpty()) continue
             servers.add(
                 ServerEntry(
-                    id = "rem-" + NativeSec.payloadText(i, 0),
+                    id = "rem-" + lid,
                     name = NativeSec.payloadText(i, 1).ifBlank { "srv" },
-                    address = addr,
-                    port = port,
                     category = NativeSec.payloadText(i, 3),
                     msg = NativeSec.payloadText(i, 4),
                 ),

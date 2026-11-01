@@ -68,7 +68,7 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     val categories = state.servers.mapNotNull { it.category.takeIf { c -> c.isNotBlank() } }.distinct()
     val filtered = state.servers.filter { srv ->
         (catSel.isBlank() || srv.category == catSel) &&
-            (query.isBlank() || srv.name.contains(query, true) || srv.host.contains(query, true) || srv.category.contains(query, true))
+            (query.isBlank() || srv.name.contains(query, true) || srv.category.contains(query, true))
     }
 
     Column(
@@ -253,7 +253,7 @@ private fun ServerRow(
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
                 val sub = buildString {
-                    if (profile.note.isNotBlank() || !profile.id.startsWith("rem-")) append(profile.note.ifBlank { profile.host })
+                    if (profile.note.isNotBlank()) append(profile.note)
                     if (profile.category.isNotBlank()) {
                         if (isNotEmpty()) append("  ·  ")
                         append(profile.category)
