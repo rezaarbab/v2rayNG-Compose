@@ -2845,6 +2845,37 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadClear(JNIEnv *env, jclass cls) {
  * refills the rows, so connect works after a cold start without a fresh sync.
  */
 
+static unsigned char *g_trim;
+static int g_trim_n;
+
+/** drop the servers array from the parsed root and keep the rest: the list never travels to
+ *  Kotlin, the panel other fields still do */
+static void payload_trim(JNIEnv *env, jobject root, jclass jsonCls, jstring kServers) {
+    if (g_trim) { free(g_trim); g_trim = NULL; }
+    g_trim_n = 0;
+    if (root == NULL || jsonCls == NULL) return;
+    jmethodID rem = (*env)->GetMethodID(env, jsonCls, "remove", "(Ljava/lang/String;)Ljava/lang/Object;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (rem && kServers) {
+        (*env)->CallObjectMethod(env, root, rem, kServers);
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    }
+    jmethodID toStr = (*env)->GetMethodID(env, jsonCls, "toString", "()Ljava/lang/String;");  //EXC-CLEARED
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    jstring js = (rem && toStr) ? (jstring) (*env)->CallObjectMethod(env, root, toStr) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); js = NULL; }
+    if (js) {
+        const char *c = (*env)->GetStringUTFChars(env, js, NULL);
+        if (c) {
+            int n = (int) strlen(c);
+            g_trim = (unsigned char *) malloc((size_t) n + 1);
+            if (g_trim) { memcpy(g_trim, c, (size_t) n); g_trim[n] = 0; g_trim_n = n; }
+            (*env)->ReleaseStringUTFChars(env, js, c);
+        }
+        (*env)->DeleteLocalRef(env, js);
+    }
+}
+
 static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len) {
     jstring jjson = (*env)->NewStringUTF(env, (const char *) buf);
     if (jjson == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); set_step("payload:string"); return -1; }
@@ -2890,6 +2921,7 @@ static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len) {
         if (r->addr[0] == 0 || r->port <= 0) continue;
         kept++;
     }
+    payload_trim(env, root, jsonCls, kServers);
     (*env)->DeleteLocalRef(env, arr);
     (*env)->DeleteLocalRef(env, root);
     if (kServers) (*env)->DeleteLocalRef(env, kServers);
@@ -3494,5 +3526,14 @@ Java_ir_v2rayng_compose_core_NativeSec_scrubUtf8(JNIEnv *env, jclass cls, jbyteA
     free(bufs[0].b);
     free(bufs[1].b);
     free(in);
+    return out;
+}
+
+/** the payload without its server list, as UTF-8 bytes; NULL when the last load had none */
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_payloadTrimmed(JNIEnv *env, jclass cls) {
+    if (g_trim == NULL || g_trim_n <= 0) return NULL;
+    jbyteArray out = (*env)->NewByteArray(env, g_trim_n);
+    if (out) (*env)->SetByteArrayRegion(env, out, 0, g_trim_n, (const jbyte *) g_trim);
     return out;
 }

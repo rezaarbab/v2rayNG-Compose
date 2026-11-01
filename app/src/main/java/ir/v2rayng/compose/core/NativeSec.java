@@ -266,6 +266,18 @@ public final class NativeSec {
         }
     }
 
+    private static native byte[] payloadTrimmed();
+
+    /** the payload with its servers array removed - what Kotlin is allowed to see */
+    public static byte[] payloadRest() {
+        if (!READY) return null;
+        try {
+            return payloadTrimmed();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private static native byte[] scrubUtf8(byte[] in);
 
     /** the log scrubber, in C: no host, ip, uuid, link or credential leaves a line */
