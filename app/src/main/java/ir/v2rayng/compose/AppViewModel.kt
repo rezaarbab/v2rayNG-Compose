@@ -244,7 +244,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         var lastRealState = ir.v2rayng.compose.core.RealState.IDLE
         viewModelScope.launch {
             ir.v2rayng.compose.core.XrayBridge.status.collect { st ->
-                val real = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }?.let { dialLinkOf(it) } != null ||
+                val real = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }?.let { dialRowOf(it) >= 0 } == true ||
                     _state.value.selectedId.startsWith("rv-")
                 if (real || st.state != ir.v2rayng.compose.core.RealState.IDLE) {
                     if (st.state != lastRealState) {
@@ -329,7 +329,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                         }
                         if (st.state == ir.v2rayng.compose.core.RealState.CONNECTED && _settings.value.autoFlag) {
                             val sel = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }
-                            if (sel?.let { dialLinkOf(it) } != null) {
+                            if (sel != null && dialRowOf(sel) >= 0) {
                                 viewModelScope.launch {
                                     var res: IpProbe? = null
                                     var attempt = 0
@@ -768,20 +768,15 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             val kept = s.servers.filter { !it.id.startsWith("rem-") }
             val rem = list.map { e ->
                 val ex = s.servers.firstOrNull { it.id == e.id }
-                val fromLink = e.link?.let { try { ir.v2rayng.compose.core.parseProxyLink(it) } catch (_: Exception) { null } }
-                val addr = if (!e.address.isNullOrBlank() && e.address != "0.0.0.0") e.address
-                    else fromLink?.address?.takeIf { it.isNotBlank() } ?: e.address
-                val prt = fromLink?.port?.takeIf { it > 0 } ?: e.port
                 val base = ServerProfile(
                     id = e.id,
                     name = e.name, // admin-provided - never the config (#NAME) tag
-                    host = "$addr:$prt",
+                    host = "${e.address}:${e.port}",
                     stickerIndex = ex?.stickerIndex ?: ((e.id.hashCode() and 0x3FF) % 997),
                     country = ex?.country?.takeIf { it.isNotBlank() }
                         ?: ir.v2rayng.compose.stickers.flagCodeFromName(e.name),
                     ping = ex?.ping,
                     pingErr = ex?.pingErr,
-                    link = e.link,
                     pinned = ex?.pinned ?: false,
                     pack = ex?.pack ?: -1,
                     bubbleColor = ex?.bubbleColor ?: -1L,
@@ -1147,25 +1142,20 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         return if (addr.isEmpty() || port <= 0) null else addr to port
     }
 
-    /** the link text for a dial, from the library when the list no longer carries one */
-    private fun dialLinkOf(p: ServerProfile): String? =
-        p.link ?: addrPortOf(p.host)?.let { ir.v2rayng.compose.core.NativeSec.linkAtHost(it.first, it.second) }
+    /** the library row for a dial: the list lives in C, so address+port is the only handle to it */
+    private fun dialRowOf(p: ServerProfile): Int {
+        val ap = addrPortOf(p.host) ?: return -1
+        return ir.v2rayng.compose.core.NativeSec.rowOfHost(ap.first, ap.second)
+    }
 
     private fun doConnect(target: ServerProfile) {
-        val dialLink = target.link
-            ?: addrPortOf(target.host)?.let { ir.v2rayng.compose.core.NativeSec.linkAtHost(it.first, it.second) }
-        if (dialLink != null) {
-            val parsed = ir.v2rayng.compose.core.parseProxyLink(dialLink)
-            if (parsed == null) {
-                put { s -> s.copy(vpnState = VpnState.BROKEN) }
-                log("ERROR", S.LOG_FAILED)
-                return
-            }
+        val ap = addrPortOf(target.host)
+        if (ap != null && dialRowOf(target) >= 0) {
             log("INFO", S.LOG_CONNECTING.format(target.name))
-            ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed.copy(name = target.name.ifBlank { parsed.name }), dialLink)
+            ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), target.name, ap.first, ap.second)
             return
         }
-        // No config on this row: there is nothing to connect to, so say that instead of pretending.
+        // No row in the library: there is nothing to connect to, so say that instead of pretending.
         // The old simulation failed roughly one attempt in seven and the user saw "connection
         // failed" red status without ever having been connected.
         log("ERROR", "No config for " + target.name)
@@ -1428,7 +1418,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
     private suspend fun ipCountryNow(): IpProbe? {
         val throughTunnel = _state.value.vpnState == VpnState.CONNECTED &&
-            _state.value.servers.firstOrNull { it.id == _state.value.selectedId }?.let { dialLinkOf(it) } != null
+            _state.value.servers.firstOrNull { it.id == _state.value.selectedId }?.let { dialRowOf(it) >= 0 } == true
         return withContext(Dispatchers.IO) {
             var cfIp: String? = null
             var cfCode: String? = null
@@ -1574,16 +1564,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         if (tunnelUp) {
             // hot swap: drop the old tunnel and bring the newly selected one up
             val sel = _state.value.servers.firstOrNull { it.id == id } ?: return
-            val swapLink = dialLinkOf(sel)
-            if (swapLink != null) {
-                val parsed = ir.v2rayng.compose.core.parseProxyLink(swapLink)
-                if (parsed != null) {
-                    log("INFO", S.LOG_CONNECTING.format(sel.name))
-                    // the running service's connect intent swaps the core internally (700ms settle)
-                    ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), parsed.copy(name = sel.name.ifBlank { parsed.name }), swapLink)
-                } else {
-                    put { s -> s.copy(vpnState = VpnState.BROKEN) }
-                }
+            val ap = addrPortOf(sel.host)
+            if (ap != null && dialRowOf(sel) >= 0) {
+                log("INFO", S.LOG_CONNECTING.format(sel.name))
+                // the running service's connect intent swaps the core internally (700ms settle)
+                ir.v2rayng.compose.core.XrayVpnService.start(appCtx(), sel.name, ap.first, ap.second)
             } else {
                 connectJob?.cancel()
                 XrayVpnServiceStop()

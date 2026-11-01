@@ -2730,27 +2730,6 @@ static int config_build(sbuf *s, int mode, int socksPort) {
     (void) socksPort;
     return s->b != NULL;
 }
-JNIEXPORT jint JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_coreWriteConfig(JNIEnv *env, jclass cls, jstring jpath, jint mode, jint socksPort) {
-    if (jpath == NULL || !pl_ok) return 0;
-    sbuf s;
-    s.b = NULL; s.n = 0; s.cap = 0;
-    if (!config_build(&s, mode, socksPort)) { free(s.b); return 0; }
-    int ok = 0;
-    if (s.b != NULL) {
-        const char *path = (*env)->GetStringUTFChars(env, jpath, NULL);
-        if (path != NULL) {
-            FILE *f = fopen(path, "wb");
-            if (f != NULL) {
-                ok = fwrite(s.b, 1, (size_t) s.n, f) == (size_t) s.n;
-                fclose(f);
-            }
-            (*env)->ReleaseStringUTFChars(env, jpath, path);
-        }
-        free(s.b);
-    }
-    return ok ? 1 : 0;
-}
 /** the same config as a String, because libv2ray startLoop only takes one: this single call is
  *  the floor this core API sets, and the comment is here so nobody reads it as an oversight. */
 JNIEXPORT jstring JNICALL
@@ -2837,10 +2816,6 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadPort(JNIEnv *env, jclass cls, jint
     return g_rows[row].port;
 }
 
-JNIEXPORT void JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_payloadClear(JNIEnv *env, jclass cls) {
-    payload_reset();
-}
 
 /* ---- the "cy" payload and the sealed row store ----
  * cy is the same JSON without a carrier: it is opened with gcm and parsed through the same row
@@ -3063,33 +3038,6 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadRestore(JNIEnv *env, jclass cls, j
     (void) jplaintext;
 }
 
-/* ---- the two calls the wiring needs ---- */
-
-/** write the config for a stored row: the link is parsed here, from memory, and never returned */
-JNIEXPORT jint JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_coreWriteConfigRow(JNIEnv *env, jclass cls, jint row, jstring jpath, jint mode, jint socksPort) {
-    if (row < 0 || row >= g_rows_n || jpath == NULL) return 0;
-    jstring jlink = (*env)->NewStringUTF(env, g_rows[row].link);
-    if (jlink == NULL) return 0;
-    int ok = Java_ir_v2rayng_compose_core_NativeSec_plParse(env, cls, jlink);
-    (*env)->DeleteLocalRef(env, jlink);
-    if (ok != 1) { set_step("cfgrow:parse"); return 0; }
-    return Java_ir_v2rayng_compose_core_NativeSec_coreWriteConfig(env, cls, jpath, mode, socksPort);
-}
-
-/** row index for a display id, -1 when it is not in the store (a stale list, a deleted row) */
-JNIEXPORT jint JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_payloadFind(JNIEnv *env, jclass cls, jstring jid) {
-    if (jid == NULL) return -1;
-    const char *id = (*env)->GetStringUTFChars(env, jid, NULL);
-    if (id == NULL) return -1;
-    int found = -1;
-    for (int i = 0; i < g_rows_n; i++) {
-        if (strcmp(g_rows[i].id, id) == 0) { found = i; break; }
-    }
-    (*env)->ReleaseStringUTFChars(env, jid, id);
-    return found;
-}
 
 /** row index by host and port - the connect and ping paths already have these two values, so the
  *  id never has to be threaded through five call chains to reach them */
@@ -3106,23 +3054,6 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadFindHost(JNIEnv *env, jclass cls, 
     return found;
 }
 
-/** the link text for one host+port, used only at the moment of a dial or a ping: the list never
- *  crosses to Kotlin, but a single dial needs the text the core is configured from */
-JNIEXPORT jstring JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_linkForHost(JNIEnv *env, jclass cls, jstring jaddr, jint port) {
-    if (jaddr == NULL) return NULL;
-    const char *a = (*env)->GetStringUTFChars(env, jaddr, NULL);
-    if (a == NULL) return NULL;
-    jstring out = NULL;
-    for (int i = 0; i < g_rows_n; i++) {
-        if (g_rows[i].port == (int) port && strcmp(g_rows[i].addr, a) == 0) {
-            out = (*env)->NewStringUTF(env, g_rows[i].link);
-            break;
-        }
-    }
-    (*env)->ReleaseStringUTFChars(env, jaddr, a);
-    return out;
-}
 
 /* ---------------- the log scrubber, in C ----------------
  * Stage 1 of moving LogSanitize here: the nine rules run over UTF-8 bytes in the same order the

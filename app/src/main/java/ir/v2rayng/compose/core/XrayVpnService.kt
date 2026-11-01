@@ -20,24 +20,28 @@ class XrayVpnService : VpnService() {
     companion object {
         const val ACTION_CONNECT = "ir.blob.vpn.CONNECT"
         const val ACTION_STOP = "ir.blob.vpn.STOP"
-        private const val EXTRA_LINK = "link"
+        private const val EXTRA_ADDR = "addr"
+        private const val EXTRA_PORT = "port"
         private const val EXTRA_NAME = "name"
-        var pendingLink: ProxyLink? = null
 
         /** Whether a tunnel is actually held by this process. The bridge state can outlive the
          *  service's last transition, so the UI needs this to refuse stale "connected"/"failed". */
         @Volatile
         var tunnelUp = false
 
-        fun start(context: android.content.Context, link: ProxyLink, raw: String) {
-            pendingLink = link
+        /** What to dial while the previous tunnel is still settling. It is deliberately not a row
+         *  number: a sync can rewrite the library store inside those 700 ms, so the row is looked
+         *  up again at dial time from the same address+port. */
+        private var pending: Dial? = null
+
+        fun start(context: android.content.Context, name: String, address: String, port: Int) {
+            pending = Dial(name, address, port)
             context.startForegroundService(
                 Intent(context, XrayVpnService::class.java)
                     .setAction(ACTION_CONNECT)
-                    .putExtra(EXTRA_LINK, raw)
-                    // the link's own #fragment is not the admin-assigned name, and onStartCommand
-                    // re-parses raw - so the display name travels separately
-                    .putExtra(EXTRA_NAME, link.name),
+                    .putExtra(EXTRA_ADDR, address)
+                    .putExtra(EXTRA_PORT, port)
+                    .putExtra(EXTRA_NAME, name),
             )
         }
 
@@ -45,6 +49,8 @@ class XrayVpnService : VpnService() {
             context.startService(Intent(context, XrayVpnService::class.java).setAction(ACTION_STOP))
         }
     }
+
+    private data class Dial(val name: String, val address: String, val port: Int)
 
     private var controller: CoreController? = null
     private var tunFd = -1
@@ -54,7 +60,7 @@ class XrayVpnService : VpnService() {
     private var rateUp = 0L
     private var rateDown = 0L
     private var lastNotifiedSec = -1L
-    private var shownLink: ProxyLink? = null
+    private var shownName: String = ""
     @Volatile private var lastBig: android.graphics.Bitmap? = null
     private var notifManager: android.app.NotificationManager? = null
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -128,33 +134,58 @@ class XrayVpnService : VpnService() {
                 return START_NOT_STICKY
             }
             else -> {
-                val raw = intent?.getStringExtra(EXTRA_LINK)
-                val link = if (raw != null) parseProxyLink(raw) else null
+                val addr = intent?.getStringExtra(EXTRA_ADDR)
+                val port = intent?.getIntExtra(EXTRA_PORT, -1) ?: -1
                 val nm = intent?.getStringExtra(EXTRA_NAME)
-                val effective = (link ?: pendingLink)?.let { if (!nm.isNullOrBlank()) it.copy(name = nm) else it }
-                if (effective == null) {
+                val target = if (!addr.isNullOrBlank() && port > 0) Dial(nm.orEmpty(), addr, port) else pending
+                if (target == null) {
                     stopForegroundCompat()
                     stopSelf()
                     return START_NOT_STICKY
                 }
+                // the list lives in the library: address+port is only a key into it, and a server
+                // the store does not have cannot be dialed - say so instead of starting an empty core
+                val row = NativeSec.rowOfHost(target.address, target.port)
+                if (row < 0) {
+                    refuseNoRow()
+                    stopForegroundCompat()
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                val name = dialName(target, row)
                 val wasRunning = controller != null || tunFd > 0
                 stopCore()
                 if (wasRunning) {
                     // server hot-swap: let the old core / TUN fully shut down before reconnecting
-                    pendingLink = effective
+                    pending = target
                     mainHandler.postDelayed({
                         if (controller == null && tunFd < 0) {
-                            startForegroundCompat(effective)
-                            startCore(effective)
+                            val swapRow = NativeSec.rowOfHost(target.address, target.port)
+                            if (swapRow >= 0) {
+                                val swapName = dialName(target, swapRow)
+                                startForegroundCompat(swapName)
+                                startCore(swapRow, swapName)
+                            } else {
+                                refuseNoRow()
+                            }
                         }
                     }, 700L)
                 } else {
-                    startForegroundCompat(effective)
-                    startCore(effective)
+                    startForegroundCompat(name)
+                    startCore(row, name)
                 }
             }
         }
         return START_NOT_STICKY
+    }
+
+    /** the admin's name for the row; the library is asked when the dial carried none */
+    private fun dialName(target: Dial, row: Int): String =
+        target.name.ifBlank { NativeSec.payloadText(row, 1) }
+
+    private fun refuseNoRow() {
+        XrayBridge.addLog("ERROR", "این سرور در کتابخانهٔ برنامه نیست - یک‌بار همگام‌سازی انجام بده")
+        XrayBridge.setState(RealState.BROKEN, "no library row")
     }
 
     private fun stopForegroundCompat() {
@@ -200,10 +231,10 @@ class XrayVpnService : VpnService() {
         return bmp
     }
 
-    private fun startForegroundCompat(link: ProxyLink) {
+    private fun startForegroundCompat(name: String) {
         val manager = getSystemService(android.app.NotificationManager::class.java)
         notifManager = manager
-        shownLink = link
+        shownName = name
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             val channel = android.app.NotificationChannel("blob_vpn", "Blob VPN", android.app.NotificationManager.IMPORTANCE_LOW)
             manager?.createNotificationChannel(channel)
@@ -213,7 +244,7 @@ class XrayVpnService : VpnService() {
         androidx.core.app.ServiceCompat.startForeground(
             this,
             1001,
-            notification(link, null).build(),
+            notification(name, null).build(),
             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
         )
         Persist.write {
@@ -224,7 +255,7 @@ class XrayVpnService : VpnService() {
             }
             lastBig = big
             try {
-                manager?.notify(1001, notification(link, big).build())
+                manager?.notify(1001, notification(name, big).build())
             } catch (_: Exception) {
             }
         }
@@ -233,19 +264,18 @@ class XrayVpnService : VpnService() {
     /** The ongoing notification carries the connect screen's clock and live up/down speed. */
     private fun tickNotification() {
         if (connectedSince <= 0L) return
-        val link = shownLink ?: return
         val sec = (System.currentTimeMillis() - connectedSince) / 1000L
         if (sec == lastNotifiedSec) return
         lastNotifiedSec = sec
         try {
-            notifManager?.notify(1001, notification(link, lastBig).build())
+            notifManager?.notify(1001, notification(shownName, lastBig).build())
         } catch (_: Exception) {
         }
     }
 
-    private fun notification(link: ProxyLink, big: android.graphics.Bitmap?): NotificationCompat.Builder {
+    private fun notification(name: String, big: android.graphics.Bitmap?): NotificationCompat.Builder {
         // no address in the notification: it is drawn on the lock screen where anyone can read it
-        val title = link.name.ifBlank { "Blob VPN" }
+        val title = name.ifBlank { "Blob VPN" }
         val parts = mutableListOf<String>()
         if (connectedSince > 0L) {
             parts += ir.v2rayng.compose.data.TimeKit.clock(System.currentTimeMillis() - connectedSince)
@@ -279,10 +309,10 @@ class XrayVpnService : VpnService() {
         return b
     }
 
-    private fun startCore(link: ProxyLink) {
+    private fun startCore(row: Int, name: String) {
         try {
             Libv2ray.initCoreEnv(File(filesDir, "core").apply { mkdirs() }.absolutePath, "")
-                XrayBridge.trace("core start requested: " + link.name.ifBlank { "server" })
+            XrayBridge.trace("core start requested: " + name.ifBlank { "server" })
             XrayBridge.setState(RealState.CONNECTING)
             val builder = Builder()
                 .setSession("Blob")
@@ -317,11 +347,17 @@ class XrayVpnService : VpnService() {
             lastDown = 0
             zeroStreak = 0
             controller = Libv2ray.newCoreController(callback)
-            // the config is built by the library from the stored server row; the Kotlin builder is
-            // only the fallback for a row the store does not have yet
-            val cfg = ir.v2rayng.compose.core.NativeSec.coreConfig(
-                ir.v2rayng.compose.core.NativeSec.rowOfHost(link.address, link.port), 0, 0,
-            ) ?: buildXrayConfig(link)
+            // the library owns the list and the link inside it: it assembles the config for this
+            // row and hands back the text, and nothing here can build one from a link it never had
+            val cfg = NativeSec.coreConfig(row, 0, 0)
+            if (cfg.isNullOrEmpty()) {
+                // the row exists but its link did not parse: take the tunnel back down rather than
+                // leave a core-less TUN holding the VPN slot
+                stopCore()
+                XrayBridge.addLog("ERROR", "پیکربندی این سرور ساخته نشد")
+                XrayBridge.setState(RealState.BROKEN, "config unavailable")
+                return
+            }
             controller?.startLoop(cfg, tunFd)
             tunnelUp = true
             connectedSince = System.currentTimeMillis()
@@ -341,7 +377,7 @@ class XrayVpnService : VpnService() {
         tunnelUp = false
         connectedSince = 0L
         lastNotifiedSec = -1L
-        shownLink = null
+        shownName = ""
         mainHandler.removeCallbacks(statsRunnable)
         mainHandler.removeCallbacks(stateSetter)
         try {

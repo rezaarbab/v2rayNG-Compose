@@ -252,20 +252,6 @@ public final class NativeSec {
         }
     }
 
-    private static native int coreWriteConfig(String path, int mode, int socksPort);
-
-    /** stage 2 of the server-in-C move: the Xray config is assembled from the parsed link and
-     *  written to `path` inside the library - mode 0 full tunnel, 1 ping only, 2 flag probe.
-     *  Returns false when the link was not parsed or the file could not be written. */
-    public static boolean writeCoreConfig(String path, int mode, int socksPort) {
-        if (!READY || path == null) return false;
-        try {
-            return coreWriteConfig(path, mode, socksPort) == 1;
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
     private static native byte[] payloadTrimmed();
 
     /** the payload with its servers array removed - what Kotlin is allowed to see */
@@ -285,18 +271,6 @@ public final class NativeSec {
         if (!READY || in == null) return null;
         try {
             return scrubUtf8(in);
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    private static native String linkForHost(String addr, int port);
-
-    /** the link for one host+port, fetched at dial time; null when the store has no such server */
-    public static String linkAtHost(String addr, int port) {
-        if (!READY || addr == null) return null;
-        try {
-            return linkForHost(addr, port);
         } catch (Throwable t) {
             return null;
         }
@@ -323,29 +297,6 @@ public final class NativeSec {
             return coreConfigForRow(row, mode, socksPort);
         } catch (Throwable t) {
             return null;
-        }
-    }
-
-    private static native int coreWriteConfigRow(int row, String path, int mode, int socksPort);
-
-    private static native int payloadFind(String id);
-
-    /** the config for a stored row, written by the library; the link never leaves it */
-    public static boolean writeCoreConfigFor(int row, String path, int mode, int socksPort) {
-        if (!READY || path == null || row < 0) return false;
-        try {
-            return coreWriteConfigRow(row, path, mode, socksPort) == 1;
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
-    public static int rowOf(String id) {
-        if (!READY || id == null) return -1;
-        try {
-            return payloadFind(id);
-        } catch (Throwable t) {
-            return -1;
         }
     }
 
@@ -391,8 +342,6 @@ public final class NativeSec {
 
     private static native int payloadPort(int row);
 
-    private static native void payloadClear();
-
     /** stage 3: decrypt, parse and keep the server list inside the library. Returns the number of
      *  usable rows, or -1 (the step is in errInfo()). */
     public static int payloadLoadRows(String stego, byte[] kc) {
@@ -430,14 +379,6 @@ public final class NativeSec {
             return payloadPort(row);
         } catch (Throwable t) {
             return 0;
-        }
-    }
-
-    public static void payloadForget() {
-        if (!READY) return;
-        try {
-            payloadClear();
-        } catch (Throwable t) {
         }
     }
 

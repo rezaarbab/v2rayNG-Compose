@@ -286,7 +286,6 @@ class SettingsStore(context: Context) {
             val arr = JSONArray(raw)
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
-                val link = o.optString("link", "")
                 out.add(
                     ServerProfile(
                         id = o.optString("id"),
@@ -296,7 +295,6 @@ class SettingsStore(context: Context) {
                         country = o.optString("country", ""),
                         pinned = o.optBoolean("pinned", false),
                         pack = o.optInt("pack", -1),
-                        link = link.takeIf { it.isNotBlank() },
                         category = o.optString("category", ""),
                         note = o.optString("note", ""),
                         bubbleColor = if (o.has("bub")) o.optLong("bub", -1L) else -1L,
@@ -323,7 +321,6 @@ class SettingsStore(context: Context) {
                     .put("country", s.country)
                     .put("pinned", s.pinned)
                     .put("pack", s.pack)
-                if (s.link != null) o.put("link", s.link)
                 if (s.category.isNotBlank()) o.put("category", s.category)
                 if (s.note.isNotBlank()) o.put("note", s.note)
                 if (s.bubbleColor >= 0L) o.put("bub", s.bubbleColor)
