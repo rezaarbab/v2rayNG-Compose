@@ -358,7 +358,7 @@ object Remote {
     fun sync(device: String, type: String, connected: Boolean): Result? {
         val body = buildSyncBody(device, type, connected)
         val secure = try {
-            BlobSecure.syncSecure(BASE, body)
+            BlobSecure.syncSecure(body)
         } catch (e: Exception) {
             BlobSecure.fail("request failed (network)")
             null

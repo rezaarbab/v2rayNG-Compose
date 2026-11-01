@@ -2066,8 +2066,7 @@ static unsigned char *tok_msg(JNIEnv *env, jstring jdevice, uint32_t ts, const j
     return m;
 }
 
-JNIEXPORT jstring JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_tokenFor(JNIEnv *env, jclass cls, jstring jdevice, jbyteArray jkt) {
+static jstring tok_pack(JNIEnv *env, jclass cls, jstring jdevice, jbyteArray jkt) {
     set_step("tok:entered");
     if (jdevice == NULL || jkt == NULL) { set_step("tok:null-args"); return NULL; }
     if ((*env)->GetArrayLength(env, jkt) != 32) { set_step("tok:key-size"); return NULL; }
@@ -2485,6 +2484,311 @@ static jint pl_parse_link(JNIEnv *env, jclass cls, jstring jlink) {
     return 1;
 }
 
+/* ---------------- the wire and the session, in C ----------------
+ * The URL, the two header names, the one-shot token and the reply were values in Kotlin, and
+ * every one of them is a line a method tracer can print. They live here now: blobgate gives up
+ * the host/path/header bytes at send time, the token is made from the session this file holds,
+ * and the reply is read into C memory - a key reply is parsed here, so the session keys never
+ * leave, and everything else is handed over as whole bytes when the caller needs them.
+ *
+ * The session lives for the process. The Kotlin used to seal it into preferences to survive a
+ * restart; the token key expires on a 60-minute bucket anyway, so one /api/key call per cold
+ * start is the price of not carrying a key through a language this pass is emptying.
+ */
+
+#define NET_MAX 8000000
+
+static unsigned char *g_resp;
+static int g_resp_n;
+static int g_http_status = -1;
+/* a base saved on this device (the admin's debug override) beats the built-in one, but it is
+ *  kept here: the request path is what must not have to say a host in Kotlin */
+static char g_base_ovr[200];
+
+static unsigned char g_kc[32];
+static unsigned char g_kt[32];
+static long long g_exp_ms;
+static int g_have_sess;
+
+int bg_str(int idx, char *out, int cap);   /* blobgate.c */
+
+static void sess_clear(void) {
+    g_have_sess = 0;
+    g_exp_ms = 0;
+    memset(g_kc, 0, sizeof(g_kc));
+    memset(g_kt, 0, sizeof(g_kt));
+}
+
+/** a method on a class named in the same line, so all three parts of every lookup here can be
+ * checked against android.jar by machine: the failures that cost builds were always one of
+ * these three typed from memory */
+static jmethodID mid_named(JNIEnv *env, const char *cls, const char *name, const char *sig, const char *tag) {
+    jclass c = need_class(env, cls);
+    if (c == NULL) { set_step(tag); return NULL; }
+    jmethodID m = mid_lookup(env, c, name, sig, tag);
+    (*env)->DeleteLocalRef(env, c);
+    return m;
+}
+
+/** this session's token: base64url(ts | nonce | HMAC(kt, "blb"|device|0x00|ts|nonce)) */
+static jstring tok_build(JNIEnv *env, jclass cls, jstring jdevice) {
+    if (!g_have_sess || jdevice == NULL) { set_step("tok:no-session"); return NULL; }
+    jbyteArray jkt = (*env)->NewByteArray(env, 32);
+    if (jkt == NULL) return NULL;
+    (*env)->SetByteArrayRegion(env, jkt, 0, 32, (const jbyte *) g_kt);
+    jstring t = tok_pack(env, cls, jdevice, jkt);
+    (*env)->DeleteLocalRef(env, jkt);
+    return t;
+}
+
+/** read a stream to the end; a reply can be a stego carrier of a few megabytes */
+static int read_all(JNIEnv *env, jobject is) {
+    jclass isc = (*env)->GetObjectClass(env, is);
+    if (isc == NULL) return -1;
+    jmethodID mRead = mid_lookup(env, isc, "read", "([B)I", "net:read-id");
+    (*env)->DeleteLocalRef(env, isc);
+    if (mRead == NULL) return -1;
+    int cap = 1 << 16;
+    unsigned char *buf = (unsigned char *) malloc((size_t) cap);
+    if (buf == NULL) { set_step("net:alloc"); return -1; }
+    jbyteArray chunk = (*env)->NewByteArray(env, 16384);
+    if (chunk == NULL) { free(buf); return -1; }
+    int n = 0;
+    for (;;) {
+        jint r = (*env)->CallIntMethod(env, is, mRead, chunk);
+        if ((*env)->ExceptionCheck(env)) { step_failed(env, "net:read"); free(buf); return -1; }
+        if (r < 0) break;
+        if (r == 0) continue;
+        if (n + r > NET_MAX) { free(buf); set_step("net:too-big"); return -1; }
+        if (n + r > cap) {
+            int nc = cap;
+            while (nc < n + r) nc *= 2;
+            unsigned char *nb = (unsigned char *) realloc(buf, (size_t) nc);
+            if (nb == NULL) { free(buf); set_step("net:alloc"); return -1; }
+            buf = nb;
+            cap = nc;
+        }
+        (*env)->GetByteArrayRegion(env, chunk, 0, r, (jbyte *) (buf + n));
+        n += r;
+    }
+    (*env)->DeleteLocalRef(env, chunk);
+    g_resp = buf;
+    g_resp_n = n;
+    return n;
+}
+
+/** POST one body to one of the two endpoints; kind 0 is the key door, 1 the sync door. The
+ *  answer is the HTTP status, or -1 when the request never completed; the body of the reply
+ *  is kept for netBody(). */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_netSend(JNIEnv *env, jclass cls, jstring jbody, jint kind, jstring jdevice, jint useToken) {
+    set_step("net:entered");
+    if (g_resp) { free(g_resp); g_resp = NULL; }
+    g_resp_n = 0;
+    g_http_status = -1;
+    if (jbody == NULL || kind < 0 || kind > 1) { set_step("net:args"); return -1; }
+    char base[200], path[40], url[260], hb[40], ht[40];
+    if (g_base_ovr[0] != 0) {
+        snprintf(base, sizeof(base), "%s", g_base_ovr);
+    } else if (bg_str(0, base, (int) sizeof(base)) <= 0) { set_step("net:no-base"); return -1; }
+    if (bg_str(kind == 0 ? 1 : 2, path, (int) sizeof(path)) <= 0) { set_step("net:no-path"); return -1; }
+    if (bg_str(3, hb, (int) sizeof(hb)) <= 0 || bg_str(4, ht, (int) sizeof(ht)) <= 0) { set_step("net:no-headers"); return -1; }
+    snprintf(url, sizeof(url), "%s%s", base, path);
+    jmethodID mUrl = mid_named(env, "java/net/URL", "<init>", "(Ljava/lang/String;)V", "net:url-init");
+    jmethodID mOpen = mid_named(env, "java/net/URL", "openConnection", "()Ljava/net/URLConnection;", "net:openConnection");
+    jmethodID mMethod = mid_named(env, "java/net/HttpURLConnection", "setRequestMethod", "(Ljava/lang/String;)V", "net:setRequestMethod");
+    jmethodID mCT = mid_named(env, "java/net/HttpURLConnection", "setConnectTimeout", "(I)V", "net:setConnectTimeout");
+    jmethodID mRT = mid_named(env, "java/net/HttpURLConnection", "setReadTimeout", "(I)V", "net:setReadTimeout");
+    jmethodID mDO = mid_named(env, "java/net/HttpURLConnection", "setDoOutput", "(Z)V", "net:setDoOutput");
+    jmethodID mProp = mid_named(env, "java/net/HttpURLConnection", "setRequestProperty", "(Ljava/lang/String;Ljava/lang/String;)V", "net:setRequestProperty");
+    jmethodID mOut = mid_named(env, "java/net/HttpURLConnection", "getOutputStream", "()Ljava/io/OutputStream;", "net:getOutputStream");
+    jmethodID mCode = mid_named(env, "java/net/HttpURLConnection", "getResponseCode", "()I", "net:getResponseCode");
+    jmethodID mIn = mid_named(env, "java/net/HttpURLConnection", "getInputStream", "()Ljava/io/InputStream;", "net:getInputStream");
+    jmethodID mErr = mid_named(env, "java/net/HttpURLConnection", "getErrorStream", "()Ljava/io/InputStream;", "net:getErrorStream");
+    jmethodID mWrite = mid_named(env, "java/io/OutputStream", "write", "([B)V", "net:write");
+    jmethodID mFlush = mid_named(env, "java/io/OutputStream", "flush", "()V", "net:flush");
+    jmethodID mCloseO = mid_named(env, "java/io/OutputStream", "close", "()V", "net:closeOut");
+    jmethodID mBytes = mid_named(env, "java/lang/String", "getBytes", "(Ljava/lang/String;)[B", "net:getBytes");
+    if (mUrl == NULL || mOpen == NULL || mMethod == NULL || mCode == NULL || mOut == NULL || mWrite == NULL || mBytes == NULL) {
+        set_step("net:ids");
+        return -1;
+    }
+    jclass urlCls = need_class(env, "java/net/URL");
+    if (urlCls == NULL) return -1;
+    jstring jurl = (*env)->NewStringUTF(env, url);
+    jobject uo = (jurl && mUrl) ? (*env)->NewObject(env, urlCls, mUrl, jurl) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); uo = NULL; set_step("net:url"); }
+    if (uo == NULL) { (*env)->DeleteLocalRef(env, urlCls); return -1; }
+    jobject conn = mOpen ? (*env)->CallObjectMethod(env, uo, mOpen) : NULL;
+    if ((*env)->ExceptionCheck(env)) { step_failed(env, "net:openConnection"); conn = NULL; }
+    (*env)->DeleteLocalRef(env, urlCls);
+    (*env)->DeleteLocalRef(env, uo);
+    if (jurl) (*env)->DeleteLocalRef(env, jurl);
+    if (conn == NULL) return -1;
+    int rc = -1;
+    jstring jpost = (*env)->NewStringUTF(env, "POST");
+    jstring jets = (*env)->NewStringUTF(env, "UTF-8");
+    jstring jctn = (*env)->NewStringUTF(env, "content-type");
+    jstring jctv = (*env)->NewStringUTF(env, "application/json");
+    jstring jhbn = (*env)->NewStringUTF(env, hb);
+    jstring jhbv = (*env)->NewStringUTF(env, "v1");
+    jstring jhtn = (*env)->NewStringUTF(env, ht);
+    jstring jtok = useToken ? tok_build(env, cls, jdevice) : NULL;
+    jbyteArray jbodyBytes = mBytes ? (jbyteArray) (*env)->CallObjectMethod(env, jbody, mBytes, jets) : NULL;
+    if ((*env)->ExceptionCheck(env)) { step_failed(env, "net:getBytes"); jbodyBytes = NULL; }
+    if (jpost && mMethod) { (*env)->CallVoidMethod(env, conn, mMethod, jpost); if (step_failed(env, "net:setRequestMethod")) goto done; }
+    if (mCT) { (*env)->CallVoidMethod(env, conn, mCT, (jint) 8000); if (step_failed(env, "net:setConnectTimeout")) goto done; }
+    if (mRT) { (*env)->CallVoidMethod(env, conn, mRT, (jint) 60000); if (step_failed(env, "net:setReadTimeout")) goto done; }
+    if (mDO) { (*env)->CallVoidMethod(env, conn, mDO, (jboolean) 1); if (step_failed(env, "net:setDoOutput")) goto done; }
+    if (mProp && jctn && jctv) { (*env)->CallVoidMethod(env, conn, mProp, jctn, jctv); if (step_failed(env, "net:content-type")) goto done; }
+    if (mProp && jhbn && jhbv) { (*env)->CallVoidMethod(env, conn, mProp, jhbn, jhbv); if (step_failed(env, "net:hdr-blob")) goto done; }
+    if (useToken) {
+        if (jtok == NULL) { set_step("net:no-token"); goto done; }
+        if (mProp && jhtn) { (*env)->CallVoidMethod(env, conn, mProp, jhtn, jtok); if (step_failed(env, "net:hdr-btok")) goto done; }
+    }
+    if (jbodyBytes == NULL) { set_step("net:no-body-bytes"); goto done; }
+    {
+        jobject os = mOut ? (*env)->CallObjectMethod(env, conn, mOut) : NULL;
+        if ((*env)->ExceptionCheck(env)) { step_failed(env, "net:getOutputStream"); os = NULL; }
+        if (os == NULL) { set_step("net:no-out"); goto done; }
+        (*env)->CallVoidMethod(env, os, mWrite, jbodyBytes);
+        if (step_failed(env, "net:write")) { (*env)->DeleteLocalRef(env, os); goto done; }
+        if (mFlush) { (*env)->CallVoidMethod(env, os, mFlush); if (step_failed(env, "net:flush")) { (*env)->DeleteLocalRef(env, os); goto done; } }
+        if (mCloseO) { (*env)->CallVoidMethod(env, os, mCloseO); if (step_failed(env, "net:closeOut")) { (*env)->DeleteLocalRef(env, os); goto done; } }
+        (*env)->DeleteLocalRef(env, os);
+    }
+    g_http_status = (int) (*env)->CallIntMethod(env, conn, mCode);
+    if (step_failed(env, "net:getResponseCode")) goto done;
+    {
+        jobject is = NULL;
+        if (mIn && g_http_status >= 200 && g_http_status < 300) is = (*env)->CallObjectMethod(env, conn, mIn);
+        else if (mErr) is = (*env)->CallObjectMethod(env, conn, mErr);
+        if ((*env)->ExceptionCheck(env)) { step_failed(env, "net:get-stream"); is = NULL; }
+        if (is != NULL) {
+            read_all(env, is);
+            (*env)->DeleteLocalRef(env, is);
+        }
+    }
+    rc = g_http_status;
+    set_step("net:done");
+done:
+    if (jpost) (*env)->DeleteLocalRef(env, jpost);
+    if (jets) (*env)->DeleteLocalRef(env, jets);
+    if (jctn) (*env)->DeleteLocalRef(env, jctn);
+    if (jctv) (*env)->DeleteLocalRef(env, jctv);
+    if (jhbn) (*env)->DeleteLocalRef(env, jhbn);
+    if (jhbv) (*env)->DeleteLocalRef(env, jhbv);
+    if (jhtn) (*env)->DeleteLocalRef(env, jhtn);
+    if (jtok) (*env)->DeleteLocalRef(env, jtok);
+    if (jbodyBytes) (*env)->DeleteLocalRef(env, jbodyBytes);
+    (*env)->DeleteLocalRef(env, conn);
+    return rc;
+}
+
+/** a base address saved on this device; "" clears it back to the built-in one. Shape-checked:
+ *  anything that is not an https origin is refused, because a wrong host here would send the
+ *  device proof and the token somewhere else entirely. */
+JNIEXPORT void JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_setBase(JNIEnv *env, jclass cls, jstring jbase) {
+    g_base_ovr[0] = 0;
+    if (jbase == NULL) { set_step("base:cleared"); return; }
+    const char *s = (*env)->GetStringUTFChars(env, jbase, NULL);
+    if (s == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return; }
+    int n = (int) strlen(s);
+    if (n > 7 && n < (int) sizeof(g_base_ovr) && strncmp(s, "https://", 8) == 0 && strstr(s, " ") == NULL) {
+        memcpy(g_base_ovr, s, (size_t) n);
+        g_base_ovr[n] = 0;
+        while (n > 8 && g_base_ovr[n - 1] == 0x2f) { g_base_ovr[--n] = 0; }
+        set_step("base:override");
+    } else {
+        set_step("base:rejected-shape");
+    }
+    (*env)->ReleaseStringUTFChars(env, jbase, s);
+}
+
+/** the reply this process last received, as bytes (NULL when there was none) */
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_netBody(JNIEnv *env, jclass cls) {
+    if (g_resp == NULL || g_resp_n <= 0) return NULL;
+    jbyteArray out = (*env)->NewByteArray(env, g_resp_n);
+    if (out) (*env)->SetByteArrayRegion(env, out, 0, g_resp_n, (const jbyte *) g_resp);
+    return out;
+}
+
+/** read the key door's reply here: v>=2, enc "k", the two 32-byte keys and the bucket expiry.
+ *  The keys go into this file's own session - they are not handed back in any form. */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_netKeyReply(JNIEnv *env, jclass cls) {
+    set_step("key:entered");
+    if (g_resp == NULL || g_resp_n <= 0 || g_resp_n > 65536) { set_step("key:no-body"); return -1; }
+    char *txt = (char *) malloc((size_t) g_resp_n + 1);
+    if (txt == NULL) { set_step("key:alloc"); return -1; }
+    memcpy(txt, g_resp, (size_t) g_resp_n);
+    txt[g_resp_n] = 0;
+    int rc = -1;
+    jclass jsonCls = need_class(env, "org/json/JSONObject");
+    jmethodID ctor = jsonCls ? (*env)->GetMethodID(env, jsonCls, "<init>", "(Ljava/lang/String;)V") : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); ctor = NULL; }
+    jstring jtxt = (*env)->NewStringUTF(env, txt);
+    free(txt);
+    jobject o = (jsonCls && ctor && jtxt) ? (*env)->NewObject(env, jsonCls, ctor, jtxt) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); o = NULL; }
+    if (o == NULL || jsonCls == NULL) { set_step("key:json"); rc = -1; }
+    else {
+        int v = pl_json_int(env, o, jsonCls, "v", 0);
+        char enc[8];
+        char kcs[64], kts[64];
+        memset(enc, 0, sizeof(enc));
+        memset(kcs, 0, sizeof(kcs));
+        memset(kts, 0, sizeof(kts));
+        pl_json_str(env, o, jsonCls, "enc", "", enc, (int) sizeof(enc));
+        pl_json_str(env, o, jsonCls, "kc", "", kcs, (int) sizeof(kcs));
+        pl_json_str(env, o, jsonCls, "kt", "", kts, (int) sizeof(kts));
+        int expSec = pl_json_int(env, o, jsonCls, "exp", 0);
+        char dk[64], dt[64];
+        int lk = pl_b64(kcs, (int) strlen(kcs), dk, (int) sizeof(dk));
+        int lt = pl_b64(kts, (int) strlen(kts), dt, (int) sizeof(dt));
+        if (v >= 2 && strcmp(enc, "k") == 0 && expSec > 0 && lk == 32 && lt == 32) {
+            memcpy(g_kc, dk, 32);
+            memcpy(g_kt, dt, 32);
+            g_exp_ms = (long long) expSec * 1000LL;
+            g_have_sess = 1;
+            rc = 1;
+            set_step("key:ok");
+        } else {
+            rc = 0;
+            set_step("key:refused");
+        }
+    }
+    if (o) (*env)->DeleteLocalRef(env, o);
+    if (jtxt) (*env)->DeleteLocalRef(env, jtxt);
+    if (jsonCls) (*env)->DeleteLocalRef(env, jsonCls);
+    return rc;
+}
+
+/** when this process's session stops being usable, in epoch ms (0 = none) */
+JNIEXPORT jlong JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_sessionExp(JNIEnv *env, jclass cls) {
+    return g_have_sess ? (jlong) g_exp_ms : 0LL;
+}
+
+JNIEXPORT void JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_sessionDrop(JNIEnv *env, jclass cls) {
+    sess_clear();
+    set_step("key:dropped");
+}
+
+/** the session's payload key as a byte array, for the openers that already take one. Nothing in
+ *  the app can pass a key any more: no session means no open, and that is the step it reports. */
+static jbyteArray sess_kc_array(JNIEnv *env) {
+    if (!g_have_sess) { set_step("payload:no-session"); return NULL; }
+    jbyteArray out = (*env)->NewByteArray(env, 32);
+    if (out == NULL) return NULL;
+    (*env)->SetByteArrayRegion(env, out, 0, 32, (const jbyte *) g_kc);
+    return out;
+}
+
+
 /* ---------------- the Xray config, built and written here ----------------
  * Stage 2 of the server-in-C move. The three configs the app ever needed (full tunnel, ping-only,
  * flag probe) are assembled from the parsed link fields and written straight to a file: no config
@@ -2737,10 +3041,13 @@ static void payload_reset(void) {
 static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len);
 
 JNIEXPORT jint JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_payloadLoad(JNIEnv *env, jclass cls, jstring jstego, jbyteArray jkc) {
+Java_ir_v2rayng_compose_core_NativeSec_payloadLoad(JNIEnv *env, jclass cls, jstring jstego) {
     payload_reset();
     set_step("payload:entered");
+    jbyteArray jkc = sess_kc_array(env);
+    if (jkc == NULL) return -1;
     jbyteArray plain = stego_open(env, cls, jstego, jkc);
+    (*env)->DeleteLocalRef(env, jkc);
     if (plain == NULL) { if (strcmp(g_step, "payload:entered") == 0) set_step("payload:open"); return -1; }
     jsize plen = (*env)->GetArrayLength(env, plain);
     if (plen <= 0 || plen > 4000000) { set_step("payload:size"); return -1; }
@@ -2939,16 +3246,35 @@ static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len) {
 
 /** the raw "cy" payload: same JSON, no carrier, opened with the session key */
 JNIEXPORT jint JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_payloadLoadCy(JNIEnv *env, jclass cls, jbyteArray jblob, jbyteArray jkc) {
+Java_ir_v2rayng_compose_core_NativeSec_payloadLoadCy(JNIEnv *env, jclass cls, jstring jblob) {
     payload_reset();
     set_step("payload:cy-entered");
-    if (jblob == NULL || jkc == NULL) { set_step("payload:cy-args"); return -1; }
-    if ((*env)->GetArrayLength(env, jkc) != 32) { set_step("payload:cy-key"); return -1; }
+    if (jblob == NULL) { set_step("payload:cy-args"); return -1; }
+    /* the cipher arrives as base64 text out of the reply: decoding it here is what keeps the
+       bytes themselves out of Kotlin */
+    const char *txt = (*env)->GetStringUTFChars(env, jblob, NULL);
+    if (txt == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); set_step("payload:cy-text"); return -1; }
+    int tl = (int) strlen(txt);
+    char *dec = (char *) malloc((size_t) tl + 1);
+    if (dec == NULL) { (*env)->ReleaseStringUTFChars(env, jblob, txt); set_step("payload:cy-alloc"); return -1; }
+    int dl = pl_b64(txt, tl, dec, tl + 1);
+    (*env)->ReleaseStringUTFChars(env, jblob, txt);
+    if (dl <= 0) { free(dec); set_step("payload:cy-b64"); return -1; }
+    jbyteArray jblobBytes = (*env)->NewByteArray(env, dl);
+    if (jblobBytes == NULL) { free(dec); set_step("payload:cy-array"); return -1; }
+    (*env)->SetByteArrayRegion(env, jblobBytes, 0, dl, (const jbyte *) dec);
+    free(dec);
+    jbyteArray jkc = sess_kc_array(env);
+    if (jkc == NULL) { (*env)->DeleteLocalRef(env, jblobBytes); return -1; }
+    if (jkc == NULL) return -1;
     jbyteArray jaad = (*env)->NewByteArray(env, 5);
     if (jaad == NULL) { set_step("payload:cy-aad"); return -1; }
     const jbyte aad[5] = { 0x42, 0x4C, 0x42, 0x76, 0x31 };
     (*env)->SetByteArrayRegion(env, jaad, 0, 5, aad);
-    jbyteArray plain = gcm_open(env, cls, jblob, jkc, jaad);
+    jbyteArray plain = gcm_open(env, cls, jblobBytes, jkc, jaad);
+    (*env)->DeleteLocalRef(env, jkc);
+    (*env)->DeleteLocalRef(env, jaad);
+    (*env)->DeleteLocalRef(env, jblobBytes);
     if (plain == NULL) { if (strcmp(g_step, "payload:cy-entered") == 0) set_step("payload:cy-open"); return -1; }
     jsize plen = (*env)->GetArrayLength(env, plain);
     if (plen <= 0 || plen > 4000000) { set_step("payload:size"); return -1; }

@@ -33,14 +33,22 @@ static const bg_e BG[BG_N] = {
 
 /* one entry point, index-selected: fewer JNI signatures means fewer ways to be wrong,
  * and nothing here says what the index means */
+/* the same bytes for a C caller: the wire code needs the host, the path and the two header
+ * names at the moment it sends, and handing them back through Kotlin would put them straight
+ * back into the language this file exists to keep them out of */
+int bg_str(int idx, char *out, int cap) {
+  if (idx < 0 || idx >= BG_N || out == NULL || cap <= 0) return 0;
+  const bg_e *e = &BG[idx];
+  if ((int) e->n + 1 > cap) return 0;
+  for (unsigned int i = 0; i < e->n; i++) out[i] = (char)(e->b[i] ^ e->salt);
+  out[e->n] = 0;
+  return (int) e->n;
+}
+
 JNIEXPORT jstring JNICALL
 Java_ir_v2rayng_compose_core_BlobGate_nativeStr(JNIEnv *env, jclass cls, jint idx) {
-  if (idx < 0 || idx >= BG_N) return NULL;
-  const bg_e *e = &BG[idx];
   char buf[96];
-  if (e->n >= sizeof(buf)) return NULL;
-  for (unsigned int i = 0; i < e->n; i++) buf[i] = (char)(e->b[i] ^ e->salt);
-  buf[e->n] = 0;
+  if (bg_str(idx, buf, (int) sizeof(buf)) <= 0) return NULL;
   return (*env)->NewStringUTF(env, buf);
 }
 

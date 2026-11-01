@@ -46,14 +46,6 @@ object NativeKit {
     /** https://host - the only scheme check, since the host itself must not be spelled out here */
     fun base(): String = take(0) { it.length > 15 && it.startsWith("https://") && !it.contains(" ") }
 
-    fun pathKey(): String = take(1) { it.length in 4..24 && it.startsWith("/") }
-
-    fun pathSync(): String = take(2) { it.length in 4..24 && it.startsWith("/") }
-
-    fun hdrBlob(): String = take(3) { Regex("^[A-Za-z][A-Za-z0-9-]{1,20}$").matches(it) }
-
-    fun hdrBtok(): String = take(4) { Regex("^[A-Za-z][A-Za-z0-9-]{1,20}$").matches(it) }
-
     /** present in the library but not wired from Kotlin yet - the keystore alias and the
      *  attestation OID stay in BlobIdentity, because an empty value there would silently mean a
      *  different key and every handset would look like it had rotated its identity */

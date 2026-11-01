@@ -206,6 +206,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 }
             }
             Remote.BASE = base
+            // the library sends the requests, so it is the one that needs the address - and after
+            // this line nothing in Kotlin names a host while talking to the worker
+            ir.v2rayng.compose.core.NativeSec.useBase(base)
             storedListLoaded = true
             // TEMPORARY: the reason used to be handed to XrayBridge.trace, which is empty by his
             // rule - so the sentence said "something failed" and the cause was thrown away. It goes

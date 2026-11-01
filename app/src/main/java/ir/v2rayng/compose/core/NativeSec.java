@@ -265,16 +265,16 @@ public final class NativeSec {
         }
     }
 
-    private static native int payloadLoadCy(byte[] blob, byte[] kc);
+    private static native int payloadLoadCy(String cy);
 
     private static native String payloadSealAll();
 
     private static native int payloadRestore(String sealed);
 
-    public static int payloadLoadRaw(byte[] blob, byte[] kc) {
-        if (!READY || blob == null || kc == null) return -1;
+    public static int payloadLoadRaw(String cy) {
+        if (!READY || cy == null) return -1;
         try {
-            return payloadLoadCy(blob, kc);
+            return payloadLoadCy(cy);
         } catch (Throwable t) {
             return -1;
         }
@@ -299,7 +299,7 @@ public final class NativeSec {
         }
     }
 
-    private static native int payloadLoad(String stego, byte[] kc);
+    private static native int payloadLoad(String stego);
 
     private static native int payloadCount();
 
@@ -307,10 +307,10 @@ public final class NativeSec {
 
     /** stage 3: decrypt, parse and keep the server list inside the library. Returns the number of
      *  usable rows, or -1 (the step is in errInfo()). */
-    public static int payloadLoadRows(String stego, byte[] kc) {
-        if (!READY || stego == null || kc == null) return -1;
+    public static int payloadLoadRows(String stego) {
+        if (!READY || stego == null) return -1;
         try {
-            return payloadLoad(stego, kc);
+            return payloadLoad(stego);
         } catch (Throwable t) {
             return -1;
         }
@@ -336,19 +336,89 @@ public final class NativeSec {
         }
     }
 
-    private static native String tokenFor(String device, byte[] kt);
+    private static native int netSend(String body, int kind, String device, int useToken);
 
-    private static native String[] proofFor(String device);
+    private static native void setBase(String base);
 
-    /** base64url(ts(4) | nonce(8) | HMAC(kt, "blb"|device|0x00|ts|nonce)) */
-    public static String token(String device, byte[] kt) {
-        if (!READY || device == null || kt == null) return null;
+    /** the address saved on this device, handed to the library once at startup; every request after
+     *  that is assembled there and never names a host in Kotlin again */
+    public static void useBase(String base) {
+        if (!READY) return;
         try {
-            return tokenFor(device, kt);
+            setBase(base);
+        } catch (Throwable t) {
+        }
+    }
+
+    private static native byte[] netBody();
+
+    private static native int netKeyReply();
+
+    private static native long sessionExp();
+
+    private static native void sessionDrop();
+
+    /** the key door: the body goes out, the HTTP status comes back, and the reply - which holds
+     *  this session's two keys - is read and stored inside the library, never here */
+    public static int sendKey(String body) {
+        if (!READY || body == null) return -1;
+        try {
+            return netSend(body, 0, null, 0);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /** the sync door, with this session's one-shot token attached by the library itself */
+    public static int sendSync(String body, String device) {
+        if (!READY || body == null || device == null) return -1;
+        try {
+            return netSend(body, 1, device, 1);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /** the reply the library last read (NULL when nothing came back) */
+    public static byte[] replyBody() {
+        if (!READY) return null;
+        try {
+            return netBody();
         } catch (Throwable t) {
             return null;
         }
     }
+
+    /** parse the key reply into the session: 1 = keys are live, 0 = the worker refused, -1 = no reply */
+    public static int storeKeyReply() {
+        if (!READY) return -1;
+        try {
+            return netKeyReply();
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /** when this session stops working, epoch ms; 0 when there is none */
+    public static long sessionExpMs() {
+        if (!READY) return 0L;
+        try {
+            return sessionExp();
+        } catch (Throwable t) {
+            return 0L;
+        }
+    }
+
+    /** forget the session - the worker said our keys are not its keys */
+    public static void dropSession() {
+        if (!READY) return;
+        try {
+            sessionDrop();
+        } catch (Throwable t) {
+        }
+    }
+
+    private static native String[] proofFor(String device);
 
     /** {proof, base64url(spki)} from one call: base64url(ts(4) | nonce(8) | ECDSA) and the public
      *  bytes that made it. They must come from the same instant - a pub cached before the identity

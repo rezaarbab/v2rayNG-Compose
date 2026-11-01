@@ -29,16 +29,6 @@ fun blog(msg: String) {
  */
 object BlobSecure {
 
-    private const val PREFS = "v2settings"
-    private const val KEY = "blob-sec"
-
-    data class Session(val kc: ByteArray, val kt: ByteArray, val exp: Long) {
-        fun wrap(): JSONObject = JSONObject()
-            .put("kc", BlobB64.encode(kc))
-            .put("kt", BlobB64.encode(kt))
-            .put("exp", exp)
-    }
-
     /** Human-readable reason of the last secure-path failure (no URLs, log/toast safe). */
     @Volatile
     var lastReason: String? = null
@@ -53,51 +43,14 @@ object BlobSecure {
         return r
     }
 
-    @Volatile
-    private var live: Session? = null
+    /** the session is held by the library - the keys are not values in this language any more;
+     *  all Kotlin may ask is when the session stops answering */
+    fun liveSession(): Boolean = NativeSec.sessionExpMs() > System.currentTimeMillis()
 
-    fun load(): Session? {
-        live?.let { return it }
-        return try {
-            val sp = AppCtx.app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
-            val sealed = sp.getString(KEY, null) ?: return null
-            val rawJson = BlobVault.unseal(sealed) ?: return null
-            val o = JSONObject(String(rawJson, Charsets.UTF_8))
-            val s = Session(
-                BlobB64.decode(o.getString("kc")) ?: return null,
-                BlobB64.decode(o.getString("kt")) ?: return null,
-                o.optLong("exp", 0L),
-            )
-            if (System.currentTimeMillis() >= s.exp || s.kt.size != 32 || s.kc.size != 32) null
-            else s.also { live = it }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun save(s: Session?) {
-        live = s
-        try {
-            val sp = AppCtx.app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
-            if (s == null) sp.edit().remove(KEY).apply()
-            else sp.edit().putString(KEY, BlobVault.seal(s.wrap().toString().toByteArray(Charsets.UTF_8)) ?: return).apply()
-        } catch (_: Exception) {
-        }
-    }
-
+    /** the worker holds keys this session cannot open with - make it issue new ones */
     fun clear() {
-        save(null)
+        NativeSec.dropSession()
     }
-
-    fun liveSession(): Boolean = load() != null
-
-    /** one-shot token: b64url( ts4BE | nonce | hmac(kt, msg) ), msg = "blb"|device|0x00|ts4BE|nonce.
-     *  The clock, the nonce and the layout live in blobsec.c; a failure names the step that refused. */
-    fun token(device: String, kt: ByteArray): String =
-        NativeSec.token(device, kt) ?: run {
-            fail("token generation failed (step=" + NativeSec.errInfo() + ")")
-            ""
-        }
 
     /** What the last proof attempt looked like: the library's own step, "proof:self-ok" when the
      *  bytes this device exports open the signature it just made. No key material enters this. */
@@ -126,23 +79,17 @@ object BlobSecure {
         }
         val pub = pair.getOrNull(1) ?: ""
         pair.getOrNull(2)?.let { if (it.isNotEmpty()) lastProofNote += " " + it }
-        if (pub.isNotEmpty()) {
-            BlobIdentity.adoptPub(pub)
-            // the worker prints "pub 91B#xxxxxx" for the key it verified under; printing the same
-            // digest here turns "signature does not match" into a one-glance comparison
-            val der = BlobB64.decode(pub)
-            val d = der?.let { NativeSec.sha256(it) }
-            if (d != null && d.size >= 3) {
-                lastProofNote += " pub#" + d.take(3).joinToString("") { String.format("%02x", it) }
-            }
-        }
+        if (pub.isNotEmpty()) BlobIdentity.adoptPub(pub)
+        // the worker prints "pub 91B#xxxxxx" for the key it verified under and the library answers
+        // with the same digest in its own step line, so a mismatch is a one-glance comparison and
+        // not something Kotlin has to hash and hex out of the public bytes
         blog("deviceProof: " + lastProofNote)
         return proof to pub
     }
 
-    /** the key endpoint - get fresh 60-minute keys from the worker, persist via BlobVault.
-     *  Returns the newly stored session, or null when the worker refuses. */
-    private fun issueKeys(base: String, body: JSONObject): Session? {
+    /** the key endpoint - get fresh 60-minute keys from the worker. The request goes out from the
+     *  library and the answer is read there: true when a session is live afterwards. */
+    private fun issueKeys(body: JSONObject): Boolean {
         return try {
             val device = body.getString("device")
             // proof FIRST, and the pub comes back with it: the identity door can replace an entry
@@ -153,14 +100,14 @@ object BlobSecure {
                 blog("issueKeys: keystore signing failed")
                 fail("device identity signature failed (keystore)" +
                     if (proofFail.isEmpty()) "" else " [" + proofFail + "]")
-                return null
+                return false
             }
             val proof = proofPair.first
             val pub = proofPair.second
             if (pub.isEmpty()) {
                 blog("issueKeys: this device has no keystore identity key")
                 fail("no device identity key (" + (BlobIdentity.note ?: "keystore unavailable") + ")")
-                return null
+                return false
             }
             val req = JSONObject()
                 .put("device", device)
@@ -173,103 +120,91 @@ object BlobSecure {
                 .put("pub", pub)
                 .put("sig", proof)
                 .put("att", JSONObject(BlobIdentity.attestation()))
-            val r = httpPost(base, NativeKit.pathKey(), req)
-            if (r.body == null) {
-                blog("issueKeys: key endpoint got nothing (status " + r.status + ")")
-                fail(if (r.status == 0) "key request: no answer from the server (network)" else "key request: HTTP " + r.status + " with no body")
-                return null
+            val status = NativeSec.sendKey(req.toString())
+            if (status == -1) {
+                blog("issueKeys: key endpoint got nothing (step=" + NativeSec.errInfo() + ")")
+                fail(
+                    if (NativeKit.available) "key request: no answer from the server (network)"
+                    else "key request: the library did not answer",
+                )
+                return false
             }
-            val resp = try {
-                JSONObject(r.body)
-            } catch (_: Exception) {
-                blog("issueKeys: key endpoint replied HTTP " + r.status + " as: " + r.body.take(60))
-                fail("key request: server replied HTTP " + r.status + " and not json")
-                return null
+            // the reply is read inside the library: kc/kt go into its session and never become
+            // values here, so there is nothing in this process for a tracer to print about them
+            if (NativeSec.storeKeyReply() == 1) {
+                blog("issueKeys: OK, keys live until epoch-ms " + NativeSec.sessionExpMs())
+                return true
             }
-            if (resp.optInt("v", 0) < 2 || resp.optString("enc") != "k") {
-                val why = refused("session keys", r, resp) + (if (lastProofNote.isNotBlank()) " [" + lastProofNote + "]" else "")
-                blog("issueKeys: " + why)
-                fail(why)
-                return null
-            }
-            val kc = BlobB64.decode(resp.getString("kc")) ?: run { blog("issueKeys: bad b64 kc"); fail("session keys: invalid response (protocol)"); return null }
-            val kt = BlobB64.decode(resp.getString("kt")) ?: run { blog("issueKeys: bad b64 kt"); fail("session keys: invalid response (protocol)"); return null }
-            if (kc.size != 32 || kt.size != 32) { blog("issueKeys: bad key sizes " + kc.size + "/" + kt.size); fail("session keys: invalid response (protocol)"); return null }
-            val expSec = resp.optLong("exp", 0L)
-            val expMs = if (expSec > 0) expSec * 1000L else System.currentTimeMillis() + 3600_000L
-            val s = Session(kc, kt, expMs)
-            save(s)
-            blog("issueKeys: OK, keys live until epoch-ms " + expMs)
-            s
+            val why = refused("session keys", status, replyText()) + (if (lastProofNote.isNotBlank()) " [" + lastProofNote + "]" else "")
+            blog("issueKeys: " + why)
+            fail(why)
+            false
         } catch (e: Exception) {
             blog("issueKeys: exception " + e.javaClass.simpleName)
             fail("key request failed (network)")
-            null
+            false
         }
     }
 
-    fun syncSecure(base: String, body: JSONObject): JSONObject? {
+    /** the reply the library last read, as text ("" when there was none) */
+    private fun replyText(): String {
+        val b = NativeSec.replyBody() ?: return ""
+        return try {
+            String(b, Charsets.UTF_8)
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /** Ask the worker what changed. The request, the token and the reply are the library's business;
+     *  what comes back is the payload with its server list already removed. */
+    fun syncSecure(body: JSONObject): JSONObject? {
         lastReason = null
         lastPayloadSecure = false
-        // the endpoint paths and header names come out of the native library; if it did not load,
-        // say that as one clear failure instead of sending a nameless request and calling the
-        // result a network problem
-        if (!gateReady()) {
+        // if the library did not load there is no host, no path and no token to speak with - say
+        // that as one clear failure instead of calling the result a network problem
+        if (!NativeKit.available) {
             blog("gate: " + NativeKit.note())
             fail("کتابخانهٔ داخلی برنامه بار نشد - نصب کامل اپ را دوباره انجام بده")
             return null
         }
-        var session: Session? = load()
+        val device = body.getString("device")
         var issued = false
         for (attempt in 0 until 2) {
-            val sNow = session
-            if (sNow == null) {
+            if (!liveSession()) {
                 if (issued) return null
                 issued = true
                 blog("no session -> issuing keys from worker")
-                // worker hands us fresh keys (device + 60-min bucket) and stores them too
-                session = issueKeys(base, body) ?: return null
+                // worker hands out fresh keys for the 60-minute bucket and the library keeps them
+                if (!issueKeys(body)) return null
                 continue
             }
             // A 5xx with a non-JSON body is the edge or the worker's own failure, not this device:
             // a deploy window, or the isolate running out of CPU. Retry once here with a fresh
             // token (the worker's ts stays monotonic, so a new one is always valid) instead of
             // spending the user's next two minutes on something that usually clears in a second.
-            var r = httpPost(
-                base,
-                NativeKit.pathSync(),
-                JSONObject(body.toString()),
-                "v1",
-                token(body.getString("device"), sNow.kt),
-            )
-            var wire = r.body
-            if (r.status >= 500) {
-                blog("sync: HTTP " + r.status + " - retrying once")
+            var status = NativeSec.sendSync(body.toString(), device)
+            if (status in 500..599) {
+                blog("sync: HTTP " + status + " - retrying once")
                 Thread.sleep(1500)
-                r = httpPost(
-                    base,
-                    NativeKit.pathSync(),
-                    JSONObject(body.toString()),
-                    "v1",
-                    token(body.getString("device"), sNow.kt),
-                )
-                wire = r.body
+                status = NativeSec.sendSync(body.toString(), device)
             }
+            val wire = if (status == -1) null else replyText()
             if (wire == null) {
-                blog("sync: no answer (status " + r.status + ")")
+                blog("sync: no answer (step=" + NativeSec.errInfo() + ")")
                 // transport failed - keep the session, let the caller retry on the next sync
-                fail(if (r.status == 0) "server unreachable (network or timeout)" else "server answered HTTP " + r.status + " with no body")
+                fail("server unreachable (network or timeout)")
                 return null
             }
             val resp = try {
                 JSONObject(wire)
             } catch (_: Exception) {
-                blog("sync: HTTP " + r.status + " body is not json: " + wire.take(60))
+                blog("sync: HTTP " + status + " body is not json")
                 fail(
                     when {
-                        r.status in 200..299 -> "unexpected server response (protocol)"
-                        r.status >= 500 -> "server busy (HTTP " + r.status + ") - retried once; the next sync tries again"
-                        else -> "server answered HTTP " + r.status + " and not json - old worker?"
+                        status in 200..299 -> "unexpected server response (protocol)"
+                        status >= 500 -> "server busy (HTTP " + status + ") - retried once; the next sync tries again"
+                        else -> "server answered HTTP " + status + " and not json - old worker?"
                     },
                 )
                 return null
@@ -282,11 +217,8 @@ object BlobSecure {
                     var panel: JSONObject? = null
                     var rows = -1
                     try {
-                        rows = if (enc == "s") NativeSec.payloadLoadRows(resp.getString("st"), sNow.kc)
-                               else NativeSec.payloadLoadRaw(
-                                   BlobB64.decode(resp.getString("cy")) ?: ByteArray(0),
-                                   sNow.kc,
-                               )
+                        rows = if (enc == "s") NativeSec.payloadLoadRows(resp.getString("st"))
+                               else NativeSec.payloadLoadRaw(resp.getString("cy"))
                         if (rows >= 0) {
                             if (rows > 0) {
                                 NativeSec.payloadSealed()?.let { sealed ->
@@ -330,7 +262,7 @@ object BlobSecure {
                     }
                     issued = true
                     clear()
-                    session = issueKeys(base, body) ?: return null
+                    if (!issueKeys(body)) return null
                 }
                 "n" -> {
                     // "unchanged" carries no server data, and it only arrives after this session's
@@ -344,17 +276,17 @@ object BlobSecure {
                     clear()
                     if (issued) { fail("session rotated twice in a row"); return null }
                     issued = true
-                    session = issueKeys(base, body) ?: return null
+                    if (!issueKeys(body)) return null
                 }
                 "x" -> {
                     blog("enc=x (auth rejected) -> clearing")
-                    fail(refused("request", r, resp))
+                    fail(refused("request", status, wire))
                     clear()
                     return null
                 }
                 else -> {
                     blog("unexpected enc=" + enc + " -> clearing (worker has no blob layer?)")
-                    fail(refused("server reply", r, resp))
+                    fail(refused("server reply", status, wire))
                     clear()
                     return null
                 }
@@ -363,55 +295,19 @@ object BlobSecure {
         return null
     }
 
-    /** A POST and whatever came back. An HTTP error still carries an answer, and reading that
-     *  answer is the difference between "this phone has no network" and "the worker in the cloud
-     *  is an old one" - which both used to be reported as "server unreachable". */
-    data class Http(val status: Int, val body: String?)
-
-    /** Every piece of the wire protocol that is no longer spelled out in Kotlin, checked once. */
-    private fun gateReady(): Boolean =
-        NativeKit.available && NativeKit.pathKey() != "" && NativeKit.pathSync() != "" &&
-            NativeKit.hdrBlob() != "" && NativeKit.hdrBtok() != "" && NativeKit.base() != ""
-
-    private fun httpPost(base: String, path: String, body: JSONObject, blobHeader: String? = null, btok: String? = null): Http {
-        return try {
-            val url = java.net.URL(base.trimEnd('/') + path)
-            val conn = url.openConnection() as java.net.HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.connectTimeout = 8000
-            // stego carriers are large (up to a few MB when the admin delivers a file) -
-            // a short read timeout here looks exactly like "failed to connect to server"
-            conn.readTimeout = 60000
-            conn.doOutput = true
-            conn.setRequestProperty("content-type", "application/json")
-            val hb = NativeKit.hdrBlob()
-            val ht = NativeKit.hdrBtok()
-            if (blobHeader != null && hb != "") conn.setRequestProperty(hb, blobHeader)
-            if (btok != null && ht != "") conn.setRequestProperty(ht, btok)
-            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
-            val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream?.bufferedReader()?.use { it.readText() }
-            if (code !in 200..299) blog("http " + path + " -> " + code + " " + (text?.take(90) ?: "no body"))
-            Http(code, text)
-        } catch (e: Exception) {
-            blog("http " + path + " -> " + e.javaClass.simpleName)
-            Http(0, null)
-        }
-    }
-
     /** Turn a refused response into one readable sentence: status, the enc code the worker chose
      *  and the reason the worker itself gave (which is protocol text, never server config). */
-    private fun refused(what: String, r: Http, resp: JSONObject): String {
-        val enc = resp.optString("enc", "")
-        val why = resp.optString("why", "")
+    private fun refused(what: String, status: Int, text: String): String {
+        val o = try { JSONObject(text) } catch (_: Exception) { null }
+        val enc = o?.optString("enc", "").orEmpty()
+        val why = o?.optString("why", "").orEmpty()
         val tail = when {
             why.isNotBlank() -> ": " + why
             enc == "x" -> " (auth refused - worker has a different key for this device?)"
-            resp.optInt("v", 0) < 2 -> " - the worker in the cloud is an old build (deploy it)"
+            (o?.optInt("v", 0) ?: 0) < 2 -> " - the worker in the cloud is an old build (deploy it)"
             else -> ""
         }
-        return what + " refused (HTTP " + r.status + (if (enc.isNotBlank()) ", enc " + enc else "") + ")" + tail
+        return what + " refused (HTTP " + status + (if (enc.isNotBlank()) ", enc " + enc else "") + ")" + tail
     }
 }
 
