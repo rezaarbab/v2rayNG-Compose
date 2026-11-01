@@ -276,43 +276,52 @@ object BlobSecure {
             }
             when (val enc = resp.optString("enc")) {
                 "s", "c" -> {
-                    val opened = if (enc == "s") revealPayload(resp.getString("st"), sNow.kc) else openCy(resp.getString("cy"), sNow.kc)
-                    if (opened != null) {
-                        // the same payload is parsed inside the library into the row store; the answer
-                        // handed to Kotlin is the library's own copy with the list removed, so a link
-                        // can only be read by the code that never sees this JSON.
-                        var panel: JSONObject? = null
-                        try {
-                            val rows = if (enc == "s") NativeSec.payloadLoadRows(resp.getString("st"), sNow.kc)
-                                       else NativeSec.payloadLoadRaw(
-                                           BlobB64.decode(resp.getString("cy")) ?: ByteArray(0),
-                                           sNow.kc,
-                                       )
+                    // one open, and it happens inside the library: the carrier (or the raw cipher)
+                    // is decrypted, parsed into rows and cut into a server-free copy there. This
+                    // process never holds the payload text, so there is no JSON here to print.
+                    var panel: JSONObject? = null
+                    var rows = -1
+                    try {
+                        rows = if (enc == "s") NativeSec.payloadLoadRows(resp.getString("st"), sNow.kc)
+                               else NativeSec.payloadLoadRaw(
+                                   BlobB64.decode(resp.getString("cy")) ?: ByteArray(0),
+                                   sNow.kc,
+                               )
+                        if (rows >= 0) {
                             if (rows > 0) {
                                 NativeSec.payloadSealed()?.let { sealed ->
                                     if (sealed.isNotEmpty()) SecurePrefs.set("srvrows", sealed, AppCtx.app)
                                 }
-                                NativeSec.payloadRest()?.takeIf { it.isNotEmpty() }?.let { raw ->
-                                    panel = try {
-                                        JSONObject(String(raw, Charsets.UTF_8))
-                                    } catch (_: Exception) {
-                                        null
-                                    }
-                                }
-                                if (panel == null) opened.remove("servers")
                             } else {
-                                // the load emptied the rows before it failed: put back what was sealed,
+                                // the load emptied the rows before it decided: put back what was sealed,
                                 // otherwise every dial for a listed server finds no row and does nothing
                                 val sealed = SecurePrefs.get("srvrows", AppCtx.app)
                                 if (!sealed.isNullOrEmpty()) NativeSec.payloadRestoreRows(sealed)
                             }
-                        } catch (_: Throwable) {
+                            panel = NativeSec.payloadRest()?.takeIf { it.isNotEmpty() }?.let { raw ->
+                                try {
+                                    JSONObject(String(raw, Charsets.UTF_8))
+                                } catch (_: Exception) {
+                                    null
+                                }
+                            }
                         }
-                        lastPayloadSecure = true
-                        return panel ?: opened
+                    } catch (_: Throwable) {
                     }
-                    val why = BlobStego.lastWhy ?: "payload unreadable"
-                    blog("enc=" + enc + " open failed: " + why)
+                    if (panel != null) {
+                        lastPayloadSecure = true
+                        return panel
+                    }
+                    if (rows >= 0) {
+                        // the envelope opened with this session's key - the keys are right and
+                        // re-issuing them cannot fix a read failure, so say what refused and stop
+                        val why = "payload read (step=" + NativeSec.errInfo() + ")"
+                        blog("enc=" + enc + " " + why)
+                        fail("همگام‌سازی: پاسخ باز شد ولی خوانده نشد")
+                        return null
+                    }
+                    val why = "payload did not open (step=" + NativeSec.errInfo() + ")"
+                    blog("enc=" + enc + " " + why)
                     // the token was accepted, so the worker holds keys this session cannot open -
                     // drop it and re-issue once instead of failing every sync from now on
                     if (issued) {
@@ -351,52 +360,6 @@ object BlobSecure {
                 }
             }
         }
-        return null
-    }
-
-    fun revealPayload(carrier: String, kc: ByteArray): JSONObject? {
-        val text = BlobStego.reveal(carrier, kc) ?: return null
-        return try {
-            JSONObject(text)
-        } catch (_: Exception) {
-            BlobStego.lastWhy = "stego: plaintext is not json (" + text.length + " chars, head=" + preview(text) + ")"
-            blog("revealPayload: json parse failed, " + text.length + " chars")
-            null
-        }
-    }
-
-    fun openCy(hexCy: String, kc: ByteArray): JSONObject? {
-        val blob = BlobB64.decode(hexCy) ?: return cyWhy("cy: not base64")
-        val plain = BlobStego.blobOpen(blob, kc) ?: return cyWhy("cy: GCM tag fail (wrong key)")
-        // mode byte says which envelope scheme the worker used: 0 raw, 2 zlib, 1 = raw deflate
-        val mode = if (plain.isEmpty()) -1 else plain[0].toInt() and 0xFF
-        val jsonU8 = BlobZip.open(plain)
-        return try {
-            JSONObject(String(jsonU8, Charsets.UTF_8))
-        } catch (_: Exception) {
-            cyWhy(
-                "cy: not json - sealed " + plain.size + "B mode=" + mode + " -> " + jsonU8.size +
-                    "B head=" + preview(String(jsonU8, Charsets.ISO_8859_1))
-            )
-        }
-    }
-
-    /** First bytes as text + hex, to tell envelope schemes apart without logging the payload. */
-    private fun preview(s: String): String {
-        val n = minOf(8, s.length)
-        val hx = StringBuilder()
-        val asc = StringBuilder()
-        for (i in 0 until n) {
-            val v = s[i].code
-            hx.append(String.format("%02x ", v))
-            asc.append(if (v in 33..126) s[i] else '.')
-        }
-        return "\"" + asc + "\"][" + hx.toString().trim() + "]"
-    }
-
-    private fun cyWhy(w: String): JSONObject? {
-        blog("openCy: " + w)
-        BlobStego.lastWhy = w
         return null
     }
 

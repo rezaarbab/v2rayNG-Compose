@@ -218,8 +218,7 @@ Java_ir_v2rayng_compose_core_NativeSec_hmac(JNIEnv *env, jclass cls, jbyteArray 
 /* envelope = [mode 1B || raw | raw-deflate | zlib]. mode 0/other = strip the byte, 1 = raw
  * deflate, 2 = zlib-wrapped - the same three cases java's Inflater(true/false) used to cover.
  * On any inflate trouble it returns the stripped bytes, exactly like the old catch {}. */
-JNIEXPORT jbyteArray JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_openEnvelope(JNIEnv *env, jclass cls, jbyteArray jblob) {
+static jbyteArray env_open(JNIEnv *env, jclass cls, jbyteArray jblob) {
     if (jblob == NULL) return NULL;
     jsize n = (*env)->GetArrayLength(env, jblob);
     if (n < 1) return NULL;
@@ -510,8 +509,7 @@ static jclass find_class_checked(JNIEnv *env, const unsigned char *name, int *er
     return c;
 }
 
-JNIEXPORT jbyteArray JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(JNIEnv *env, jclass cls, jbyteArray jcipher, jbyteArray jkey, jbyteArray jaad) {
+static jbyteArray gcm_open(JNIEnv *env, jclass cls, jbyteArray jcipher, jbyteArray jkey, jbyteArray jaad) {
     set_step("gcm:entered");
     if (jcipher == NULL || jkey == NULL) { set_step("gcm:null-args"); return NULL; }
     jsize cn = (*env)->GetArrayLength(env, jcipher), kn = (*env)->GetArrayLength(env, jkey);
@@ -1929,8 +1927,7 @@ static int st_read_bits(const jchar *s, int slen, const st_slot *slots, const in
 
 /** the whole payload path: carrier text + session key in, plaintext JSON bytes out.
  *  NULL means one of the named steps refused, and err() carries which. */
-JNIEXPORT jbyteArray JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_stegoOpen(JNIEnv *env, jclass cls, jstring jstego, jbyteArray jkc) {
+static jbyteArray stego_open(JNIEnv *env, jclass cls, jstring jstego, jbyteArray jkc) {
     set_step("stego:entered");
     if (jstego == NULL || jkc == NULL) { set_step("stego:null-args"); return NULL; }
     if ((*env)->GetArrayLength(env, jkc) != 32) { set_step("stego:key-size"); return NULL; }
@@ -1992,10 +1989,10 @@ Java_ir_v2rayng_compose_core_NativeSec_stegoOpen(JNIEnv *env, jclass cls, jstrin
             if (jaad) {
                 const jbyte aad[5] = { 0x42, 0x4C, 0x42, 0x76, 0x31 };   /* BLBv1 */
                 (*env)->SetByteArrayRegion(env, jaad, 0, 5, aad);
-                jbyteArray plain = Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(env, cls, jcipher, jkc, jaad);
+                jbyteArray plain = gcm_open(env, cls, jcipher, jkc, jaad);
                 if (plain != NULL) {
                     jsize plen = (*env)->GetArrayLength(env, plain);
-                    jbyteArray envl = Java_ir_v2rayng_compose_core_NativeSec_openEnvelope(env, cls, plain);
+                    jbyteArray envl = env_open(env, cls, plain);
                     if (envl != NULL) {
                         out = envl;
                     } else if (plen > 0) {
@@ -2403,8 +2400,7 @@ static int pl_parse_ss(JNIEnv *env, const char *s, int n, int p) {
     return 1;
 }
 
-JNIEXPORT jint JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_plParse(JNIEnv *env, jclass cls, jstring jlink) {
+static jint pl_parse_link(JNIEnv *env, jclass cls, jstring jlink) {
     pl_ok = 0;
     pl_name[0] = pl_addr[0] = pl_cred[0] = 0;
     if (jlink == NULL) return 0;
@@ -2480,41 +2476,6 @@ Java_ir_v2rayng_compose_core_NativeSec_plParse(JNIEnv *env, jclass cls, jstring 
     (*env)->ReleaseStringUTFChars(env, jlink, s);
     pl_ok = 1;
     return 1;
-}
-
-/** fields as UTF-8 bytes: 0 name, 1 address, 2 credential, 3 security, 4 type, 5 flow, 6 sni,
- *  7 fp, 8 pbk, 9 sid, 10 spx, 11 path, 12 host header, 13 early-data header, 14 method */
-JNIEXPORT jbyteArray JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_plStr(JNIEnv *env, jclass cls, jint which) {
-    const char *src = "";
-    switch (which) {
-        case 0: src = pl_name; break;    case 1: src = pl_addr; break;
-        case 2: src = pl_cred; break;    case 3: src = pl_security; break;
-        case 4: src = pl_type; break;    case 5: src = pl_flow; break;
-        case 6: src = pl_sni; break;     case 7: src = pl_fp; break;
-        case 8: src = pl_pbk; break;     case 9: src = pl_sid; break;
-        case 10: src = pl_spx; break;    case 11: src = pl_path; break;
-        case 12: src = pl_host; break;   case 13: src = pl_eh; break;
-        case 14: src = pl_method; break;
-        default: src = ""; break;
-    }
-    int n = (int) strlen(src);
-    jbyteArray out = (*env)->NewByteArray(env, n);
-    if (out && n) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) src);
-    return out;
-}
-
-/** ints: 0 port, 1 kind (0 vless, 1 trojan), 2 alterId, 3 early data, 4 parsed-ok */
-JNIEXPORT jint JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_plInt(JNIEnv *env, jclass cls, jint which) {
-    switch (which) {
-        case 0: return pl_port;
-        case 1: return pl_kind;
-        case 2: return pl_alter;
-        case 3: return pl_ed;
-        case 4: return pl_ok;
-        default: return 0;
-    }
 }
 
 /* ---------------- the Xray config, built and written here ----------------
@@ -2737,7 +2698,7 @@ Java_ir_v2rayng_compose_core_NativeSec_coreConfigForRow(JNIEnv *env, jclass cls,
     if (row < 0 || row >= g_rows_n) return NULL;
     jstring jlink = (*env)->NewStringUTF(env, g_rows[row].link);
     if (jlink == NULL) return NULL;
-    int ok = Java_ir_v2rayng_compose_core_NativeSec_plParse(env, cls, jlink);
+    int ok = pl_parse_link(env, cls, jlink);
     (*env)->DeleteLocalRef(env, jlink);
     if (ok != 1) { set_step("cfgforrow:parse"); return NULL; }
     sbuf s;
@@ -2772,8 +2733,8 @@ JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_payloadLoad(JNIEnv *env, jclass cls, jstring jstego, jbyteArray jkc) {
     payload_reset();
     set_step("payload:entered");
-    jbyteArray plain = Java_ir_v2rayng_compose_core_NativeSec_stegoOpen(env, cls, jstego, jkc);
-    if (plain == NULL) { set_step("payload:open"); return -1; }
+    jbyteArray plain = stego_open(env, cls, jstego, jkc);
+    if (plain == NULL) { if (strcmp(g_step, "payload:entered") == 0) set_step("payload:open"); return -1; }
     jsize plen = (*env)->GetArrayLength(env, plain);
     if (plen <= 0 || plen > 4000000) { set_step("payload:size"); return -1; }
     jbyte *buf = (jbyte *) malloc((size_t) plen);
@@ -2867,6 +2828,9 @@ static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len) {
     jstring kServers = (*env)->NewStringUTF(env, "servers");
     jobject arr = (getArr && kServers) ? (*env)->CallObjectMethod(env, root, getArr, kServers) : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); arr = NULL; }
+    /* the server-free copy is cut before anything can return early: a payload that opens is a
+       payload Kotlin may read the panel fields of, whether or not it carried usable servers */
+    payload_trim(env, root, jsonCls, kServers);
     if (arr == NULL || arrCls == NULL) { set_step("payload:servers"); return 0; }
     jmethodID arrLen = (*env)->GetMethodID(env, arrCls, "length", "()I");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
@@ -2897,7 +2861,6 @@ static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len) {
         if (r->addr[0] == 0 || r->port <= 0) continue;
         kept++;
     }
-    payload_trim(env, root, jsonCls, kServers);
     (*env)->DeleteLocalRef(env, arr);
     (*env)->DeleteLocalRef(env, root);
     if (kServers) (*env)->DeleteLocalRef(env, kServers);
@@ -2919,8 +2882,8 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadLoadCy(JNIEnv *env, jclass cls, jb
     if (jaad == NULL) { set_step("payload:cy-aad"); return -1; }
     const jbyte aad[5] = { 0x42, 0x4C, 0x42, 0x76, 0x31 };
     (*env)->SetByteArrayRegion(env, jaad, 0, 5, aad);
-    jbyteArray plain = Java_ir_v2rayng_compose_core_NativeSec_gcmOpen(env, cls, jblob, jkc, jaad);
-    if (plain == NULL) { set_step("payload:cy-open"); return -1; }
+    jbyteArray plain = gcm_open(env, cls, jblob, jkc, jaad);
+    if (plain == NULL) { if (strcmp(g_step, "payload:cy-entered") == 0) set_step("payload:cy-open"); return -1; }
     jsize plen = (*env)->GetArrayLength(env, plain);
     if (plen <= 0 || plen > 4000000) { set_step("payload:size"); return -1; }
     jbyte *buf = (jbyte *) malloc((size_t) plen);

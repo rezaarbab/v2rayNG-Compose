@@ -37,8 +37,6 @@ public final class NativeSec {
 
     private static native byte[] hmac(byte[] key, byte[] msg);
 
-    private static native byte[] openEnvelope(byte[] blob);
-
     private static native byte[] b64d(String s);
 
     private static native String b64uEncode(byte[] b);
@@ -48,16 +46,6 @@ public final class NativeSec {
         try {
             byte[] out = hmac(key, msg);
             return (out != null && out.length == 32) ? out : null;
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    /** [mode 1B || raw | raw-deflate | zlib] -> bytes, the same three cases java's Inflater covered. */
-    public static byte[] openEnv(byte[] envelope) {
-        if (!READY || envelope == null || envelope.length < 1) return null;
-        try {
-            return openEnvelope(envelope);
         } catch (Throwable t) {
             return null;
         }
@@ -77,18 +65,6 @@ public final class NativeSec {
         if (!READY || b == null) return null;
         try {
             return b64uEncode(b);
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    private static native byte[] gcmOpen(byte[] cipher, byte[] key, byte[] aad);
-
-    /** iv(12) || AES-256-GCM ciphertext+tag, opened with the session key - null on any failure. */
-    public static byte[] gcmDecrypt(byte[] cipher, byte[] key, byte[] aad) {
-        if (!READY || cipher == null || key == null || cipher.length < 29 || key.length != 32) return null;
-        try {
-            return gcmOpen(cipher, key, aad);
         } catch (Throwable t) {
             return null;
         }
@@ -382,56 +358,9 @@ public final class NativeSec {
         }
     }
 
-    private static native int plParse(String link);
-
-    private static native byte[] plStr(int which);
-
-    private static native int plInt(int which);
-
-    /** stage 1 of the server-in-C move: the link is parsed inside the library; the Kotlin side
-     *  only asks for the fields it displays. Not wired to the UI yet (branch server-in-c). */
-    public static boolean parseLink(String link) {
-        if (!READY || link == null) return false;
-        try {
-            return plParse(link) == 1;
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
-    public static byte[] linkField(int which) {
-        if (!READY) return null;
-        try {
-            return plStr(which);
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    public static int linkInt(int which) {
-        if (!READY) return 0;
-        try {
-            return plInt(which);
-        } catch (Throwable t) {
-            return 0;
-        }
-    }
-
-    private static native byte[] stegoOpen(String stego, byte[] kc);
-
     private static native String tokenFor(String device, byte[] kt);
 
     private static native String[] proofFor(String device);
-
-    /** the whole payload path in C: carrier text plus session key in, plaintext JSON bytes out */
-    public static byte[] stegoReveal(String stego, byte[] kc) {
-        if (!READY || stego == null || kc == null) return null;
-        try {
-            return stegoOpen(stego, kc);
-        } catch (Throwable t) {
-            return null;
-        }
-    }
 
     /** base64url(ts(4) | nonce(8) | HMAC(kt, "blb"|device|0x00|ts|nonce)) */
     public static String token(String device, byte[] kt) {
