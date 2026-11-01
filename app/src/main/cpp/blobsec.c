@@ -20,6 +20,7 @@
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <fcntl.h>
+#include <unistd.h>
 #include <errno.h>
 
 /* ---------------- SHA-256 (FIPS 180-4) ---------------- */
