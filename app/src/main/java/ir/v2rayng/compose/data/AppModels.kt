@@ -63,7 +63,7 @@ data class AppState(
     val selected: ServerProfile
         get() = servers.firstOrNull { it.id == selectedId }
             ?: servers.firstOrNull()
-            ?: ServerProfile("none", "-", "-", 0)
+            ?: ServerProfile("none", "-", 0)
 }
 
 object TimeKit {
