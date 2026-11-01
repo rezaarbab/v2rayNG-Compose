@@ -294,6 +294,11 @@ object BlobSecure {
                                 }
                                 // the list is in the library: drop it from what goes back to Kotlin
                                 opened.remove("servers")
+                            } else {
+                                // the load emptied the rows before it failed: put back what was sealed,
+                                // otherwise every dial for a listed server finds no row and does nothing
+                                val sealed = SecurePrefs.get("srvrows", AppCtx.app)
+                                if (!sealed.isNullOrEmpty()) NativeSec.payloadRestoreRows(sealed)
                             }
                         } catch (_: Throwable) {
                         }
