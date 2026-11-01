@@ -2724,7 +2724,7 @@ static int config_build(sbuf *s, int mode, int socksPort) {
     sb_add(s, "],\"routing\":");
     sb_routing(s);
     if (mode == 0) {
-        sb_add(s, ",\"stats\":{},\"policy\":{\"levels\":{\"0\":{\"statsUserUplink\":true,\"statsUserDownlink\":true}}},\"system\":{\"statsOutboundUplink\":true,\"statsOutboundDownlink\":true}");
+        sb_add(s, ",\"stats\":{},\"policy\":{\"levels\":{\"0\":{\"statsUserUplink\":true,\"statsUserDownlink\":true}},\"system\":{\"statsOutboundUplink\":true,\"statsOutboundDownlink\":true}}");
     }
     sb_add(s, "}");
     (void) socksPort;
