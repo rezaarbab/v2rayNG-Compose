@@ -1,6 +1,5 @@
 package ir.v2rayng.compose.core.sec
 
-import ir.v2rayng.compose.AppCtx
 import ir.v2rayng.compose.core.NativeKit
 import ir.v2rayng.compose.core.NativeSec
 import org.json.JSONObject
@@ -158,6 +157,8 @@ object BlobSecure {
 
     /** Ask the worker what changed. The request, the token and the reply are the library's business;
      *  what comes back is the payload with its server list already removed. */
+    /** Ask the worker what changed. The request, the token and the reply are the library's business;
+     *  what comes back is the panel with its server list already removed, or a reason. */
     fun syncSecure(body: JSONObject): JSONObject? {
         lastReason = null
         lastPayloadSecure = false
@@ -179,83 +180,43 @@ object BlobSecure {
                 if (!issueKeys(body)) return null
                 continue
             }
-            // A 5xx with a non-JSON body is the edge or the worker's own failure, not this device:
-            // a deploy window, or the isolate running out of CPU. Retry once here with a fresh
-            // token (the worker's ts stays monotonic, so a new one is always valid) instead of
-            // spending the user's next two minutes on something that usually clears in a second.
+            // A 5xx with a body that answers nothing is the edge or the worker's own failure, not
+            // this device: a deploy window, or the isolate running out of CPU. Retry once - the
+            // token is made again inside the library and the worker's monotonic ts accepts any
+            // newer one - instead of spending the user's next two minutes on it.
             var status = NativeSec.sendSync(body.toString(), device)
             if (status in 500..599) {
                 blog("sync: HTTP " + status + " - retrying once")
                 Thread.sleep(1500)
                 status = NativeSec.sendSync(body.toString(), device)
             }
-            val wire = if (status == -1) null else replyText()
-            if (wire == null) {
+            if (status == -1) {
                 blog("sync: no answer (step=" + NativeSec.errInfo() + ")")
                 // transport failed - keep the session, let the caller retry on the next sync
                 fail("server unreachable (network or timeout)")
                 return null
             }
-            val resp = try {
-                JSONObject(wire)
-            } catch (_: Exception) {
-                blog("sync: HTTP " + status + " body is not json")
-                fail(
-                    when {
-                        status in 200..299 -> "unexpected server response (protocol)"
-                        status >= 500 -> "server busy (HTTP " + status + ") - retried once; the next sync tries again"
-                        else -> "server answered HTTP " + status + " and not json - old worker?"
-                    },
-                )
-                return null
-            }
-            when (val enc = resp.optString("enc")) {
-                "s", "c" -> {
-                    // one open, and it happens inside the library: the carrier (or the raw cipher)
-                    // is decrypted, parsed into rows and cut into a server-free copy there. This
-                    // process never holds the payload text, so there is no JSON here to print.
-                    var panel: JSONObject? = null
-                    var rows = -1
-                    try {
-                        rows = if (enc == "s") NativeSec.payloadLoadRows(resp.getString("st"))
-                               else NativeSec.payloadLoadRaw(resp.getString("cy"))
-                        if (rows >= 0) {
-                            if (rows > 0) {
-                                NativeSec.payloadSealed()?.let { sealed ->
-                                    if (sealed.isNotEmpty()) SecurePrefs.set("srvrows", sealed, AppCtx.app)
-                                }
-                            } else {
-                                // the load emptied the rows before it decided: put back what was sealed,
-                                // otherwise every dial for a listed server finds no row and does nothing
-                                val sealed = SecurePrefs.get("srvrows", AppCtx.app)
-                                if (!sealed.isNullOrEmpty()) NativeSec.payloadRestoreRows(sealed)
-                            }
-                            panel = NativeSec.payloadRest()?.takeIf { it.isNotEmpty() }?.let { raw ->
-                                try {
-                                    JSONObject(String(raw, Charsets.UTF_8))
-                                } catch (_: Exception) {
-                                    null
-                                }
-                            }
-                        }
-                    } catch (_: Throwable) {
-                    }
-                    if (panel != null) {
-                        lastPayloadSecure = true
-                        return panel
-                    }
-                    if (rows >= 0) {
-                        // the envelope opened with this session's key - the keys are right and
-                        // re-issuing them cannot fix a read failure, so say what refused and stop
-                        val why = "payload read (step=" + NativeSec.errInfo() + ")"
-                        blog("enc=" + enc + " " + why)
+            /* The reply is answered where it already is: which letter it carried, the carrier text,
+               the rows, their sealed form and the panel copy are all values inside the library. What
+               crosses back is the panel without the server list, and a letter. */
+            val panelBytes = NativeSec.syncPanel()
+            when (NativeSec.syncResult()) {
+                1 -> {
+                    lastPayloadSecure = true
+                    val text = if (panelBytes == null) "" else String(panelBytes, Charsets.UTF_8)
+                    return try {
+                        JSONObject(text)
+                    } catch (_: Exception) {
                         fail("همگام‌سازی: پاسخ باز شد ولی خوانده نشد")
-                        return null
+                        null
                     }
-                    val why = "payload did not open (step=" + NativeSec.errInfo() + ")"
-                    blog("enc=" + enc + " " + why)
-                    // the token was accepted, so the worker holds keys this session cannot open -
-                    // drop it and re-issue once instead of failing every sync from now on
+                }
+                2, 3 -> {
+                    // the payload would not open with this session's key (2), or the worker rotated
+                    // it (3); the token was accepted either way, so the keys this device holds are
+                    // stale - drop them and re-issue once instead of failing every sync from now on
+                    val why = NativeSec.syncReason()
+                    blog("sync refused: " + why)
                     if (issued) {
                         fail("payload verification failed ($why)")
                         return null
@@ -264,35 +225,29 @@ object BlobSecure {
                     clear()
                     if (!issueKeys(body)) return null
                 }
-                "n" -> {
-                    // "unchanged" carries no server data, and it only arrives after this session's
-                    // one-shot token was accepted, so it counts as a secure answer
-                    lastPayloadSecure = true
-                    return JSONObject().put("__nc", true)
-                }
-                "h" -> {
-                    // keys expired/rotated server-side - clear and issue fresh
-                    blog("enc=h (expired/rotated) -> re-issuing")
+                4 -> fail(refusedLine(status))
+                5 -> fail("همگام‌سازی: پاسخ باز شد ولی خوانده نشد (" + NativeSec.syncReason() + ")")
+                6 -> {
+                    // the worker knows a different key for this device - start clean next time
+                    fail("درخواست رد شد (HTTP " + status + "): " + NativeSec.syncReason())
                     clear()
-                    if (issued) { fail("session rotated twice in a row"); return null }
-                    issued = true
-                    if (!issueKeys(body)) return null
                 }
-                "x" -> {
-                    blog("enc=x (auth rejected) -> clearing")
-                    fail(refused("request", status, wire))
-                    clear()
-                    return null
-                }
-                else -> {
-                    blog("unexpected enc=" + enc + " -> clearing (worker has no blob layer?)")
-                    fail(refused("server reply", status, wire))
-                    clear()
-                    return null
-                }
+                else -> fail("همگام‌سازی: پاسخ خوانده نشد")
             }
+            if (lastReason != null) return null
         }
         return null
+    }
+
+    /** the shapes a protocol answer can take when there is nothing to read: a busy edge, or a
+     *  worker older than the blob layer */
+    private fun refusedLine(status: Int): String {
+        val why = NativeSec.syncReason()
+        return when {
+            status >= 500 -> "server busy (HTTP " + status + ") - retried once; the next sync tries again"
+            status in 200..299 -> "unexpected server response (protocol) [" + why + "]"
+            else -> "server answered HTTP " + status + " and not json - old worker? [" + why + "]"
+        }
     }
 
     /** Turn a refused response into one readable sentence: status, the enc code the worker chose

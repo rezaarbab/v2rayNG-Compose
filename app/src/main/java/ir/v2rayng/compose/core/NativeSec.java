@@ -228,17 +228,6 @@ public final class NativeSec {
         }
     }
 
-    private static native byte[] payloadTrimmed();
-
-    /** the payload with its servers array removed - what Kotlin is allowed to see */
-    public static byte[] payloadRest() {
-        if (!READY) return null;
-        try {
-            return payloadTrimmed();
-        } catch (Throwable t) {
-            return null;
-        }
-    }
 
     private static native byte[] scrubUtf8(byte[] in);
 
@@ -265,56 +254,84 @@ public final class NativeSec {
         }
     }
 
-    private static native int payloadLoadCy(String cy);
 
-    private static native String payloadSealAll();
+    private static native void setCtx(android.content.Context ctx);
 
-    private static native int payloadRestore(String sealed);
+    private static native byte[] syncRun();
 
-    public static int payloadLoadRaw(String cy) {
-        if (!READY || cy == null) return -1;
+    private static native int syncOutcome();
+
+    private static native byte[] syncWhy();
+
+    private static native int rowsRestoreSelf();
+
+    private static native int rowsAdopt(String legacy);
+
+    /** the app's Context, so the library can keep its own rows preference without a round trip */
+    public static void giveCtx(android.content.Context ctx) {
+        if (!READY || ctx == null) return;
         try {
-            return payloadLoadCy(cy);
+            setCtx(ctx);
         } catch (Throwable t) {
-            return -1;
         }
     }
 
-    /** the rows sealed with the vault, base64url - an opaque string Kotlin may store as it is */
-    public static String payloadSealed() {
+    /** answer the sync reply that was just sent: the panel bytes, or null with an outcome to read */
+    public static byte[] syncPanel() {
         if (!READY) return null;
         try {
-            return payloadSealAll();
+            return syncRun();
         } catch (Throwable t) {
             return null;
         }
     }
 
-    public static int payloadRestoreRows(String sealed) {
-        if (!READY || sealed == null) return -1;
+    public static int syncResult() {
+        if (!READY) return 0;
         try {
-            return payloadRestore(sealed);
+            return syncOutcome();
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** why the last sync failed, in the worker's words or the library's step - no URLs, no keys */
+    public static String syncReason() {
+        if (!READY) return "";
+        try {
+            byte[] b = syncWhy();
+            return b == null ? "" : new String(b, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** load the server rows the library stored for itself (startup), or -1 when it has none */
+    public static int rowsRestore() {
+        if (!READY) return -1;
+        try {
+            return rowsRestoreSelf();
         } catch (Throwable t) {
             return -1;
         }
     }
 
-    private static native int payloadLoad(String stego);
+    /** the one-time move of the sealed rows the app used to keep in its own settings blob */
+    public static int rowsAdoptFrom(String legacy) {
+        if (!READY) return -1;
+        try {
+            return rowsAdopt(legacy == null || legacy.isEmpty() ? null : legacy);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+
 
     private static native int payloadCount();
 
     private static native byte[] payloadField(int row, int which);
 
-    /** stage 3: decrypt, parse and keep the server list inside the library. Returns the number of
-     *  usable rows, or -1 (the step is in errInfo()). */
-    public static int payloadLoadRows(String stego) {
-        if (!READY || stego == null) return -1;
-        try {
-            return payloadLoad(stego);
-        } catch (Throwable t) {
-            return -1;
-        }
-    }
 
     public static int payloadRows() {
         if (!READY) return 0;

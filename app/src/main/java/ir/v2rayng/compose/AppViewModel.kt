@@ -171,8 +171,17 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             // the list lives in the library between syncs; take it back before anything reads it
             try {
                 if (ir.v2rayng.compose.core.NativeSec.payloadRows() == 0) {
-                    val sealed = ir.v2rayng.compose.core.sec.SecurePrefs.get("srvrows")
-                    if (!sealed.isNullOrEmpty()) ir.v2rayng.compose.core.NativeSec.payloadRestoreRows(sealed)
+                    // the server rows are the library's own business now: it keeps its sealed copy
+                    // in its own preference (it needs the Context for that), and the copy a previous
+                    // build wrote into the app settings is handed over once and then cleared
+                    ir.v2rayng.compose.core.NativeSec.giveCtx(ir.v2rayng.compose.AppCtx.app)
+                    val legacy = ir.v2rayng.compose.core.sec.SecurePrefs.get("srvrows")
+                    if (!legacy.isNullOrEmpty() &&
+                        ir.v2rayng.compose.core.NativeSec.rowsAdoptFrom(legacy) > 0
+                    ) ir.v2rayng.compose.core.sec.SecurePrefs.set("srvrows", "", ir.v2rayng.compose.AppCtx.app)
+                    if (ir.v2rayng.compose.core.NativeSec.payloadRows() == 0) {
+                        ir.v2rayng.compose.core.NativeSec.rowsRestore()
+                    }
                 }
             } catch (_: Throwable) {
             }

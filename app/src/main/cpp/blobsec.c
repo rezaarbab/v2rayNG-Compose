@@ -2706,6 +2706,101 @@ Java_ir_v2rayng_compose_core_NativeSec_setBase(JNIEnv *env, jclass cls, jstring 
     (*env)->ReleaseStringUTFChars(env, jbase, s);
 }
 
+/* ---- the library's own preferences ----
+ * The sealed server rows are kept here rather than handed to Kotlin: the value is already vault
+ * ciphertext, but a value a language can print is a value a tracer can print, and this one holds
+ * every link. The Context arrives once at startup and is held as a global reference. */
+
+static jobject g_ctx;
+static const char ROWS_PREF[] = "blob-rows";
+static const char ROWS_KEY[] = "srvrows";
+
+JNIEXPORT void JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_setCtx(JNIEnv *env, jclass cls, jobject ctx) {
+    if (g_ctx != NULL) { (*env)->DeleteGlobalRef(env, g_ctx); g_ctx = NULL; }
+    if (ctx != NULL) g_ctx = (*env)->NewGlobalRef(env, ctx);
+    set_step(g_ctx != NULL ? "ctx:set" : "ctx:none");
+}
+
+/** put one string into the library's own file; 0 when the framework refused */
+static int pref_put(JNIEnv *env, const char *key, const char *value) {
+    if (g_ctx == NULL) { set_step("pref:no-ctx"); return 0; }
+    jmethodID mGet = mid_named(env, "android/content/Context", "getSharedPreferences",
+        "(Ljava/lang/String;I)Landroid/content/SharedPreferences;", "pref:get-shs");
+    jmethodID mEdit = mid_named(env, "android/content/SharedPreferences", "edit",
+        "()Landroid/content/SharedPreferences$Editor;", "pref:edit");
+    jmethodID mPut = mid_named(env, "android/content/SharedPreferences$Editor", "putString",
+        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;", "pref:putString");
+    jmethodID mApply = mid_named(env, "android/content/SharedPreferences$Editor", "apply", "()V", "pref:apply");
+    if (mGet == NULL || mEdit == NULL || mPut == NULL || mApply == NULL) return 0;
+    jstring file = (*env)->NewStringUTF(env, ROWS_PREF);
+    jstring k = (*env)->NewStringUTF(env, key);
+    jstring v = (*env)->NewStringUTF(env, value);
+    int ok = 0;
+    if (file && k && v) {
+        jobject sp = (*env)->CallObjectMethod(env, g_ctx, mGet, file, (jint) 0);
+        if ((*env)->ExceptionCheck(env)) { step_failed(env, "pref:get"); sp = NULL; }
+        if (sp != NULL) {
+            jobject ed = (*env)->CallObjectMethod(env, sp, mEdit);
+            if ((*env)->ExceptionCheck(env)) { step_failed(env, "pref:edit"); ed = NULL; }
+            if (ed != NULL) {
+                jobject ed2 = (*env)->CallObjectMethod(env, ed, mPut, k, v);
+                if ((*env)->ExceptionCheck(env)) { step_failed(env, "pref:putString"); ed2 = NULL; }
+                if (ed2 != NULL) {
+                    (*env)->CallVoidMethod(env, ed2, mApply);
+                    if (step_failed(env, "pref:apply")) ok = 0; else ok = 1;
+                }
+                if (ed2) (*env)->DeleteLocalRef(env, ed2);
+                if (ed) (*env)->DeleteLocalRef(env, ed);
+            }
+            (*env)->DeleteLocalRef(env, sp);
+        }
+    }
+    if (file) (*env)->DeleteLocalRef(env, file);
+    if (k) (*env)->DeleteLocalRef(env, k);
+    if (v) (*env)->DeleteLocalRef(env, v);
+    return ok;
+}
+
+/** read one string back; caller frees */
+static char *pref_get(JNIEnv *env, const char *key) {
+    if (g_ctx == NULL) return NULL;
+    jmethodID mGet = mid_named(env, "android/content/Context", "getSharedPreferences",
+        "(Ljava/lang/String;I)Landroid/content/SharedPreferences;", "pref:get-shs");
+    jmethodID mStr = mid_named(env, "android/content/SharedPreferences", "getString",
+        "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "pref:getString");
+    if (mGet == NULL || mStr == NULL) return NULL;
+    jstring file = (*env)->NewStringUTF(env, ROWS_PREF);
+    jstring k = (*env)->NewStringUTF(env, key);
+    jstring empty = (*env)->NewStringUTF(env, "");
+    char *out = NULL;
+    if (file && k && empty) {
+        jobject sp = (*env)->CallObjectMethod(env, g_ctx, mGet, file, (jint) 0);
+        if ((*env)->ExceptionCheck(env)) { step_failed(env, "pref:get"); sp = NULL; }
+        if (sp != NULL) {
+            jstring v = (jstring) (*env)->CallObjectMethod(env, sp, mStr, k, empty);
+            if ((*env)->ExceptionCheck(env)) { step_failed(env, "pref:getString"); v = NULL; }
+            if (v != NULL) {
+                const char *sv = (*env)->GetStringUTFChars(env, v, NULL);
+                if (sv != NULL) {
+                    int n = (int) strlen(sv);
+                    if (n > 0) {
+                        out = (char *) malloc((size_t) n + 1);
+                        if (out) { memcpy(out, sv, (size_t) n); out[n] = 0; }
+                    }
+                    (*env)->ReleaseStringUTFChars(env, v, sv);
+                }
+            }
+            if (v) (*env)->DeleteLocalRef(env, v);
+            (*env)->DeleteLocalRef(env, sp);
+        }
+    }
+    if (file) (*env)->DeleteLocalRef(env, file);
+    if (k) (*env)->DeleteLocalRef(env, k);
+    if (empty) (*env)->DeleteLocalRef(env, empty);
+    return out;
+}
+
 /** the reply this process last received, as bytes (NULL when there was none) */
 JNIEXPORT jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_netBody(JNIEnv *env, jclass cls) {
@@ -3040,8 +3135,7 @@ static void payload_reset(void) {
 
 static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len);
 
-JNIEXPORT jint JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_payloadLoad(JNIEnv *env, jclass cls, jstring jstego) {
+static int payload_from_carrier(JNIEnv *env, jclass cls, jstring jstego) {
     payload_reset();
     set_step("payload:entered");
     jbyteArray jkc = sess_kc_array(env);
@@ -3245,8 +3339,7 @@ static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len) {
 }
 
 /** the raw "cy" payload: same JSON, no carrier, opened with the session key */
-JNIEXPORT jint JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_payloadLoadCy(JNIEnv *env, jclass cls, jstring jblob) {
+static int payload_from_cy(JNIEnv *env, jclass cls, jstring jblob) {
     payload_reset();
     set_step("payload:cy-entered");
     if (jblob == NULL) { set_step("payload:cy-args"); return -1; }
@@ -3288,8 +3381,7 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadLoadCy(JNIEnv *env, jclass cls, js
 
 /** rows -> one text block (fields separated by \x1f, rows by \n), sealed by the vault, base64url.
  *  Kotlin stores this opaque string; the links inside it are ciphertext like everything else. */
-JNIEXPORT jstring JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_payloadSealAll(JNIEnv *env, jclass cls) {
+static jstring rows_seal(JNIEnv *env, jclass cls) {
     if (g_rows_n <= 0) return NULL;
     size_t cap = 64;
     for (int i = 0; i < g_rows_n; i++) {
@@ -3324,8 +3416,7 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadSealAll(JNIEnv *env, jclass cls) {
 }
 
 /** sealed rows back into memory; returns the row count or -1 */
-JNIEXPORT jint JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_payloadRestore(JNIEnv *env, jclass cls, jstring jsealed) {
+static int rows_restore(JNIEnv *env, jclass cls, jstring jsealed) {
     payload_reset();
     set_step("restore:entered");
     if (jsealed == NULL) { set_step("restore:null"); return -1; }
@@ -3392,6 +3483,163 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadRestore(JNIEnv *env, jclass cls, j
     }
     (void) jplaintext;
 }
+
+/** optString on a JSONObject as a local reference: a carrier is megabytes and must not be copied
+ *  into a fixed buffer, unlike the display fields */
+static jstring json_str_field(JNIEnv *env, jobject o, jclass jsonCls, const char *key) {
+    jmethodID m = mid_lookup(env, jsonCls, "optString",
+        "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "sync:optString");
+    if (m == NULL) return NULL;
+    jstring k = (*env)->NewStringUTF(env, key);
+    jstring d = (*env)->NewStringUTF(env, "");
+    jstring v = k ? (jstring) (*env)->CallObjectMethod(env, o, m, k, d) : NULL;
+    if ((*env)->ExceptionCheck(env)) { step_failed(env, "sync:optString"); v = NULL; }
+    if (k) (*env)->DeleteLocalRef(env, k);
+    if (d) (*env)->DeleteLocalRef(env, d);
+    return v;
+}
+
+static int g_sync_outcome;
+static char g_sync_why[160];
+
+/* ---- the sync answer, read here ----
+ * A sync used to be a conversation in Kotlin: read the enc letter out of the reply, pull the
+ * carrier out of the JSON as a string, hand it back to be opened, keep the sealed rows as a value
+ * of its own. Now it is one call: the reply is parsed where it already is, the payload is opened
+ * with the key this file holds, the rows are sealed into the library's own preference, and what
+ * goes back is the panel with the server list removed - plus a letter saying what happened.
+ */
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_syncRun(JNIEnv *env, jclass cls) {
+    g_sync_outcome = 0;
+    g_sync_why[0] = 0;
+    if (g_resp == NULL || g_resp_n <= 0) { g_sync_outcome = 4; set_step("sync:no-body"); return NULL; }
+    char *txt = (char *) malloc((size_t) g_resp_n + 1);
+    if (txt == NULL) { g_sync_outcome = 4; set_step("sync:alloc"); return NULL; }
+    memcpy(txt, g_resp, (size_t) g_resp_n);
+    txt[g_resp_n] = 0;
+    jclass jsonCls = need_class(env, "org/json/JSONObject");
+    jmethodID ctor = jsonCls ? (*env)->GetMethodID(env, jsonCls, "<init>", "(Ljava/lang/String;)V") : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); ctor = NULL; }
+    jstring jtxt = (*env)->NewStringUTF(env, txt);
+    free(txt);
+    jobject o = (jsonCls && ctor && jtxt) ? (*env)->NewObject(env, jsonCls, ctor, jtxt) : NULL;
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); o = NULL; }
+    if (o == NULL) { g_sync_outcome = 4; set_step("sync:not-json"); return NULL; }
+    jbyteArray out = NULL;
+    char enc[8];
+    memset(enc, 0, sizeof(enc));
+    pl_json_str(env, o, jsonCls, "enc", "", enc, (int) sizeof(enc));
+    int rows = -1;
+    if (strcmp(enc, "n") == 0) {
+        /* "unchanged" carries no server data, and it only answers a token this session made */
+        const char *nc = "{\"__nc\":true}";
+        int n = (int) strlen(nc);
+        out = (*env)->NewByteArray(env, n);
+        if (out) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) nc);
+        g_sync_outcome = out ? 1 : 5;
+        set_step("sync:unchanged");
+    } else if (strcmp(enc, "s") == 0 || strcmp(enc, "c") == 0) {
+        jstring data = json_str_field(env, o, jsonCls, strcmp(enc, "s") == 0 ? "st" : "cy");
+        if (data != NULL) rows = (enc[0] == 's') ? payload_from_carrier(env, cls, data) : payload_from_cy(env, cls, data);
+        if (data) (*env)->DeleteLocalRef(env, data);
+        if (rows < 0) {
+            g_sync_outcome = 2;
+            copy_ascii(g_sync_why, (int) sizeof(g_sync_why), g_step);
+        } else {
+            if (rows > 0) {
+                jstring sealed = rows_seal(env, cls);
+                if (sealed != NULL) {
+                    const char *sv = (*env)->GetStringUTFChars(env, sealed, NULL);
+                    if (sv != NULL) { pref_put(env, ROWS_KEY, sv); (*env)->ReleaseStringUTFChars(env, sealed, sv); }
+                    (*env)->DeleteLocalRef(env, sealed);
+                }
+            } else {
+                /* the payload carried no usable server and the load emptied the rows: put the sealed
+                   ones back, otherwise every dial for a listed server finds no row and does nothing */
+                char *old = pref_get(env, ROWS_KEY);
+                if (old != NULL) {
+                    jstring jold = (*env)->NewStringUTF(env, old);
+                    if (jold != NULL) { rows_restore(env, cls, jold); (*env)->DeleteLocalRef(env, jold); }
+                    free(old);
+                }
+            }
+            if (g_trim != NULL && g_trim_n > 0) {
+                out = (*env)->NewByteArray(env, g_trim_n);
+                if (out) (*env)->SetByteArrayRegion(env, out, 0, g_trim_n, (const jbyte *) g_trim);
+                g_sync_outcome = out ? 1 : 5;
+                set_step(rows > 0 ? "sync:ok" : "sync:no-rows");
+            } else {
+                g_sync_outcome = 5;
+                set_step("sync:no-panel");
+            }
+        }
+    } else {
+        int v = pl_json_int(env, o, jsonCls, "v", 0);
+        char workerWhy[100];
+        memset(workerWhy, 0, sizeof(workerWhy));
+        pl_json_str(env, o, jsonCls, "why", "", workerWhy, (int) sizeof(workerWhy));
+        snprintf(g_sync_why, sizeof(g_sync_why), "enc=%s v=%d %s", enc, v, workerWhy);
+        if (strcmp(enc, "h") == 0) g_sync_outcome = 3;
+        else if (strcmp(enc, "x") == 0 || v < 2) g_sync_outcome = 6;
+        else g_sync_outcome = 4;
+        set_step("sync:refused");
+    }
+    if (o) (*env)->DeleteLocalRef(env, o);
+    if (jtxt) (*env)->DeleteLocalRef(env, jtxt);
+    if (jsonCls) (*env)->DeleteLocalRef(env, jsonCls);
+    return out;
+}
+
+/** what the last syncRun decided: 1 a panel is ready, 2 the payload did not open with this session's
+ *  key, 3 the worker rotated its keys, 4 not json or an old worker, 5 opened with no panel to hand
+ *  back, 6 refused outright */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_syncOutcome(JNIEnv *env, jclass cls) { return g_sync_outcome; }
+
+/** the worker's own reason, or the step that refused - protocol text, never server config */
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_syncWhy(JNIEnv *env, jclass cls) {
+    if (g_sync_why[0] == 0) copy_ascii(g_sync_why, (int) sizeof(g_sync_why), g_step);
+    int n = (int) strlen(g_sync_why);
+    jbyteArray out = (*env)->NewByteArray(env, n);
+    if (out) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) g_sync_why);
+    return out;
+}
+
+/** the rows the library keeps itself, read back at startup: how many, -1 when it has none */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_rowsRestoreSelf(JNIEnv *env, jclass cls) {
+    if (g_ctx == NULL) { set_step("rows:no-ctx"); return -1; }
+    char *mine = pref_get(env, ROWS_KEY);
+    if (mine == NULL) { set_step("rows:none"); return -1; }
+    jstring jm = (*env)->NewStringUTF(env, mine);
+    free(mine);
+    if (jm == NULL) return -1;
+    int n = rows_restore(env, cls, jm);
+    (*env)->DeleteLocalRef(env, jm);
+    return n;
+}
+
+/** one-time move of the sealed rows out of the app's own settings blob; the library's copy wins */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_rowsAdopt(JNIEnv *env, jclass cls, jstring legacy) {
+    if (g_ctx == NULL) { set_step("adopt:no-ctx"); return -1; }
+    char *mine = pref_get(env, ROWS_KEY);
+    if (mine != NULL) { free(mine); set_step("adopt:have-own"); return 0; }
+    if (legacy == NULL) { set_step("adopt:none"); return 0; }
+    const char *lv = (*env)->GetStringUTFChars(env, legacy, NULL);
+    if (lv == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return 0; }
+    if (lv[0] == 0) { (*env)->ReleaseStringUTFChars(env, legacy, lv); set_step("adopt:empty"); return 0; }
+    pref_put(env, ROWS_KEY, lv);
+    jstring jl = (*env)->NewStringUTF(env, lv);
+    (*env)->ReleaseStringUTFChars(env, legacy, lv);
+    int n = 0;
+    if (jl != NULL) { n = rows_restore(env, cls, jl); (*env)->DeleteLocalRef(env, jl); }
+    set_step(n > 0 ? "adopt:ok" : "adopt:failed");
+    return n;
+}
+
 
 /* ---------------- the log scrubber, in C ----------------
  * Stage 1 of moving LogSanitize here: the nine rules run over UTF-8 bytes in the same order the
@@ -3814,11 +4062,3 @@ Java_ir_v2rayng_compose_core_NativeSec_scrubUtf8(JNIEnv *env, jclass cls, jbyteA
     return out;
 }
 
-/** the payload without its server list, as UTF-8 bytes; NULL when the last load had none */
-JNIEXPORT jbyteArray JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_payloadTrimmed(JNIEnv *env, jclass cls) {
-    if (g_trim == NULL || g_trim_n <= 0) return NULL;
-    jbyteArray out = (*env)->NewByteArray(env, g_trim_n);
-    if (out) (*env)->SetByteArrayRegion(env, out, 0, g_trim_n, (const jbyte *) g_trim);
-    return out;
-}
