@@ -344,18 +344,16 @@ class XrayVpnService : VpnService() {
             lastDown = 0
             zeroStreak = 0
             controller = Libv2ray.newCoreController(callback)
-            // the library owns the list and the link inside it: it assembles the config for this
-            // row and hands back the text, and nothing here can build one from a link it never had
-            val cfg = NativeSec.coreConfig(row, 0, 0)
-            if (cfg.isNullOrEmpty()) {
-                // the row exists but its link did not parse: take the tunnel back down rather than
-                // leave a core-less TUN holding the VPN slot
+            /* the config is assembled in the library and handed to the core there: this process
+               never holds the text that contains the address, the port and the id */
+            val ctl = controller
+            if (ctl == null || NativeSec.coreStartWith(ctl, row, tunFd) != 1) {
+                // take the tunnel back down rather than leave a core-less TUN holding the VPN slot
                 stopCore()
-                XrayBridge.addLog("ERROR", "پیکربندی این سرور ساخته نشد")
-                XrayBridge.setState(RealState.BROKEN, "config unavailable")
+                XrayBridge.addLog("ERROR", "هستهٔ اتصال برای این سرور بالا نیامد")
+                XrayBridge.setState(RealState.BROKEN, "core start failed")
                 return
             }
-            controller?.startLoop(cfg, tunFd)
             tunnelUp = true
             connectedSince = System.currentTimeMillis()
             lastNotifiedSec = -1L

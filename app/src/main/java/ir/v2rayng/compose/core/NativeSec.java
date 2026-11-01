@@ -241,16 +241,50 @@ public final class NativeSec {
         }
     }
 
-    private static native String coreConfigForRow(int row, int mode, int socksPort);
+    private static native int coreStart(Object controller, int row, int fd);
 
-    /** the config for a stored row as a String: libv2ray startLoop only takes one, so this is the
-     *  single place a config text crosses to Kotlin - a property of that API, stated on purpose */
-    public static String coreConfig(int row, int mode, int socksPort) {
-        if (!READY || row < 0) return null;
+    private static native long measureDelay(int row, String url);
+
+    private static native int flagStart(int row, int socksPort, Object callback);
+
+    private static native void flagStop();
+
+    /** start the tunnel core on this controller - the config is built in the library and never
+     *  becomes a value here; 1 means the core took it */
+    public static int coreStartWith(Object controller, int row, int fd) {
+        if (!READY || controller == null || row < 0) return 0;
         try {
-            return coreConfigForRow(row, mode, socksPort);
+            return coreStart(controller, row, fd);
         } catch (Throwable t) {
-            return null;
+            return 0;
+        }
+    }
+
+    /** the delay to a url through this row, in ms, or -1 */
+    public static long delay(int row, String url) {
+        if (!READY || row < 0 || url == null) return -1L;
+        try {
+            return measureDelay(row, url);
+        } catch (Throwable t) {
+            return -1L;
+        }
+    }
+
+    /** a short-lived core with a local socks port, for the exit-country probe */
+    public static int probeStart(int row, int socksPort, Object callback) {
+        if (!READY || row < 0 || callback == null) return 0;
+        try {
+            return flagStart(row, socksPort, callback);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    public static void probeStop() {
+        if (!READY) return;
+        try {
+            flagStop();
+        } catch (Throwable t) {
         }
     }
 

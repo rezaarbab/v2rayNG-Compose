@@ -1287,27 +1287,25 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         var token = ""
         var detail = ""
         var via = "https"
-        val pingCfg = ir.v2rayng.compose.core.NativeSec.coreConfig(row, 1, 0)
-            ?: return@withContext null to "config"
-        try {
-            val d = libv2ray.Libv2ray.measureOutboundDelay(pingCfg, PING_URL_HTTPS)
-            if (d >= 0) ms = d.toInt()
-        } catch (e: Exception) {
-            val raw = e.message ?: ""
+        // the delay is measured inside the library, so the config text - which holds the
+        // address, the port and the id - is never a value here; the refusal it did not swallow
+        // is the library step, and that is what the words below are read out of
+        val d = ir.v2rayng.compose.core.NativeSec.delay(row, PING_URL_HTTPS)
+        if (d >= 0) ms = d.toInt()
+        else {
+            val raw = ir.v2rayng.compose.core.NativeSec.errInfo()
             token = shortNetError(raw)
             detail = raw
         }
         if (ms == null && token != "server down" && token != "refused") {
             // the server link is fine but https got killed at the tls/anti-bot layer - plain http still works
-            try {
-                val d = libv2ray.Libv2ray.measureOutboundDelay(pingCfg, PING_URL_HTTP)
-                if (d >= 0) ms = d.toInt()
+            val d2 = ir.v2rayng.compose.core.NativeSec.delay(row, PING_URL_HTTP)
+            if (d2 >= 0) {
+                ms = d2.toInt()
                 via = "http"
-            } catch (e: Exception) {
-                if (detail.isBlank()) {
-                    detail = e.message ?: ""
-                    token = shortNetError(detail)
-                }
+            } else if (detail.isBlank()) {
+                detail = ir.v2rayng.compose.core.NativeSec.errInfo()
+                token = shortNetError(detail)
             }
         }
         if (ms == null) {
@@ -1340,10 +1338,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 override fun shutdown(): Long = 0L
                 override fun onEmitStatus(p0: Long, p1: String?): Long = 0L
             }
-            val c = libv2ray.Libv2ray.newCoreController(cb)
-            val flagCfg = ir.v2rayng.compose.core.NativeSec.coreConfig(row, 2, socksPort)
-                ?: return null
-            c.startLoop(flagCfg, 0)
+            // same short-lived core, started by the library from the row it holds
+            if (ir.v2rayng.compose.core.NativeSec.probeStart(row, socksPort, cb) != 1) return null
             var code: String? = null
             try {
                 val conn = URL("https://www.cloudflare.com/cdn-cgi/trace").openConnection(
@@ -1354,7 +1350,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 val text = conn.inputStream.bufferedReader().use { it.readText() }
                 code = Regex("^loc=([A-Za-z]{2})$", RegexOption.MULTILINE).find(text)?.groupValues?.get(1)
             } finally {
-                try { c.stopLoop() } catch (_: Exception) {}
+                ir.v2rayng.compose.core.NativeSec.probeStop()
             }
             code?.uppercase()
         } catch (_: Exception) {

@@ -3097,10 +3097,12 @@ static int config_build(sbuf *s, int mode, int socksPort) {
     (void) socksPort;
     return s->b != NULL;
 }
-/** the same config as a String, because libv2ray startLoop only takes one: this single call is
- *  the floor this core API sets, and the comment is here so nobody reads it as an oversight. */
-JNIEXPORT jstring JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_coreConfigForRow(JNIEnv *env, jclass cls, jint row, jint mode, jint socksPort) {
+/** the config for a row, as the text libv2ray only ever accepts. That text holds the
+ *  server address, its port and its id in plain text, so it is built here and passed to the
+ *  core from here as well: what the app gets back from every call below is a number. The one
+ *  String the core API demands never crosses into Kotlin - that is the floor, stated so nobody
+ *  reads the missing export as an oversight. */
+static jstring cfg_text(JNIEnv *env, jclass cls, jint row, jint mode, jint socksPort) {
     if (row < 0 || row >= g_rows_n) return NULL;
     jstring jlink = (*env)->NewStringUTF(env, g_rows[row].link);
     if (jlink == NULL) return NULL;
@@ -3115,6 +3117,88 @@ Java_ir_v2rayng_compose_core_NativeSec_coreConfigForRow(JNIEnv *env, jclass cls,
     if (out) set_step("cfgforrow:ok");
     return out;
 }
+
+/* ---- the core, started from here ----
+ * The only way into libv2ray is a config String, and that string is the server's address, port and
+ * id in plain text. Kotlin used to receive it and pass it on, which is what a method tracer printed.
+ * Now the text is assembled here and given to the core here, from the same thread and with the same
+ * callback object the app already had; every answer below is a number.
+ */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_coreStart(JNIEnv *env, jclass cls, jobject jcontroller, jint row, jint fd) {
+    if (jcontroller == NULL) { set_step("start:no-controller"); return 0; }
+    jstring cfg = cfg_text(env, cls, row, 0, 0);
+    if (cfg == NULL) return 0;
+    jmethodID mStart = mid_named(env, "libv2ray/CoreController", "startLoop", "(Ljava/lang/String;I)V", "start:startLoop");
+    if (mStart == NULL) { (*env)->DeleteLocalRef(env, cfg); return 0; }
+    (*env)->CallVoidMethod(env, jcontroller, mStart, cfg, (jint) fd);
+    (*env)->DeleteLocalRef(env, cfg);
+    if (step_failed(env, "start:startLoop")) return 0;
+    set_step("start:ok");
+    return 1;
+}
+
+/** the ping measurement for a row (mode 1 config): milliseconds, or -1 with the step that refused */
+JNIEXPORT jlong JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_measureDelay(JNIEnv *env, jclass cls, jint row, jstring jurl) {
+    if (jurl == NULL) { set_step("delay:no-url"); return -1; }
+    jstring cfg = cfg_text(env, cls, row, 1, 0);
+    if (cfg == NULL) return -1;
+    jclass lb = need_class(env, "libv2ray/Libv2ray");
+    if (lb == NULL) { (*env)->DeleteLocalRef(env, cfg); return -1; }
+    jmethodID mMeas = mid_lookup(env, lb, "measureOutboundDelay",
+        "(Ljava/lang/String;Ljava/lang/String;)J", "delay:measureOutboundDelay");
+    if (mMeas == NULL) { (*env)->DeleteLocalRef(env, lb); (*env)->DeleteLocalRef(env, cfg); return -1; }
+    jlong d = (*env)->CallStaticLongMethod(env, lb, mMeas, cfg, jurl);
+    if (step_failed(env, "delay:measure")) d = -1;
+    (*env)->DeleteLocalRef(env, lb);
+    (*env)->DeleteLocalRef(env, cfg);
+    set_step(d >= 0 ? "delay:ok" : "delay:none");
+    return d;
+}
+
+/* one flag probe at a time, and only this file holds its controller */
+static jobject g_flag_ctrl;
+
+/** start the short-lived core with a local socks inbound (mode 2 config) so the app can ask an
+ *  external service where this server exits; flagStop takes it down again */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_flagStart(JNIEnv *env, jclass cls, jint row, jint socksPort, jobject jcb) {
+    if (jcb == NULL) { set_step("flag:no-callback"); return 0; }
+    if (g_flag_ctrl != NULL) { (*env)->DeleteGlobalRef(env, g_flag_ctrl); g_flag_ctrl = NULL; }
+    jstring cfg = cfg_text(env, cls, row, 2, socksPort);
+    if (cfg == NULL) return 0;
+    jclass lb = need_class(env, "libv2ray/Libv2ray");
+    jmethodID mNew = lb ? mid_lookup(env, lb, "newCoreController",
+        "(Llibv2ray/CoreCallbackHandler;)Llibv2ray/CoreController;", "flag:newCoreController") : NULL;
+    jobject ctrl = (lb && mNew) ? (*env)->CallStaticObjectMethod(env, lb, mNew, jcb) : NULL;
+    if ((*env)->ExceptionCheck(env)) { step_failed(env, "flag:newCoreController"); ctrl = NULL; }
+    if (lb) (*env)->DeleteLocalRef(env, lb);
+    if (ctrl == NULL) { (*env)->DeleteLocalRef(env, cfg); return 0; }
+    jmethodID mStart = mid_named(env, "libv2ray/CoreController", "startLoop", "(Ljava/lang/String;I)V", "flag:startLoop");
+    if (mStart == NULL) { (*env)->DeleteLocalRef(env, ctrl); (*env)->DeleteLocalRef(env, cfg); return 0; }
+    (*env)->CallVoidMethod(env, ctrl, mStart, cfg, (jint) 0);
+    (*env)->DeleteLocalRef(env, cfg);
+    if (step_failed(env, "flag:startLoop")) { (*env)->DeleteLocalRef(env, ctrl); return 0; }
+    g_flag_ctrl = (*env)->NewGlobalRef(env, ctrl);
+    (*env)->DeleteLocalRef(env, ctrl);
+    set_step("flag:started");
+    return 1;
+}
+
+JNIEXPORT void JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_flagStop(JNIEnv *env, jclass cls) {
+    if (g_flag_ctrl == NULL) return;
+    jmethodID mStop = mid_named(env, "libv2ray/CoreController", "stopLoop", "()V", "flag:stopLoop");
+    if (mStop != NULL) {
+        (*env)->CallVoidMethod(env, g_flag_ctrl, mStop);
+        step_failed(env, "flag:stopLoop");
+    }
+    (*env)->DeleteGlobalRef(env, g_flag_ctrl);
+    g_flag_ctrl = NULL;
+    set_step("flag:stopped");
+}
+
 
 /* ---------------- the server list, kept here ----------------
  * Stage 3, first piece: the decrypted payload is parsed with org.json through JNI (the same
