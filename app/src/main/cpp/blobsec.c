@@ -2702,6 +2702,8 @@ typedef struct {
 
 static plr_t *g_rows;
 static int g_rows_n;
+static unsigned char *g_trim;
+static int g_trim_n;
 
 /** the config text, assembled once and shared by the file writer and the string entry */
 static int config_build(sbuf *s, int mode, int socksPort) {
@@ -2781,6 +2783,8 @@ Java_ir_v2rayng_compose_core_NativeSec_coreConfigForRow(JNIEnv *env, jclass cls,
 static void payload_reset(void) {
     if (g_rows) { free(g_rows); g_rows = NULL; }
     g_rows_n = 0;
+    if (g_trim) { free(g_trim); g_trim = NULL; }
+    g_trim_n = 0;
 }
 
 static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len);
@@ -2844,9 +2848,6 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadClear(JNIEnv *env, jclass cls) {
  * seals them with the vault, Kotlin stores that opaque string; payloadRestore() takes it back and
  * refills the rows, so connect works after a cold start without a fresh sync.
  */
-
-static unsigned char *g_trim;
-static int g_trim_n;
 
 /** drop the servers array from the parsed root and keep the rest: the list never travels to
  *  Kotlin, the panel other fields still do */

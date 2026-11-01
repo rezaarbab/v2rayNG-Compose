@@ -278,10 +278,10 @@ object BlobSecure {
                 "s", "c" -> {
                     val opened = if (enc == "s") revealPayload(resp.getString("st"), sNow.kc) else openCy(resp.getString("cy"), sNow.kc)
                     if (opened != null) {
-                        // stage 3, first step: the same payload also lands in the library, rows and
-                        // links included, and is sealed there for the next start. The JSON still
-                        // flows until the switch commit, so the app behaves exactly as before - this
-                        // only starts carrying the list where the switch will read it from.
+                        // the same payload is parsed inside the library into the row store; the answer
+                        // handed to Kotlin is the library's own copy with the list removed, so a link
+                        // can only be read by the code that never sees this JSON.
+                        var panel: JSONObject? = null
                         try {
                             val rows = if (enc == "s") NativeSec.payloadLoadRows(resp.getString("st"), sNow.kc)
                                        else NativeSec.payloadLoadRaw(
@@ -292,8 +292,14 @@ object BlobSecure {
                                 NativeSec.payloadSealed()?.let { sealed ->
                                     if (sealed.isNotEmpty()) SecurePrefs.set("srvrows", sealed, AppCtx.app)
                                 }
-                                // the list is in the library: drop it from what goes back to Kotlin
-                                opened.remove("servers")
+                                NativeSec.payloadRest()?.takeIf { it.isNotEmpty() }?.let { raw ->
+                                    panel = try {
+                                        JSONObject(String(raw, Charsets.UTF_8))
+                                    } catch (_: Exception) {
+                                        null
+                                    }
+                                }
+                                if (panel == null) opened.remove("servers")
                             } else {
                                 // the load emptied the rows before it failed: put back what was sealed,
                                 // otherwise every dial for a listed server finds no row and does nothing
@@ -303,7 +309,7 @@ object BlobSecure {
                         } catch (_: Throwable) {
                         }
                         lastPayloadSecure = true
-                        return opened
+                        return panel ?: opened
                     }
                     val why = BlobStego.lastWhy ?: "payload unreadable"
                     blog("enc=" + enc + " open failed: " + why)
