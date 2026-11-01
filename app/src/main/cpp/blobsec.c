@@ -3153,14 +3153,59 @@ static void scr_ipv4(sbuf *o, const unsigned char *s, int n) {
 }
 
 /** the two IPv6 shapes the Kotlin matched -> "[ip]" */
-static void scr_ipv6(sbuf *o, const unsigned char *s, int n) {
+/* the short form, \b[hex]{1,4}:[hex:]*::[hex:.]*\b. What the engine backtracks is the split
+ * between the two quantifiers, so the "::" the match lands on is the RIGHTMOST one first and only
+ * then an earlier one - the first port took the last "::" and nothing else, which is how a run of
+ * addresses with no separator between them survived here while the regex scrubbed it. A '.' may
+ * only appear after the chosen "::" (it is not in the class before it), and the end is the longest
+ * position whose trailing boundary holds. */
+static void scr_ipv6_short(sbuf *o, const unsigned char *s, int n) {
     int i = 0, last = 0;
     while (i < n) {
         if ((i == 0 || !scr_word(s[i - 1])) && scr_hex(s[i])) {
-            /* long form: (1..4 hex ':' ){4,} 1..4 hex */
-            int p = i, groups = 0;
-            while (p < n && scr_hex(s[p]) && groups < 1) { p++; }   /* first group, at least 1 */
+            int p = i;
+            while (p < n && scr_hex(s[p])) p++;
             int first = p - i;
+            int hit = -1;
+            if (first >= 1 && first <= 4 && p < n && s[p] == ':') {
+                int M = p + 1;
+                while (M < n && (scr_hex(s[M]) || s[M] == ':' || s[M] == '.')) M++;
+                for (int e = M; e >= p + 3; e--) {
+                    int prevWord = scr_word(s[e - 1]) ? 1 : 0;
+                    int nextWord = (e < n && scr_word(s[e])) ? 1 : 0;
+                    if (prevWord == nextWord) continue;
+                    int dbl = -1, dot = -1;
+                    for (int k = p + 1; k + 1 < e; k++) {
+                        if (dbl < 0 && s[k] == ':' && s[k + 1] == ':') dbl = k - (p + 1);
+                        if (dot < 0 && s[k] == '.') dot = k - (p + 1);
+                    }
+                    if (dbl < 0) break;   /* every shorter end is a prefix: none has "::" */
+                    if (dot >= 0 && dot < dbl) continue;
+                    hit = e;
+                    break;
+                }
+            }
+            if (hit > 0) {
+                scr_put(o, s, last, i);
+                sb_add(o, "[ip]");
+                i = hit;
+                last = hit;
+                continue;
+            }
+        }
+        i++;
+    }
+    scr_put(o, s, last, n);
+}
+
+/* the long form, \b(?:[hex]{1,4}:){4,}[hex]{1,4}\b - a separate pass because the regexes were
+ * separate, and this one ran second */
+static void scr_ipv6_long(sbuf *o, const unsigned char *s, int n) {
+    int i = 0, last = 0;
+    while (i < n) {
+        if ((i == 0 || !scr_word(s[i - 1])) && scr_hex(s[i])) {
+            int p = i, first = 0;
+            while (p < n && scr_hex(s[p])) { p++; first++; }
             int q = p, g = 0;
             while (q < n && s[q] == ':') {
                 int r = q + 1, d = 0;
@@ -3174,36 +3219,6 @@ static void scr_ipv6(sbuf *o, const unsigned char *s, int n) {
                 sb_add(o, "[ip]");
                 i = q;
                 last = q;
-                continue;
-            }
-            /* short form, chosen the way the engine backtracks: the middle is [hex:]* up to the
-             * last double colon, the tail is [hex:.]* after it, and the end is the longest tail
-             * position where the trailing boundary holds (a word char on exactly one side) */
-            int matchEnd = -1;
-            if (p < n && s[p] == ':') {
-                int q0 = p + 1;
-                int mEnd = q0;
-                while (mEnd < n && (scr_hex(s[mEnd]) || s[mEnd] == ':')) mEnd++;
-                int dbl = -1;
-                for (int k = mEnd - 1; k > q0; k--) {
-                    if (s[k] == ':' && s[k - 1] == ':') { dbl = k - 1; break; }
-                }
-                if (dbl >= 0) {
-                    int t0 = dbl + 2;
-                    int tEnd = t0;
-                    while (tEnd < n && (scr_hex(s[tEnd]) || s[tEnd] == ':' || s[tEnd] == '.')) tEnd++;
-                    for (int e = tEnd; e >= t0; e--) {
-                        int prevWord = (e > 0) && scr_word((unsigned char) s[e - 1]);
-                        int nextWord = (e < n) && scr_word((unsigned char) s[e]);
-                        if (prevWord != nextWord) { matchEnd = e; break; }
-                    }
-                }
-            }
-            if (first >= 1 && first <= 4 && matchEnd > 0) {
-                scr_put(o, s, last, i);
-                sb_add(o, "[ip]");
-                i = matchEnd;
-                last = matchEnd;
                 continue;
             }
         }
@@ -3370,7 +3385,7 @@ typedef void (*scr_fn)(sbuf *o, const unsigned char *s, int n);
 
 static const scr_fn SCR_PASSES[] = {
     scr_links, scr_uuid, scr_json_secret, scr_json_port, scr_kv_secret,
-    scr_ipv4, scr_ipv6, scr_domains,
+    scr_ipv4, scr_ipv6_short, scr_ipv6_long, scr_domains,
 };
 
 JNIEXPORT jbyteArray JNICALL
