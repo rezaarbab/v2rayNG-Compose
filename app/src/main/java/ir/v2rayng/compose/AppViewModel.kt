@@ -188,8 +188,14 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                         from = "adopted-from-old-build"
                     }
                     if (ir.v2rayng.compose.core.NativeSec.payloadRows() == 0) {
-                        if (ir.v2rayng.compose.core.NativeSec.rowsRestore() > 0) from = "restored-from-library"
-                        else from = "restored: nothing readable"
+                        val r = ir.v2rayng.compose.core.NativeSec.rowsRestore()
+                        /* "nothing readable" used to cover four different failures. The step names one:
+                           rows:none (the library's own preference is empty - a store that never
+                           happened), rows:no-ctx (the Context never reached the library),
+                           restore:vault (something IS stored and the keystore will not open it),
+                           restore:empty (it opened and held no usable row). */
+                        from = if (r > 0) "restored-from-library"
+                        else "restore said $r [" + ir.v2rayng.compose.core.NativeSec.errInfo() + "]"
                     }
                 }
                 /* one line, one number: whether the library holds rows at all is the difference
@@ -821,6 +827,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
         persistServers()
         mergeStamp = System.currentTimeMillis()
+        /* whether these rows will still exist at the next cold start is a different question from
+           whether they are on screen now - and until this line existed, the two looked identical:
+           the seal and the write both returned a value nobody read */
+        log("INFO", "rows stored: " + ir.v2rayng.compose.core.NativeSec.rowsStored() +
+            " (library holds " + ir.v2rayng.compose.core.NativeSec.payloadRows() + ")")
         // auto-ping freshly delivered servers (admin added new ones)
         val newIds = list.map { it.id }.filter { !knownBefore.contains(it) }.toSet()
         if (newIds.isNotEmpty()) {

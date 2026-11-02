@@ -313,6 +313,8 @@ public final class NativeSec {
 
     private static native byte[] syncWhy();
 
+    private static native byte[] rowsSaved();
+
     private static native int rowsRestoreSelf();
 
     private static native int rowsAdopt(String legacy);
@@ -350,6 +352,19 @@ public final class NativeSec {
         if (!READY) return "";
         try {
             byte[] b = syncWhy();
+            return b == null ? "" : new String(b, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** whether the rows of the last sync reached the library's own storage ("stored 23 rows"),
+     *  or which step refused - so a device that loses its rows on every cold start says which half
+     *  of the chain is broken instead of looking like a device that never stored them */
+    public static String rowsStored() {
+        if (!READY) return "";
+        try {
+            byte[] b = rowsSaved();
             return b == null ? "" : new String(b, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Throwable t) {
             return "";

@@ -3961,6 +3961,11 @@ static jstring json_str_field(JNIEnv *env, jobject o, jclass jsonCls, const char
 
 static int g_sync_outcome;
 static char g_sync_why[160];
+/* Whether this sync's rows actually reached the library's own storage, in words. The seal and the
+ * write both had return values that nobody looked at, so a device that lost its rows on every cold
+ * start looked exactly like a device that had never stored them. One number and one step name.
+ */
+static char g_rows_saved[72];
 
 /* ---- the sync answer, read here ----
  * A sync used to be a conversation in Kotlin: read the enc letter out of the reply, pull the
@@ -3974,6 +3979,7 @@ Java_ir_v2rayng_compose_core_NativeSec_syncRun(JNIEnv *env, jclass cls) {
     call_begin("sync:entered");
     g_sync_outcome = 0;
     g_sync_why[0] = 0;
+    g_rows_saved[0] = 0;
     int rn = 0;
     int my_rid = 0;
     char *txt = (char *) resp_take(&rn, &my_rid);
@@ -4029,12 +4035,25 @@ Java_ir_v2rayng_compose_core_NativeSec_syncRun(JNIEnv *env, jclass cls) {
         } else {
             if (rows > 0) {
                 jstring sealed = rows_seal(env, cls);
-                if (sealed != NULL) {
+                if (sealed == NULL) {
+                    snprintf(g_rows_saved, sizeof(g_rows_saved), "seal failed: %s", g_step);
+                } else {
                     const char *sv = (*env)->GetStringUTFChars(env, sealed, NULL);
-                    if (sv != NULL) { pref_put(env, ROWS_KEY, sv); (*env)->ReleaseStringUTFChars(env, sealed, sv); }
+                    if (sv == NULL) {
+                        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+                        snprintf(g_rows_saved, sizeof(g_rows_saved), "seal unreadable");
+                    } else {
+                        int put = pref_put(env, ROWS_KEY, sv);
+                        /* two calls, not one format chosen at run time: a %s fed an int would read a
+                           wild pointer, and clang cannot see it through a selected string literal */
+                        if (put) snprintf(g_rows_saved, sizeof(g_rows_saved), "stored %d rows", rows);
+                        else snprintf(g_rows_saved, sizeof(g_rows_saved), "write failed: %s", g_step);
+                        (*env)->ReleaseStringUTFChars(env, sealed, sv);
+                    }
                     (*env)->DeleteLocalRef(env, sealed);
                 }
             } else {
+                snprintf(g_rows_saved, sizeof(g_rows_saved), "this payload carried no rows");
                 /* the payload carried no usable server and the load emptied the rows: put the sealed
                    ones back, otherwise every dial for a listed server finds no row and does nothing */
                 char *old = pref_get(env, ROWS_KEY);
@@ -4087,6 +4106,16 @@ Java_ir_v2rayng_compose_core_NativeSec_syncWhy(JNIEnv *env, jclass cls) {
     int n = (int) strlen(g_sync_why);
     jbyteArray out = (*env)->NewByteArray(env, n);
     if (out) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) g_sync_why);
+    return out;
+}
+
+/** whether this sync's rows reached storage, and if not, the step that refused - a count and a step
+ *  name, never a server */
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_rowsSaved(JNIEnv *env, jclass cls) {
+    int n = (int) strlen(g_rows_saved);
+    jbyteArray out = (*env)->NewByteArray(env, n);
+    if (out && n) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) g_rows_saved);
     return out;
 }
 
