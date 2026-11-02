@@ -3199,6 +3199,197 @@ Java_ir_v2rayng_compose_core_NativeSec_flagStop(JNIEnv *env, jclass cls) {
     set_step("flag:stopped");
 }
 
+#define PAGE_CAP 8192 /* the providers answer in a few hundred bytes; this is the ceiling, not the size */
+
+/** read a stream into the caller's buffer, stopping at the ceiling */
+static int read_small(JNIEnv *env, jobject is, char *buf, int cap) {
+    jclass isc = (*env)->GetObjectClass(env, is);
+    if (isc == NULL) return -1;
+    jmethodID mRead = mid_lookup(env, isc, "read", "([B)I", "page:read-id");
+    (*env)->DeleteLocalRef(env, isc);
+    if (mRead == NULL) return -1;
+    jbyteArray chunk = (*env)->NewByteArray(env, 2048);
+    if (chunk == NULL) return -1;
+    int n = 0;
+    for (;;) {
+        jint r = (*env)->CallIntMethod(env, is, mRead, chunk);
+        if ((*env)->ExceptionCheck(env)) { step_failed(env, "page:read"); break; }
+        if (r <= 0) break;
+        if (n + r >= cap) r = cap - 1 - n;
+        if (r <= 0) break;   /* the page is bigger than we need */
+        (*env)->GetByteArrayRegion(env, chunk, 0, r, (jbyte *) (buf + n));
+        n += r;
+    }
+    (*env)->DeleteLocalRef(env, chunk);
+    buf[n] = 0;
+    return n;
+}
+
+/** the key has to be a whole word and has to be followed by its separator, so that "ip" cannot
+ *  match inside the url of a refusal page ("https://ipwho.is/faq" would hand back "who.is/faq"
+ *  as this visitor's address) and "country" cannot match the start of "country_code" */
+static const char *key_at(const char *buf, const char *key) {
+    size_t kl = strlen(key);
+    if (kl == 0) return NULL;
+    for (const char *p = buf; (p = strstr(p, key)) != NULL; p++) {
+        if (p > buf) {
+            char b = p[-1];
+            int edge = (b == '"' || b == '\'' || b == ':' || b == '=' || b == ' ' || b == '\t' ||
+                        b == '\n' || b == '\r' || b == '{' || b == ',' || b == '[' || b == '>');
+            if (!edge) continue;
+        }
+        const char *e = p + kl;
+        char a = *e;
+        if ((a >= 'A' && a <= 'Z') || (a >= 'a' && a <= 'z') || (a >= '0' && a <= '9') ||
+            a == '_' || a == '-') continue;
+        const char *s = (*e == '"') ? e + 1 : e;
+        if (*s != '=' && *s != ':') continue;
+        return p;
+    }
+    return NULL;
+}
+
+/** take one key out of a page that is either key=value or "key":"value" */
+static void page_take(const char *buf, const char *key, char *out, int cap) {
+    out[0] = 0;
+    const char *p = key_at(buf, key);
+    if (p == NULL) return;
+    p += strlen(key);
+    while (*p != 0 && (*p == '=' || *p == ':' || *p == '"' || *p == ' ' || *p == 0x09)) p++;
+    int n = 0;
+    while (*p != 0 && n + 1 < cap) {
+        char c = *p;
+        if (c == '"' || c == ',' || c == '}' || c == ']' || c == '\n' || c == '\r' || c == ' ') break;
+        out[n++] = c;
+        p++;
+    }
+    out[n] = 0;
+}
+
+/* ---- fetch a page here, hand back only the asked-for words ----
+ * ipwho.is and ipapi.co answer the exit IP with the city, the ISP, the coordinates and a copy of
+ * the request headers; the cloudflare trace adds the visitor's user-agent. The app shows two of
+ * those facts (the IP it was asked to display and a country code), so the page is read in this file
+ * and only the requested keys leave it - the rest never becomes a value in Kotlin.
+ */
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_netProbe(JNIEnv *env, jclass cls, jstring jurl, jstring jkeys, jint socksPort) {
+    if (jurl == NULL || jkeys == NULL) { set_step("page:no-args"); return NULL; }
+    char answer[512];
+    answer[0] = 0;
+    int parts = 0;
+    int found = 0;      /* keys that actually had a value on this page */
+    int dropped = 0;    /* a part that did not fit: the slots would shift, so say nothing */
+    jclass urlCls = need_class(env, "java/net/URL");
+    if (urlCls == NULL) return NULL;
+    jmethodID mUrl = mid_lookup(env, urlCls, "<init>", "(Ljava/lang/String;)V", "page:url-init");
+    if (mUrl == NULL) { (*env)->DeleteLocalRef(env, urlCls); return NULL; }
+    jobject u = (*env)->NewObject(env, urlCls, mUrl, jurl);
+    if ((*env)->ExceptionCheck(env)) { step_failed(env, "page:url"); u = NULL; }
+    if (u == NULL) { (*env)->DeleteLocalRef(env, urlCls); return NULL; }
+    /* the page is allocated, not static: ten servers can be probed at once and a shared buffer
+       would fold two providers' answers into one */
+    char *page = (char *) malloc(PAGE_CAP);
+    if (page == NULL) { set_step("page:no-page"); (*env)->DeleteLocalRef(env, urlCls); (*env)->DeleteLocalRef(env, u); return NULL; }
+    page[0] = 0;
+    jobject conn = NULL;
+    jobject proxy = NULL;
+    if (socksPort > 0) {
+        jclass addrCls = need_class(env, "java/net/InetSocketAddress");
+        jclass proxyCls = need_class(env, "java/net/Proxy");
+        jclass typeCls = need_class(env, "java/net/Proxy$Type");
+        jfieldID fSocks = typeCls ? (*env)->GetStaticFieldID(env, typeCls, "SOCKS", "Ljava/net/Proxy$Type;") : NULL;
+        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); fSocks = NULL; }
+        jobject ptype = (typeCls && fSocks) ? (*env)->GetStaticObjectField(env, typeCls, fSocks) : NULL;
+        jmethodID mAddr = addrCls ? mid_lookup(env, addrCls, "<init>", "(Ljava/lang/String;I)V", "page:addr-init") : NULL;
+        jstring jlo = (*env)->NewStringUTF(env, "127.0.0.1");
+        jobject addr = (mAddr && jlo) ? (*env)->NewObject(env, addrCls, mAddr, jlo, socksPort) : NULL;
+        if ((*env)->ExceptionCheck(env)) { step_failed(env, "page:addr"); addr = NULL; }
+        jmethodID mProxy = proxyCls ? mid_lookup(env, proxyCls, "<init>",
+            "(Ljava/net/Proxy$Type;Ljava/net/SocketAddress;)V", "page:proxy-init") : NULL;
+        if (mProxy && ptype && addr) {
+            proxy = (*env)->NewObject(env, proxyCls, mProxy, ptype, addr);
+            if ((*env)->ExceptionCheck(env)) { step_failed(env, "page:proxy"); proxy = NULL; }
+        }
+        jmethodID mOpenP = mid_lookup(env, urlCls, "openConnection",
+            "(Ljava/net/Proxy;)Ljava/net/URLConnection;", "page:open-proxy");
+        if (mOpenP && proxy) {
+            conn = (*env)->CallObjectMethod(env, u, mOpenP, proxy);
+            if ((*env)->ExceptionCheck(env)) { step_failed(env, "page:open"); conn = NULL; }
+        }
+        if (jlo) (*env)->DeleteLocalRef(env, jlo);
+        if (addrCls) (*env)->DeleteLocalRef(env, addrCls);
+        if (proxyCls) (*env)->DeleteLocalRef(env, proxyCls);
+        if (typeCls) (*env)->DeleteLocalRef(env, typeCls);
+    } else {
+        jmethodID mOpen = mid_lookup(env, urlCls, "openConnection", "()Ljava/net/URLConnection;", "page:open");
+        if (mOpen) {
+            conn = (*env)->CallObjectMethod(env, u, mOpen);
+            if ((*env)->ExceptionCheck(env)) { step_failed(env, "page:open"); conn = NULL; }
+        }
+    }
+    (*env)->DeleteLocalRef(env, urlCls);
+    if (conn == NULL) { free(page); (*env)->DeleteLocalRef(env, u); return NULL; }
+    jmethodID mCT = mid_named(env, "java/net/HttpURLConnection", "setConnectTimeout", "(I)V", "page:connectTimeout");
+    jmethodID mRT = mid_named(env, "java/net/HttpURLConnection", "setReadTimeout", "(I)V", "page:readTimeout");
+    jmethodID mIn = mid_named(env, "java/net/HttpURLConnection", "getInputStream", "()Ljava/io/InputStream;", "page:getInputStream");
+    if (mCT) { (*env)->CallVoidMethod(env, conn, mCT, (jint) 5000); step_failed(env, "page:connectTimeout"); }
+    if (mRT) { (*env)->CallVoidMethod(env, conn, mRT, (jint) 6000); step_failed(env, "page:readTimeout"); }
+    if (mIn == NULL) { free(page); (*env)->DeleteLocalRef(env, conn); (*env)->DeleteLocalRef(env, u); return NULL; }
+    jobject is = (*env)->CallObjectMethod(env, conn, mIn);
+    if ((*env)->ExceptionCheck(env)) { step_failed(env, "page:getInputStream"); is = NULL; }
+    if (is != NULL) {
+        read_small(env, is, page, PAGE_CAP);
+        (*env)->DeleteLocalRef(env, is);
+    }
+    if (page[0] != 0) {
+        /* the keys arrive separated by ';', and so do the values - same count, "" for a miss */
+        const char *kbase = (const char *) (*env)->GetStringUTFChars(env, jkeys, NULL);
+        const char *kp = kbase;
+        if (kp != NULL) {
+            char key[40];
+            int kn = 0;
+            char val[160];
+            for (;;) {
+                if (*kp == 0 || *kp == ';') {
+                    key[kn] = 0;
+                    if (kn > 0) {
+                        page_take(page, key, val, (int) sizeof(val));
+                        int an = (int) strlen(answer);
+                        if (an + (int) strlen(val) + 2 < (int) sizeof(answer)) {
+                            if (parts > 0) answer[an++] = ';';
+                            memcpy(answer + an, val, strlen(val));
+                            answer[an + (int) strlen(val)] = 0;
+                            if (val[0] != 0) found++;
+                            parts++;
+                        } else dropped = 1;
+                        kn = 0;
+                    }
+                    if (*kp == 0) break;
+                } else if (kn + 1 < (int) sizeof(key)) {
+                    key[kn++] = *kp;
+                }
+                kp++;
+            }
+            (*env)->ReleaseStringUTFChars(env, jkeys, kbase);
+            if (found > 0 && !dropped) set_step("page:ok");
+            else set_step(dropped ? "page:too-big" : "page:no-keys");
+        }
+    } else {
+        set_step(is == NULL ? "page:no-stream" : "page:empty");
+    }
+    if (proxy) (*env)->DeleteLocalRef(env, proxy);
+    (*env)->DeleteLocalRef(env, conn);
+    (*env)->DeleteLocalRef(env, u);
+    free(page);
+    if (found == 0 || dropped) return NULL;
+    int n = (int) strlen(answer);
+    jbyteArray out = (*env)->NewByteArray(env, n);
+    if (out) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) answer);
+    return out;
+}
+
+
 
 /* ---------------- the server list, kept here ----------------
  * Stage 3, first piece: the decrypted payload is parsed with org.json through JNI (the same

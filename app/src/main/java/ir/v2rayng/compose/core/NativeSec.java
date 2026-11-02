@@ -249,6 +249,20 @@ public final class NativeSec {
 
     private static native void flagStop();
 
+    private static native byte[] netProbe(String url, String keys, int socksPort);
+
+    /** fetch a page in the library and come back with just the keys asked for, ";"-joined -
+     *  those replies hold the city, the ISP and the coordinates next to what the app shows */
+    public static String probe(String url, String keys, int socksPort) {
+        if (!READY || url == null || keys == null) return "";
+        try {
+            byte[] b = netProbe(url, keys, socksPort);
+            return b == null ? "" : new String(b, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
     /** start the tunnel core on this controller - the config is built in the library and never
      *  becomes a value here; 1 means the core took it */
     public static int coreStartWith(Object controller, int row, int fd) {

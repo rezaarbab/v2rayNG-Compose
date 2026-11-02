@@ -1180,27 +1180,15 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun fetchIpFlag() {
         viewModelScope.launch {
             val res = withContext(Dispatchers.IO) {
-                try {
-                    val conn = java.net.URL("https://ipwho.is/").openConnection() as java.net.HttpURLConnection
-                    conn.connectTimeout = 5000
-                    conn.readTimeout = 5000
-                    val text = conn.inputStream.bufferedReader().use { it.readText() }
-                    val ip = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
-                    val code = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)
-                    if (code != null) (ip ?: "") to code else null
-                } catch (e: Exception) {
-                    try {
-                        val conn = URL("https://ipapi.co/json/").openConnection() as HttpURLConnection
-                        conn.connectTimeout = 4500
-                        conn.readTimeout = 4500
-                        val text = conn.inputStream.bufferedReader().use { it.readText() }
-                        val ip = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
-                        val code = Regex("\"country_code\"\\s*:\\s*\"([A-Z]{2})\"").find(text)?.groupValues?.get(1)
-                        if (code != null) (ip ?: "") to code else null
-                    } catch (e2: Exception) {
-                        null
-                    }
-                }
+                /* the answer beside these two facts is the city, the ISP and the coordinates, so
+                   the page is read in the library and only ip + country code come back. An empty
+                   reply means there was no page at all, which is what the old exception meant. */
+                fun ask(url: String): List<String>? =
+                    ir.v2rayng.compose.core.NativeSec.probe(url, "ip;country_code", 0)
+                        .takeIf { it.isNotEmpty() }?.split(';')
+                val seen = ask("https://ipwho.is/") ?: ask("https://ipapi.co/json/")
+                val code = seen?.getOrNull(1)?.takeIf { it.isNotBlank() }
+                code?.let { (seen?.getOrNull(0) ?: "") to it }
             }
             if (res != null) {
                 applyFlag(res.second)
@@ -1342,13 +1330,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             if (ir.v2rayng.compose.core.NativeSec.probeStart(row, socksPort, cb) != 1) return null
             var code: String? = null
             try {
-                val conn = URL("https://www.cloudflare.com/cdn-cgi/trace").openConnection(
-                    java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", socksPort)),
-                ) as HttpURLConnection
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
-                val text = conn.inputStream.bufferedReader().use { it.readText() }
-                code = Regex("^loc=([A-Za-z]{2})$", RegexOption.MULTILINE).find(text)?.groupValues?.get(1)
+                // the trace page also echoes this device's user-agent, so the library reads it
+                // and gives back the two letters
+                code = ir.v2rayng.compose.core.NativeSec.probe(
+                    "https://www.cloudflare.com/cdn-cgi/trace", "loc", socksPort,
+                ).takeIf { it.length == 2 }
             } finally {
                 ir.v2rayng.compose.core.NativeSec.probeStop()
             }
@@ -1389,52 +1375,28 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             var whoIp: String? = null
             var whoCode: String? = null
             var apiCode: String? = null
+            // every provider answer carries the city, the ISP and the coordinates beside the
+            // two facts this screen shows, so the pages are read in the library and only the
+            // asked-for words come back, ";"-separated
+            val socks = if (throughTunnel) 10890 else 0
+            fun words(url: String, keys: String, via: Int): List<String> =
+                ir.v2rayng.compose.core.NativeSec.probe(url, keys, via).split(';')
 
             // 1) cloudflare trace - fastest truth for exit ip + country
-            try {
-                val url = java.net.URL("https://www.cloudflare.com/cdn-cgi/trace")
-                val conn = if (throughTunnel) {
-                    val socks = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", 10890))
-                    url.openConnection(socks)
-                } else {
-                    url.openConnection()
-                } as java.net.HttpURLConnection
-                conn.connectTimeout = 6000
-                conn.readTimeout = 6000
-                val text = conn.inputStream.bufferedReader().use { it.readText() }
-                cfIp = Regex("^ip=([0-9a-fA-F.:]+)$", RegexOption.MULTILINE).find(text)?.groupValues?.get(1)
-                cfCode = Regex("^loc=([A-Za-z]{2})$", RegexOption.MULTILINE).find(text)?.groupValues?.get(1)
-            } catch (_: Exception) {
-            }
+            val cf = words("https://www.cloudflare.com/cdn-cgi/trace", "ip;loc", socks)
+            cfIp = cf.getOrNull(0)?.takeIf { it.isNotBlank() }
+            cfCode = cf.getOrNull(1)?.takeIf { it.isNotBlank() }
 
             // 2) ipwho.is - has its own ip + country view
-            try {
-                val url = java.net.URL("https://ipwho.is/")
-                val conn = if (throughTunnel) {
-                    val socks = java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", 10890))
-                    url.openConnection(socks)
-                } else {
-                    url.openConnection()
-                } as java.net.HttpURLConnection
-                conn.connectTimeout = 6000
-                conn.readTimeout = 6000
-                val text = conn.inputStream.bufferedReader().use { it.readText() }
-                whoIp = Regex("\"ip\"\\s*:\\s*\"([0-9a-fA-F.:]+)\"").find(text)?.groupValues?.get(1)
-                whoCode = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)
-            } catch (_: Exception) {
-            }
+            val who = words("https://ipwho.is/", "ip;country_code", socks)
+            whoIp = who.getOrNull(0)?.takeIf { it.isNotBlank() }
+            whoCode = who.getOrNull(1)?.takeIf { it.isNotBlank() }
 
             // 3) ipapi.co with the resolved ip
             val ipForApi = cfIp
             if (ipForApi != null) {
-                try {
-                    val conn = java.net.URL("https://ipapi.co/$ipForApi/json/").openConnection() as java.net.HttpURLConnection
-                    conn.connectTimeout = 5000
-                    conn.readTimeout = 5000
-                    val text = conn.inputStream.bufferedReader().use { it.readText() }
-                    apiCode = Regex("\"country_code\"\\s*:\\s*\"([A-Za-z]{2})\"").find(text)?.groupValues?.get(1)
-                } catch (_: Exception) {
-                }
+                apiCode = words("https://ipapi.co/$ipForApi/json/", "country_code", 0)
+                    .getOrNull(0)?.takeIf { it.isNotBlank() }
             }
 
             val votes = listOfNotNull(cfCode?.uppercase(), whoCode?.uppercase(), apiCode?.uppercase())
