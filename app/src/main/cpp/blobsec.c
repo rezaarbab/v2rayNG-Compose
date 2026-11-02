@@ -3261,9 +3261,6 @@ Java_ir_v2rayng_compose_core_NativeSec_measureDelay(JNIEnv *env, jclass cls, jin
     return d;
 }
 
-/* one flag probe at a time, and only this file holds its controller */
-static jobject g_flag_ctrl;
-
 /* ---- the short-lived cores the exit-country probes run ----
  * Ten of these can be in flight at once, because the app probes a whole list under a semaphore.
  * Each one therefore gets its own slot and its own stop: with a single shared controller the
