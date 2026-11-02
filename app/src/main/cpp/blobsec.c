@@ -1770,15 +1770,6 @@ static int st_is_glue(JNIEnv *env, jchar c, jclass chCls, jmethodID chMid) {
     return !st_is_letter(env, c, chCls, chMid) && st_is_glue_char(c);
 }
 
-static int st_family(jchar c) {
-    if ((c >= 0x0600 && c <= 0x06FF) || (c >= 0x0750 && c <= 0x077F) || (c >= 0x08A0 && c <= 0x08FF) ||
-        (c >= 0xFB50 && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF)) return 1;
-    if ((c >= 0x0400 && c <= 0x052F) || (c >= 0x0041 && c <= 0x005A) || (c >= 0x0061 && c <= 0x007A)) return 2;
-    if ((c >= 0x0370 && c <= 0x03FF) || (c >= 0x1F00 && c <= 0x1FFF)) return 3;
-    if ((c >= 0x3040 && c <= 0x30FF) || (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0xAC00 && c <= 0xD7AF)) return 4;
-    return 0;
-}
-
 typedef struct {
     int swap;
     int at;
@@ -2972,12 +2963,6 @@ static void sb_str(sbuf *s, const char *in) {
         }
     }
     sb_add(s, "\"");
-}
-
-static void sb_kv_str(sbuf *s, const char *k, const char *v) {
-    sb_str(s, k);
-    sb_add(s, ":");
-    sb_str(s, v);
 }
 
 static void sb_direct(sbuf *s) {
