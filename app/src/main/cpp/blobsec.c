@@ -406,6 +406,18 @@ static void set_step(const char *where) {
     g_step[sizeof(g_step) - 1] = 0;
 }
 
+/** the start of one call Kotlin may ask about afterwards: a fresh step, and the failure text the
+ *  previous call left behind. g_last keeps the FIRST refusal of the operation it belongs to - that
+ *  is deliberate, the root cause is the one that says something - but the IO pool reuses threads,
+ *  so without this a ping could still be explained by a refusal an earlier, unread call on the same
+ *  thread had left. Leaf entry points only: proofFor calls idSign inside itself and rows_seal calls
+ *  vaultSeal, so clearing in those would throw the root cause away for its consequence - which is
+ *  the exact mistake the note above exists to prevent. */
+static void call_begin(const char *where) {
+    g_last[0] = 0;
+    set_step(where);
+}
+
 /** record a refusal that involves no Java exception - a class that FindClass would not name, a
  *  method ID that was not there, a handle the keystore did not give back. The FIRST refusal since
  *  the last read is kept: the ones after it are usually consequences of it, and overwriting with
@@ -2062,14 +2074,27 @@ static unsigned char *tok_msg(JNIEnv *env, jstring jdevice, uint32_t ts, const j
     return m;
 }
 
-static jstring tok_pack(JNIEnv *env, jclass cls, jstring jdevice, jbyteArray jkt) {
+/** the request id a token carries: the first four nonce bytes inside 30 bits, so the same integer
+ *  survives the header, the worker's echo and JSON without a sign or a rounding question. It is not
+ *  a new random source - it IS the nonce the token was authenticated with, which is what makes the
+ *  answer matchable to one request. */
+static int tok_rid_of(const jbyte *n) {
+    return (int) ((((unsigned) (unsigned char) n[0] & 0x3Fu) << 24) |
+                  (((unsigned) (unsigned char) n[1]) << 16) |
+                  (((unsigned) (unsigned char) n[2]) << 8) |
+                   ((unsigned) (unsigned char) n[3]));
+}
+
+static jstring tok_pack(JNIEnv *env, jclass cls, jstring jdevice, jbyteArray jkt, int *rid) {
     set_step("tok:entered");
+    if (rid != NULL) *rid = 0;
     if (jdevice == NULL || jkt == NULL) { set_step("tok:null-args"); return NULL; }
     if ((*env)->GetArrayLength(env, jkt) != 32) { set_step("tok:key-size"); return NULL; }
     jbyteArray jnonce = rnd_bytes(env, 8);
     if (jnonce == NULL) { set_step("tok:nonce"); return NULL; }
     jbyte nonce[8];
     (*env)->GetByteArrayRegion(env, jnonce, 0, 8, nonce);
+    if (rid != NULL) *rid = tok_rid_of(nonce);
     uint32_t ts = tok_next_ts();
     int mlen = 0;
     unsigned char *msg = tok_msg(env, jdevice, ts, nonce, &mlen);
@@ -2507,19 +2532,23 @@ static int g_resp_n;
  * the row store: it goes in and out under this lock, and a reader works from its own copy.
  */
 static pthread_mutex_t g_resp_mtx = PTHREAD_MUTEX_INITIALIZER;
+static int g_resp_rid;   /* which request this reply is the answer to, 0 = not known */
 
-static void resp_install(unsigned char *buf, int n) {
+static void resp_install(unsigned char *buf, int n, int rid) {
     pthread_mutex_lock(&g_resp_mtx);
     if (g_resp != NULL) free(g_resp);
     g_resp = buf;
     g_resp_n = n;
+    g_resp_rid = rid;
     pthread_mutex_unlock(&g_resp_mtx);
 }
 
-/** the reply as a fresh copy, NUL terminated; *len is 0 when there is no reply */
-static unsigned char *resp_take(int *len) {
+/** the reply as a fresh copy, NUL terminated; *len is 0 when there is no reply, *rid is the
+ *  request this reply was made for (0 when the request carried no token) */
+static unsigned char *resp_take(int *len, int *rid) {
     unsigned char *copy = NULL;
     *len = 0;
+    if (rid != NULL) *rid = 0;
     pthread_mutex_lock(&g_resp_mtx);
     if (g_resp != NULL && g_resp_n > 0) {
         copy = (unsigned char *) malloc((size_t) g_resp_n + 1);
@@ -2527,6 +2556,7 @@ static unsigned char *resp_take(int *len) {
             memcpy(copy, g_resp, (size_t) g_resp_n);
             copy[g_resp_n] = 0;
             *len = g_resp_n;
+            if (rid != NULL) *rid = g_resp_rid;
         }
     }
     pthread_mutex_unlock(&g_resp_mtx);
@@ -2563,18 +2593,18 @@ static jmethodID mid_named(JNIEnv *env, const char *cls, const char *name, const
 }
 
 /** this session's token: base64url(ts | nonce | HMAC(kt, "blb"|device|0x00|ts|nonce)) */
-static jstring tok_build(JNIEnv *env, jclass cls, jstring jdevice) {
+static jstring tok_build(JNIEnv *env, jclass cls, jstring jdevice, int *rid) {
     if (!g_have_sess || jdevice == NULL) { set_step("tok:no-session"); return NULL; }
     jbyteArray jkt = (*env)->NewByteArray(env, 32);
     if (jkt == NULL) return NULL;
     (*env)->SetByteArrayRegion(env, jkt, 0, 32, (const jbyte *) g_kt);
-    jstring t = tok_pack(env, cls, jdevice, jkt);
+    jstring t = tok_pack(env, cls, jdevice, jkt, rid);
     (*env)->DeleteLocalRef(env, jkt);
     return t;
 }
 
 /** read a stream to the end; a reply can be a stego carrier of a few megabytes */
-static int read_all(JNIEnv *env, jobject is) {
+static int read_all(JNIEnv *env, jobject is, int rid) {
     jclass isc = (*env)->GetObjectClass(env, is);
     if (isc == NULL) return -1;
     jmethodID mRead = mid_lookup(env, isc, "read", "([B)I", "net:read-id");
@@ -2604,7 +2634,7 @@ static int read_all(JNIEnv *env, jobject is) {
         n += r;
     }
     (*env)->DeleteLocalRef(env, chunk);
-    resp_install(buf, n);
+    resp_install(buf, n, rid);
     return n;
 }
 
@@ -2613,8 +2643,8 @@ static int read_all(JNIEnv *env, jobject is) {
  *  is kept for netBody(). */
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_netSend(JNIEnv *env, jclass cls, jstring jbody, jint kind, jstring jdevice, jint useToken) {
-    set_step("net:entered");
-    resp_install(NULL, 0);
+    call_begin("net:entered");
+    resp_install(NULL, 0, 0);
     g_http_status = -1;
     if (jbody == NULL || kind < 0 || kind > 1) { set_step("net:args"); return -1; }
     char base[200], path[40], url[260], hb[40], ht[40];
@@ -2663,7 +2693,8 @@ Java_ir_v2rayng_compose_core_NativeSec_netSend(JNIEnv *env, jclass cls, jstring 
     jstring jhbn = (*env)->NewStringUTF(env, hb);
     jstring jhbv = (*env)->NewStringUTF(env, "v1");
     jstring jhtn = (*env)->NewStringUTF(env, ht);
-    jstring jtok = useToken ? tok_build(env, cls, jdevice) : NULL;
+    int rid = 0;   /* the id this request's token carries, recorded with the reply it gets */
+    jstring jtok = useToken ? tok_build(env, cls, jdevice, &rid) : NULL;
     jbyteArray jbodyBytes = mBytes ? (jbyteArray) (*env)->CallObjectMethod(env, jbody, mBytes, jets) : NULL;
     if ((*env)->ExceptionCheck(env)) { step_failed(env, "net:getBytes"); jbodyBytes = NULL; }
     if (jpost && mMethod) { (*env)->CallVoidMethod(env, conn, mMethod, jpost); if (step_failed(env, "net:setRequestMethod")) goto done; }
@@ -2695,7 +2726,7 @@ Java_ir_v2rayng_compose_core_NativeSec_netSend(JNIEnv *env, jclass cls, jstring 
         else if (mErr) is = (*env)->CallObjectMethod(env, conn, mErr);
         if ((*env)->ExceptionCheck(env)) { step_failed(env, "net:get-stream"); is = NULL; }
         if (is != NULL) {
-            read_all(env, is);
+            read_all(env, is, rid);
             (*env)->DeleteLocalRef(env, is);
         }
     }
@@ -2835,7 +2866,7 @@ static char *pref_get(JNIEnv *env, const char *key) {
 JNIEXPORT jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_netBody(JNIEnv *env, jclass cls) {
     int n = 0;
-    unsigned char *body = resp_take(&n);
+    unsigned char *body = resp_take(&n, NULL);
     if (body == NULL || n <= 0) { free(body); return NULL; }
     jbyteArray out = (*env)->NewByteArray(env, n);
     if (out) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) body);
@@ -2847,9 +2878,9 @@ Java_ir_v2rayng_compose_core_NativeSec_netBody(JNIEnv *env, jclass cls) {
  *  The keys go into this file's own session - they are not handed back in any form. */
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_netKeyReply(JNIEnv *env, jclass cls) {
-    set_step("key:entered");
+    call_begin("key:entered");
     int rn = 0;
-    char *txt = (char *) resp_take(&rn);
+    char *txt = (char *) resp_take(&rn, NULL);
     if (txt == NULL || rn <= 0 || rn > 65536) { free(txt); set_step("key:no-body"); return -1; }
     int rc = -1;
     jclass jsonCls = need_class(env, "org/json/JSONObject");
@@ -3230,6 +3261,7 @@ Java_ir_v2rayng_compose_core_NativeSec_coreStart(JNIEnv *env, jclass cls, jobjec
 /** the ping measurement for a row (mode 1 config): milliseconds, or -1 with the step that refused */
 JNIEXPORT jlong JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_measureDelay(JNIEnv *env, jclass cls, jint row, jstring jurl) {
+    call_begin("delay:entered");
     if (jurl == NULL) { set_step("delay:no-url"); return -1; }
     jstring cfg = cfg_text(env, cls, row, 1, 0);
     if (cfg == NULL) return -1;
@@ -3387,6 +3419,7 @@ static void page_take(const char *buf, const char *key, char *out, int cap) {
  */
 JNIEXPORT jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_netProbe(JNIEnv *env, jclass cls, jstring jurl, jstring jkeys, jint socksPort) {
+    call_begin("page:entered");
     if (jurl == NULL || jkeys == NULL) { set_step("page:no-args"); return NULL; }
     char answer[512];
     answer[0] = 0;
@@ -3607,6 +3640,7 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadRowOfId(JNIEnv *env, jclass cls, j
  *  the answer is a number. -1 means nothing answered inside the timeout. */
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_tcpPingRow(JNIEnv *env, jclass cls, jint row, jint timeoutMs) {
+    call_begin("tcp:entered");
     if (timeoutMs <= 0) return -1;
     /* copied out first: getaddrinfo and the two connects below take seconds, and a sync that lands
        in the middle of them must not pull the address out from under the call */
@@ -3932,10 +3966,12 @@ static char g_sync_why[160];
  */
 JNIEXPORT jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_syncRun(JNIEnv *env, jclass cls) {
+    call_begin("sync:entered");
     g_sync_outcome = 0;
     g_sync_why[0] = 0;
     int rn = 0;
-    char *txt = (char *) resp_take(&rn);
+    int my_rid = 0;
+    char *txt = (char *) resp_take(&rn, &my_rid);
     if (txt == NULL || rn <= 0) {
         g_sync_outcome = 4; set_step("sync:no-body");
         copy_ascii(g_sync_why, (int) sizeof(g_sync_why), "sync:no-body"); return NULL;
@@ -3955,6 +3991,20 @@ Java_ir_v2rayng_compose_core_NativeSec_syncRun(JNIEnv *env, jclass cls) {
     char enc[8];
     memset(enc, 0, sizeof(enc));
     pl_json_str(env, o, jsonCls, "enc", "", enc, (int) sizeof(enc));
+    /* Does this reply answer the request that made it? The id is the nonce the token was
+       authenticated with, echoed back, so a reply belonging to the other request cannot be taken
+       as this one's answer: no panel, no rows, nothing in the store touched. A reply with no id is
+       an older worker that does not know the field yet, and is accepted - refusing those would
+       lock every handset out of its server list until the worker is redeployed. */
+    int echoed = pl_json_int(env, o, jsonCls, "rid", 0);
+    if (echoed > 0 && my_rid > 0 && echoed != my_rid) {
+        char whyb[64];
+        g_sync_outcome = 7;
+        snprintf(whyb, sizeof(whyb), "reply id %d is not the answer to request %d", echoed, my_rid);
+        copy_ascii(g_sync_why, (int) sizeof(g_sync_why), whyb);
+        set_step("sync:rid-mismatch");
+        return NULL;
+    }
     int rows = -1;
     if (strcmp(enc, "n") == 0) {
         /* "unchanged" carries no server data, and it only answers a token this session made */
@@ -4021,7 +4071,7 @@ Java_ir_v2rayng_compose_core_NativeSec_syncRun(JNIEnv *env, jclass cls) {
 
 /** what the last syncRun decided: 1 a panel is ready, 2 the payload did not open with this session's
  *  key, 3 the worker rotated its keys, 4 not json or an old worker, 5 opened with no panel to hand
- *  back, 6 refused outright */
+ *  back, 6 refused outright, 7 an answer to the other request - nothing was taken from it */
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_syncOutcome(JNIEnv *env, jclass cls) { return g_sync_outcome; }
 

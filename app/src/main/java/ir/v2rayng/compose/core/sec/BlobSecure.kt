@@ -37,6 +37,9 @@ object BlobSecure {
     @Volatile
     var lastPayloadSecure: Boolean = false
 
+    /** one door conversation at a time - see syncSecure */
+    private val doorLock = java.util.concurrent.locks.ReentrantLock()
+
     fun fail(r: String): String {
         lastReason = r
         return r
@@ -158,8 +161,22 @@ object BlobSecure {
     /** Ask the worker what changed. The request, the token and the reply are the library's business;
      *  what comes back is the payload with its server list already removed. */
     /** Ask the worker what changed. The request, the token and the reply are the library's business;
-     *  what comes back is the panel with its server list already removed, or a reason. */
+     *  what comes back is the panel with its server list already removed, or a reason.
+     *
+     *  One conversation at a time, start to finish: the reply the library reads back is whichever
+     *  request finished last, so a heartbeat overlapping a manual refresh could take the other one's
+     *  answer as its own. The lock covers the whole sequence - key issue included, because that
+     *  request goes through the same buffer. */
     fun syncSecure(body: JSONObject): JSONObject? {
+        doorLock.lock()
+        try {
+            return syncLocked(body)
+        } finally {
+            doorLock.unlock()
+        }
+    }
+
+    private fun syncLocked(body: JSONObject): JSONObject? {
         lastReason = null
         lastPayloadSecure = false
         // if the library did not load there is no host, no path and no token to speak with - say
@@ -231,6 +248,12 @@ object BlobSecure {
                     // the worker knows a different key for this device - start clean next time
                     fail("درخواست رد شد (HTTP " + status + "): " + NativeSec.syncReason())
                     clear()
+                }
+                7 -> {
+                    /* the reply echoes the id of a different request. Nothing was taken from it and
+                       the session keys are fine, so this is not a refusal: say the sync found
+                       nothing to apply and let the next cycle ask again. */
+                    fail("همگام‌سازی: پاسخ به درخواست دیگری بود (" + NativeSec.syncReason() + ")")
                 }
                 else -> fail("همگام‌سازی: پاسخ خوانده نشد")
             }

@@ -3025,6 +3025,14 @@ function bl_tokSplit(device, raw) {
   return { ts, nonce: raw.slice(4, 12), proof: raw.slice(12), msg: bl_tokMsg(device, ts, raw.slice(4, 12)) };
 }
 
+/** The request id: the first four nonce bytes inside 30 bits. The handset's library works the same
+ *    number out of the same nonce its token was authenticated with (tok_rid_of in blobsec.c), and
+ *    the sync reply echoes it, so the app can tell which of its own requests a reply answers.
+ *    30 bits, so the value is the same integer on both ends of a JSON. */
+function bl_tokRid(nonce) {
+  return ((nonce[0] & 0x3f) << 24) | (nonce[1] << 16) | (nonce[2] << 8) | nonce[3];
+}
+
 /** strictly monotonic ts per device => single-use & anti-replay */
 async function bl_tokAdvance(env, device, ts) {
   try {
@@ -3054,7 +3062,7 @@ async function bl_tokenCheck(env, device, tok, hmacKey) {
     if (!p) return { ok: false };
     if (!bl_eq(p.proof, await bl_hmac(hmacKey, p.msg))) return { ok: false };
     if (!(await bl_tokAdvance(env, device, p.ts))) return { ok: false };
-    return { ok: true, ts: p.ts };
+    return { ok: true, ts: p.ts, rid: bl_tokRid(p.nonce) };
   } catch (e) {
     return { ok: false };
   }
@@ -3374,7 +3382,7 @@ async function blobSyncProtected(env, request, b) {
   const payload = await syncPayloadObj(env, request, b);
   const kc = bl_hexToB(keyHex.slice(0, 64));
   const sealed = await blobSealResponse(env, String(b.device), payload, kc);
-  const base = { ok: true, v: 2, tv: payload.now };
+  const base = { ok: true, v: 2, tv: payload.now, rid: tok.rid };
   if (sealed.nc) return new Response(JSON.stringify({ ...base, enc: "n" }), { headers: jsonHeaders() });
   return new Response(JSON.stringify({ ...base, ...sealed }), { headers: jsonHeaders() });
 }
