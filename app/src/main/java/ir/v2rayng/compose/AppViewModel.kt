@@ -1326,8 +1326,11 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 override fun shutdown(): Long = 0L
                 override fun onEmitStatus(p0: Long, p1: String?): Long = 0L
             }
-            // same short-lived core, started by the library from the row it holds
-            if (ir.v2rayng.compose.core.NativeSec.probeStart(row, socksPort, cb) != 1) return null
+            // same short-lived core, started by the library from the row it holds; the number it
+            // gives back is this probe's own core, so a probe that finishes first cannot take a
+            // later one's core down with it
+            val handle = ir.v2rayng.compose.core.NativeSec.probeStart(row, socksPort, cb)
+            if (handle == 0) return null
             var code: String? = null
             try {
                 // the trace page also echoes this device's user-agent, so the library reads it
@@ -1336,13 +1339,19 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     "https://www.cloudflare.com/cdn-cgi/trace", "loc", socksPort,
                 ).takeIf { it.length == 2 }
             } finally {
-                ir.v2rayng.compose.core.NativeSec.probeStop()
+                ir.v2rayng.compose.core.NativeSec.probeStop(handle)
             }
             code?.uppercase()
         } catch (_: Exception) {
             null
         }
     }
+
+    /** an address the provider named, or nothing. The library hands back the text it found on the
+     *  page, and this one becomes part of another url, so it carries the guard the old Kotlin
+     *  regex had when it was the one reading the page. */
+    private fun addrOrNull(s: String?): String? =
+        if (s != null && s.length in 4..45 && s.all { it.isDigit() || it == '.' || it == ':' || it in "aAbBcCdDeEfF" }) s else null
 
     private fun shortNetError(m: String): String = when {
         m.contains("closed pipe") -> "server down"
@@ -1384,12 +1393,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
 
             // 1) cloudflare trace - fastest truth for exit ip + country
             val cf = words("https://www.cloudflare.com/cdn-cgi/trace", "ip;loc", socks)
-            cfIp = cf.getOrNull(0)?.takeIf { it.isNotBlank() }
+            cfIp = addrOrNull(cf.getOrNull(0))
             cfCode = cf.getOrNull(1)?.takeIf { it.isNotBlank() }
 
             // 2) ipwho.is - has its own ip + country view
             val who = words("https://ipwho.is/", "ip;country_code", socks)
-            whoIp = who.getOrNull(0)?.takeIf { it.isNotBlank() }
+            whoIp = addrOrNull(who.getOrNull(0))
             whoCode = who.getOrNull(1)?.takeIf { it.isNotBlank() }
 
             // 3) ipapi.co with the resolved ip

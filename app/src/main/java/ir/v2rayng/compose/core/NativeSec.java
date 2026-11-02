@@ -247,7 +247,7 @@ public final class NativeSec {
 
     private static native int flagStart(int row, int socksPort, Object callback);
 
-    private static native void flagStop();
+    private static native void flagStop(int handle);
 
     private static native byte[] netProbe(String url, String keys, int socksPort);
 
@@ -284,7 +284,9 @@ public final class NativeSec {
         }
     }
 
-    /** a short-lived core with a local socks port, for the exit-country probe */
+    /** a short-lived core with a local socks port, for the exit-country probe. The number it
+     *  returns is that core's handle - 0 means there is no core, and it is the only thing
+     *  probeStop will accept for this probe, so ten probes cannot stop each other's core */
     public static int probeStart(int row, int socksPort, Object callback) {
         if (!READY || row < 0 || callback == null) return 0;
         try {
@@ -294,10 +296,10 @@ public final class NativeSec {
         }
     }
 
-    public static void probeStop() {
-        if (!READY) return;
+    public static void probeStop(int handle) {
+        if (!READY || handle <= 0) return;
         try {
-            flagStop();
+            flagStop(handle);
         } catch (Throwable t) {
         }
     }

@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <pthread.h>
 
 /* ---------------- SHA-256 (FIPS 180-4) ---------------- */
 
@@ -383,9 +384,13 @@ static const char SIG_B[] = "([B)[B";
  * whether Cipher.getInstance, the GCMParameterSpec constructor, init, updateAAD or doFinal was the
  * one that refused. Every step below records its name, and a real Java exception adds its class
  * name. Reported to the log page by NativeSec.err(); to be deleted once the cause is known. */
-static char g_step[40] = "ok";    /* last named point reached, on success or failure */
-static char g_last[224] = "";      /* what refused, in one string: where | class | message */
-static char g_det[80] = "";        /* values read back from a spec that was built */
+static __thread char g_step[40] = "ok";   /* last named point reached, on success or failure */
+static __thread char g_last[224] = "";     /* what refused, in one string: where | class | message */
+static __thread char g_det[80] = "";       /* values read back from a spec that was built */
+/* One answer per thread, because ten of these run at once and errInfo() is read on the thread that
+ * just failed: shared, a refused ping for server A was regularly explained by whatever server J
+ * hit a second earlier, and the log line then named a cause that had nothing to do with the row it
+ * was written under. Every caller reads it in the same call chain that wrote it. */
 
 /** copy ASCII only, and never cut a multibyte sequence in half: these buffers go back into
  *  NewStringUTF, and a dangling byte there is a second crash on the way to reporting the first */
@@ -2307,8 +2312,12 @@ static int pl_parse_vmess(JNIEnv *env, const char *s, int n, int p) {
         pl_copy(b64, n - p + 1, s + p, n - p);
         if (pl_b64(b64, (int) strlen(b64), json, n - p + 1) > 0) {
             jclass jsonCls = need_class(env, "org/json/JSONObject");
+            /* the lookup is its own step now: passed inline into NewObject, a failed one left the
+               error pending and the object call ran with a null method - ART dies on that before
+               the line below ever gets to clear anything */
+            jmethodID mJson = jsonCls ? mid_lookup(env, jsonCls, "<init>", "(Ljava/lang/String;)V", "link:json-init") : NULL;
             jstring jjs = jsonCls ? (*env)->NewStringUTF(env, json) : NULL;
-            jobject obj = (jsonCls && jjs) ? (*env)->NewObject(env, jsonCls, (*env)->GetMethodID(env, jsonCls, "<init>", "(Ljava/lang/String;)V"), jjs) : NULL;
+            jobject obj = (jsonCls && jjs && mJson) ? (*env)->NewObject(env, jsonCls, mJson, jjs) : NULL;
             if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); obj = NULL; }
             if (obj) {
                 int port = pl_json_int(env, obj, jsonCls, "port", -1);
@@ -2500,6 +2509,38 @@ static jint pl_parse_link(JNIEnv *env, jclass cls, jstring jlink) {
 
 static unsigned char *g_resp;
 static int g_resp_n;
+
+/* The reply outlives the call that made it - Kotlin asks for a door, waits, then reads the answer
+ * in a second call - and nothing in the app serialises two syncs, so a heartbeat and a manual
+ * refresh can be one malloc apart from freeing the buffer the other is still reading. Same rule as
+ * the row store: it goes in and out under this lock, and a reader works from its own copy.
+ */
+static pthread_mutex_t g_resp_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static void resp_install(unsigned char *buf, int n) {
+    pthread_mutex_lock(&g_resp_mtx);
+    if (g_resp != NULL) free(g_resp);
+    g_resp = buf;
+    g_resp_n = n;
+    pthread_mutex_unlock(&g_resp_mtx);
+}
+
+/** the reply as a fresh copy, NUL terminated; *len is 0 when there is no reply */
+static unsigned char *resp_take(int *len) {
+    unsigned char *copy = NULL;
+    *len = 0;
+    pthread_mutex_lock(&g_resp_mtx);
+    if (g_resp != NULL && g_resp_n > 0) {
+        copy = (unsigned char *) malloc((size_t) g_resp_n + 1);
+        if (copy != NULL) {
+            memcpy(copy, g_resp, (size_t) g_resp_n);
+            copy[g_resp_n] = 0;
+            *len = g_resp_n;
+        }
+    }
+    pthread_mutex_unlock(&g_resp_mtx);
+    return copy;
+}
 static int g_http_status = -1;
 /* a base saved on this device (the admin's debug override) beats the built-in one, but it is
  *  kept here: the request path is what must not have to say a host in Kotlin */
@@ -2572,8 +2613,7 @@ static int read_all(JNIEnv *env, jobject is) {
         n += r;
     }
     (*env)->DeleteLocalRef(env, chunk);
-    g_resp = buf;
-    g_resp_n = n;
+    resp_install(buf, n);
     return n;
 }
 
@@ -2583,8 +2623,7 @@ static int read_all(JNIEnv *env, jobject is) {
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_netSend(JNIEnv *env, jclass cls, jstring jbody, jint kind, jstring jdevice, jint useToken) {
     set_step("net:entered");
-    if (g_resp) { free(g_resp); g_resp = NULL; }
-    g_resp_n = 0;
+    resp_install(NULL, 0);
     g_http_status = -1;
     if (jbody == NULL || kind < 0 || kind > 1) { set_step("net:args"); return -1; }
     char base[200], path[40], url[260], hb[40], ht[40];
@@ -2804,9 +2843,12 @@ static char *pref_get(JNIEnv *env, const char *key) {
 /** the reply this process last received, as bytes (NULL when there was none) */
 JNIEXPORT jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_netBody(JNIEnv *env, jclass cls) {
-    if (g_resp == NULL || g_resp_n <= 0) return NULL;
-    jbyteArray out = (*env)->NewByteArray(env, g_resp_n);
-    if (out) (*env)->SetByteArrayRegion(env, out, 0, g_resp_n, (const jbyte *) g_resp);
+    int n = 0;
+    unsigned char *body = resp_take(&n);
+    if (body == NULL || n <= 0) { free(body); return NULL; }
+    jbyteArray out = (*env)->NewByteArray(env, n);
+    if (out) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) body);
+    free(body);
     return out;
 }
 
@@ -2815,11 +2857,9 @@ Java_ir_v2rayng_compose_core_NativeSec_netBody(JNIEnv *env, jclass cls) {
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_netKeyReply(JNIEnv *env, jclass cls) {
     set_step("key:entered");
-    if (g_resp == NULL || g_resp_n <= 0 || g_resp_n > 65536) { set_step("key:no-body"); return -1; }
-    char *txt = (char *) malloc((size_t) g_resp_n + 1);
-    if (txt == NULL) { set_step("key:alloc"); return -1; }
-    memcpy(txt, g_resp, (size_t) g_resp_n);
-    txt[g_resp_n] = 0;
+    int rn = 0;
+    char *txt = (char *) resp_take(&rn);
+    if (txt == NULL || rn <= 0 || rn > 65536) { free(txt); set_step("key:no-body"); return -1; }
     int rc = -1;
     jclass jsonCls = need_class(env, "org/json/JSONObject");
     jmethodID ctor = jsonCls ? (*env)->GetMethodID(env, jsonCls, "<init>", "(Ljava/lang/String;)V") : NULL;
@@ -3072,6 +3112,62 @@ static int g_rows_n;
 static unsigned char *g_trim;
 static int g_trim_n;
 
+/* ---- the store, and who may look at it ----
+ * The app pings ten servers at a time, the sync heartbeat replaces this store from another thread,
+ * and the service reads a row on the main thread - so a read here copies out under the lock. A
+ * config must never be assembled out of memory that is being freed while it is being written, and
+ * never out of two servers at once. g_cfg_mtx covers the parse-into-statics step, which is shared
+ * the same way.
+ */
+static pthread_mutex_t g_store_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_cfg_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+/** one row copied out while the store is locked; 0 means the row is not there right now */
+static int row_snapshot(int row, char *link, int linkcap, char *addr, int addrcap, int *port) {
+    if (link != NULL && linkcap > 0) link[0] = 0;
+    if (addr != NULL && addrcap > 0) addr[0] = 0;
+    if (port != NULL) *port = 0;
+    pthread_mutex_lock(&g_store_mtx);
+    if (row < 0 || row >= g_rows_n) { pthread_mutex_unlock(&g_store_mtx); return 0; }
+    if (link != NULL && linkcap > 0) snprintf(link, (size_t) linkcap, "%s", g_rows[row].link);
+    if (addr != NULL && addrcap > 0) snprintf(addr, (size_t) addrcap, "%s", g_rows[row].addr);
+    if (port != NULL) *port = g_rows[row].port;
+    pthread_mutex_unlock(&g_store_mtx);
+    return 1;
+}
+
+/** the panel text, freshly copied, so the caller can still hand it out after a sync replaces it */
+static unsigned char *trim_take(int *len) {
+    unsigned char *copy = NULL;
+    pthread_mutex_lock(&g_store_mtx);
+    if (g_trim != NULL && g_trim_n > 0) {
+        copy = (unsigned char *) malloc((size_t) g_trim_n + 1);
+        if (copy != NULL) { memcpy(copy, g_trim, (size_t) g_trim_n); copy[g_trim_n] = 0; }
+        if (len != NULL) *len = copy ? g_trim_n : 0;
+    } else if (len != NULL) {
+        *len = 0;
+    }
+    pthread_mutex_unlock(&g_store_mtx);
+    return copy;
+}
+
+/** a new list goes in by swapping the pointer, never by freeing what a reader is holding */
+static void rows_install(plr_t *rows, int n) {
+    pthread_mutex_lock(&g_store_mtx);
+    if (g_rows != NULL) free(g_rows);
+    g_rows = rows;
+    g_rows_n = n;
+    pthread_mutex_unlock(&g_store_mtx);
+}
+
+static void trim_install(unsigned char *t, int n) {
+    pthread_mutex_lock(&g_store_mtx);
+    if (g_trim != NULL) free(g_trim);
+    g_trim = t;
+    g_trim_n = t ? n : 0;
+    pthread_mutex_unlock(&g_store_mtx);
+}
+
 /** the config text, assembled once and shared by the file writer and the string entry */
 static int config_build(sbuf *s, int mode, int socksPort) {
     sb_add(s, "{\"log\":{\"loglevel\":\"warning\"}");
@@ -3103,17 +3199,25 @@ static int config_build(sbuf *s, int mode, int socksPort) {
  *  String the core API demands never crosses into Kotlin - that is the floor, stated so nobody
  *  reads the missing export as an oversight. */
 static jstring cfg_text(JNIEnv *env, jclass cls, jint row, jint mode, jint socksPort) {
-    if (row < 0 || row >= g_rows_n) return NULL;
-    jstring jlink = (*env)->NewStringUTF(env, g_rows[row].link);
+    char link[PLR_LINK];
+    if (!row_snapshot(row, link, (int) sizeof(link), NULL, 0, NULL)) return NULL;
+    jstring jlink = (*env)->NewStringUTF(env, link);
     if (jlink == NULL) return NULL;
+    /* the parse writes pl_addr, pl_cred and the other fields the config is then assembled from, so
+       parse and build are one section: two pings in flight must not build one server's config out
+       of another server's pieces */
+    pthread_mutex_lock(&g_cfg_mtx);
     int ok = pl_parse_link(env, cls, jlink);
     (*env)->DeleteLocalRef(env, jlink);
-    if (ok != 1) { set_step("cfgforrow:parse"); return NULL; }
+    if (ok != 1) { pthread_mutex_unlock(&g_cfg_mtx); set_step("cfgforrow:parse"); return NULL; }
     sbuf s;
     s.b = NULL; s.n = 0; s.cap = 0;
-    if (!config_build(&s, mode, socksPort)) { free(s.b); set_step("cfgforrow:build"); return NULL; }
+    if (!config_build(&s, mode, socksPort)) {
+        free(s.b); pthread_mutex_unlock(&g_cfg_mtx); set_step("cfgforrow:build"); return NULL;
+    }
     jstring out = (*env)->NewStringUTF(env, s.b);
     free(s.b);
+    pthread_mutex_unlock(&g_cfg_mtx);
     if (out) set_step("cfgforrow:ok");
     return out;
 }
@@ -3160,12 +3264,21 @@ Java_ir_v2rayng_compose_core_NativeSec_measureDelay(JNIEnv *env, jclass cls, jin
 /* one flag probe at a time, and only this file holds its controller */
 static jobject g_flag_ctrl;
 
+/* ---- the short-lived cores the exit-country probes run ----
+ * Ten of these can be in flight at once, because the app probes a whole list under a semaphore.
+ * Each one therefore gets its own slot and its own stop: with a single shared controller the
+ * second start dropped the first core without stopping it - it kept its socks port and never came
+ * down - and the first stop took the second probe's core out from under its own page fetch.
+ */
+#define FLAG_SLOTS 12
+static jobject g_flag_ctrl[FLAG_SLOTS];
+static pthread_mutex_t g_flag_mtx = PTHREAD_MUTEX_INITIALIZER;
+
 /** start the short-lived core with a local socks inbound (mode 2 config) so the app can ask an
- *  external service where this server exits; flagStop takes it down again */
+ *  external service where this server exits; the answer is the handle flagStop takes back, 0 = no */
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_flagStart(JNIEnv *env, jclass cls, jint row, jint socksPort, jobject jcb) {
     if (jcb == NULL) { set_step("flag:no-callback"); return 0; }
-    if (g_flag_ctrl != NULL) { (*env)->DeleteGlobalRef(env, g_flag_ctrl); g_flag_ctrl = NULL; }
     jstring cfg = cfg_text(env, cls, row, 2, socksPort);
     if (cfg == NULL) return 0;
     jclass lb = need_class(env, "libv2ray/Libv2ray");
@@ -3180,22 +3293,40 @@ Java_ir_v2rayng_compose_core_NativeSec_flagStart(JNIEnv *env, jclass cls, jint r
     (*env)->CallVoidMethod(env, ctrl, mStart, cfg, (jint) 0);
     (*env)->DeleteLocalRef(env, cfg);
     if (step_failed(env, "flag:startLoop")) { (*env)->DeleteLocalRef(env, ctrl); return 0; }
-    g_flag_ctrl = (*env)->NewGlobalRef(env, ctrl);
+    int slot = 0;
+    pthread_mutex_lock(&g_flag_mtx);
+    for (int i = 0; i < FLAG_SLOTS; i++) {
+        if (g_flag_ctrl[i] == NULL) { g_flag_ctrl[i] = (*env)->NewGlobalRef(env, ctrl); slot = i + 1; break; }
+    }
+    pthread_mutex_unlock(&g_flag_mtx);
+    if (slot == 0) {
+        /* no room left: bring this core straight down instead of leaving one nobody can stop */
+        jmethodID mStop = mid_named(env, "libv2ray/CoreController", "stopLoop", "()V", "flag:stopLoop");
+        if (mStop != NULL) { (*env)->CallVoidMethod(env, ctrl, mStop); step_failed(env, "flag:stopLoop"); }
+        set_step("flag:no-slot");
+        (*env)->DeleteLocalRef(env, ctrl);
+        return 0;
+    }
     (*env)->DeleteLocalRef(env, ctrl);
     set_step("flag:started");
-    return 1;
+    return slot;
 }
 
 JNIEXPORT void JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_flagStop(JNIEnv *env, jclass cls) {
-    if (g_flag_ctrl == NULL) return;
+Java_ir_v2rayng_compose_core_NativeSec_flagStop(JNIEnv *env, jclass cls, jint handle) {
+    if (handle <= 0 || handle > FLAG_SLOTS) return;
+    jobject ctrl = NULL;
+    pthread_mutex_lock(&g_flag_mtx);
+    ctrl = g_flag_ctrl[handle - 1];
+    g_flag_ctrl[handle - 1] = NULL;
+    pthread_mutex_unlock(&g_flag_mtx);
+    if (ctrl == NULL) return;
     jmethodID mStop = mid_named(env, "libv2ray/CoreController", "stopLoop", "()V", "flag:stopLoop");
     if (mStop != NULL) {
-        (*env)->CallVoidMethod(env, g_flag_ctrl, mStop);
+        (*env)->CallVoidMethod(env, ctrl, mStop);
         step_failed(env, "flag:stopLoop");
     }
-    (*env)->DeleteGlobalRef(env, g_flag_ctrl);
-    g_flag_ctrl = NULL;
+    (*env)->DeleteGlobalRef(env, ctrl);
     set_step("flag:stopped");
 }
 
@@ -3318,6 +3449,8 @@ Java_ir_v2rayng_compose_core_NativeSec_netProbe(JNIEnv *env, jclass cls, jstring
             if ((*env)->ExceptionCheck(env)) { step_failed(env, "page:open"); conn = NULL; }
         }
         if (jlo) (*env)->DeleteLocalRef(env, jlo);
+        if (ptype) (*env)->DeleteLocalRef(env, ptype);
+        if (addr) (*env)->DeleteLocalRef(env, addr);
         if (addrCls) (*env)->DeleteLocalRef(env, addrCls);
         if (proxyCls) (*env)->DeleteLocalRef(env, proxyCls);
         if (typeCls) (*env)->DeleteLocalRef(env, typeCls);
@@ -3333,13 +3466,21 @@ Java_ir_v2rayng_compose_core_NativeSec_netProbe(JNIEnv *env, jclass cls, jstring
     jmethodID mCT = mid_named(env, "java/net/HttpURLConnection", "setConnectTimeout", "(I)V", "page:connectTimeout");
     jmethodID mRT = mid_named(env, "java/net/HttpURLConnection", "setReadTimeout", "(I)V", "page:readTimeout");
     jmethodID mIn = mid_named(env, "java/net/HttpURLConnection", "getInputStream", "()Ljava/io/InputStream;", "page:getInputStream");
+    jmethodID mDisc = mid_named(env, "java/net/HttpURLConnection", "disconnect", "()V", "page:disconnect");
     if (mCT) { (*env)->CallVoidMethod(env, conn, mCT, (jint) 5000); step_failed(env, "page:connectTimeout"); }
     if (mRT) { (*env)->CallVoidMethod(env, conn, mRT, (jint) 6000); step_failed(env, "page:readTimeout"); }
-    if (mIn == NULL) { free(page); (*env)->DeleteLocalRef(env, conn); (*env)->DeleteLocalRef(env, u); return NULL; }
+    if (mIn == NULL) {
+        if (mDisc) { (*env)->CallVoidMethod(env, conn, mDisc); step_failed(env, "page:disconnect"); }
+        free(page); (*env)->DeleteLocalRef(env, conn); (*env)->DeleteLocalRef(env, u); return NULL;
+    }
     jobject is = (*env)->CallObjectMethod(env, conn, mIn);
     if ((*env)->ExceptionCheck(env)) { step_failed(env, "page:getInputStream"); is = NULL; }
     if (is != NULL) {
         read_small(env, is, page, PAGE_CAP);
+        /* the Kotlin this replaced read the body inside .use{}, which closed it; a stream left
+           open here is a socket kept out of the pool for every server in a ping round */
+        jmethodID mClose = mid_named(env, "java/io/InputStream", "close", "()V", "page:close");
+        if (mClose) { (*env)->CallVoidMethod(env, is, mClose); step_failed(env, "page:close"); }
         (*env)->DeleteLocalRef(env, is);
     }
     if (page[0] != 0) {
@@ -3378,6 +3519,7 @@ Java_ir_v2rayng_compose_core_NativeSec_netProbe(JNIEnv *env, jclass cls, jstring
     } else {
         set_step(is == NULL ? "page:no-stream" : "page:empty");
     }
+    if (mDisc) { (*env)->CallVoidMethod(env, conn, mDisc); step_failed(env, "page:disconnect"); }
     if (proxy) (*env)->DeleteLocalRef(env, proxy);
     (*env)->DeleteLocalRef(env, conn);
     (*env)->DeleteLocalRef(env, u);
@@ -3401,17 +3543,14 @@ Java_ir_v2rayng_compose_core_NativeSec_netProbe(JNIEnv *env, jclass cls, jstring
  * the process, which is exactly what the branch's stage 3 needs to wire the list through.
  */
 
-static void payload_reset(void) {
-    if (g_rows) { free(g_rows); g_rows = NULL; }
-    g_rows_n = 0;
-    if (g_trim) { free(g_trim); g_trim = NULL; }
-    g_trim_n = 0;
-}
-
 static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len);
 
 static int payload_from_carrier(JNIEnv *env, jclass cls, jstring jstego) {
-    payload_reset();
+    /* the panel text is dropped here because a stale one must never be handed out as this sync's
+       answer, but the rows are NOT: every early return below means "this carrier did not open",
+       and a store that was emptied on the way to that answer leaves every dial on screen with no
+       row - no ping, no flag, and a reason that has nothing to do with the server */
+    trim_install(NULL, 0);
     set_step("payload:entered");
     jbyteArray jkc = sess_kc_array(env);
     if (jkc == NULL) return -1;
@@ -3430,7 +3569,10 @@ static int payload_from_carrier(JNIEnv *env, jclass cls, jstring jstego) {
 
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_payloadCount(JNIEnv *env, jclass cls) {
-    return g_rows_n;
+    pthread_mutex_lock(&g_store_mtx);
+    int n = g_rows_n;
+    pthread_mutex_unlock(&g_store_mtx);
+    return n;
 }
 
 /** display fields only: 0 id, 1 name, 3 category, 4 msg. The address, the port and the link are
@@ -3438,7 +3580,10 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadCount(JNIEnv *env, jclass cls) {
  *  file, which is what the whole move was for. */
 JNIEXPORT jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_payloadField(JNIEnv *env, jclass cls, jint row, jint which) {
-    if (row < 0 || row >= g_rows_n) return NULL;
+    char buf[PL_MISC];
+    buf[0] = 0;
+    pthread_mutex_lock(&g_store_mtx);
+    if (row < 0 || row >= g_rows_n) { pthread_mutex_unlock(&g_store_mtx); return NULL; }
     const plr_t *r = &g_rows[row];
     const char *src = "";
     switch (which) {
@@ -3448,9 +3593,11 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadField(JNIEnv *env, jclass cls, jin
         case 4: src = r->msg; break;
         default: src = ""; break;
     }
-    int n = (int) strlen(src);
+    snprintf(buf, sizeof(buf), "%s", src);
+    pthread_mutex_unlock(&g_store_mtx);
+    int n = (int) strlen(buf);
     jbyteArray out = (*env)->NewByteArray(env, n);
-    if (out && n) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) src);
+    if (out && n) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) buf);
     return out;
 }
 
@@ -3464,9 +3611,11 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadRowOfId(JNIEnv *env, jclass cls, j
     const char *id = (*env)->GetStringUTFChars(env, jid, NULL);
     if (id == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return -1; }
     int found = -1;
+    pthread_mutex_lock(&g_store_mtx);
     for (int i = 0; i < g_rows_n; i++) {
         if (strcmp(g_rows[i].id, id) == 0) { found = i; break; }
     }
+    pthread_mutex_unlock(&g_store_mtx);
     (*env)->ReleaseStringUTFChars(env, jid, id);
     return found;
 }
@@ -3476,15 +3625,21 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadRowOfId(JNIEnv *env, jclass cls, j
  *  the answer is a number. -1 means nothing answered inside the timeout. */
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_tcpPingRow(JNIEnv *env, jclass cls, jint row, jint timeoutMs) {
-    if (row < 0 || row >= g_rows_n || timeoutMs <= 0) return -1;
+    if (timeoutMs <= 0) return -1;
+    /* copied out first: getaddrinfo and the two connects below take seconds, and a sync that lands
+       in the middle of them must not pull the address out from under the call */
+    char addr[PL_ADDR];
+    int port = 0;
+    if (!row_snapshot(row, NULL, 0, addr, (int) sizeof(addr), &port)) return -1;
+    if (addr[0] == 0 || port <= 0) return -1;
     char portbuf[8];
-    snprintf(portbuf, sizeof(portbuf), "%d", g_rows[row].port);
+    snprintf(portbuf, sizeof(portbuf), "%d", port);
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     struct addrinfo *res = NULL;
-    if (getaddrinfo(g_rows[row].addr, portbuf, &hints, &res) != 0 || res == NULL) return -1;
+    if (getaddrinfo(addr, portbuf, &hints, &res) != 0 || res == NULL) return -1;
     int best = -1;
     for (int attempt = 0; attempt < 2; attempt++) {
         int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
@@ -3530,8 +3685,7 @@ Java_ir_v2rayng_compose_core_NativeSec_tcpPingRow(JNIEnv *env, jclass cls, jint 
 /** drop the servers array from the parsed root and keep the rest: the list never travels to
  *  Kotlin, the panel other fields still do */
 static void payload_trim(JNIEnv *env, jobject root, jclass jsonCls, jstring kServers) {
-    if (g_trim) { free(g_trim); g_trim = NULL; }
-    g_trim_n = 0;
+    trim_install(NULL, 0);
     if (root == NULL || jsonCls == NULL) return;
     jmethodID rem = (*env)->GetMethodID(env, jsonCls, "remove", "(Ljava/lang/String;)Ljava/lang/Object;");  //EXC-CLEARED
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
@@ -3547,9 +3701,10 @@ static void payload_trim(JNIEnv *env, jobject root, jclass jsonCls, jstring kSer
         const char *c = (*env)->GetStringUTFChars(env, js, NULL);
         if (c) {
             int n = (int) strlen(c);
-            g_trim = (unsigned char *) malloc((size_t) n + 1);
-            if (g_trim) { memcpy(g_trim, c, (size_t) n); g_trim[n] = 0; g_trim_n = n; }
+            unsigned char *t = (unsigned char *) malloc((size_t) n + 1);
+            if (t) { memcpy(t, c, (size_t) n); t[n] = 0; }
             (*env)->ReleaseStringUTFChars(env, js, c);
+            trim_install(t, n);
         }
         (*env)->DeleteLocalRef(env, js);
     }
@@ -3584,14 +3739,16 @@ static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len) {
     if (n < 0) n = 0;
     if (n > PLR_MAX) n = PLR_MAX;
     if (n == 0) { set_step("payload:empty"); return 0; }
-    g_rows = (plr_t *) calloc((size_t) n, sizeof(plr_t));
-    if (g_rows == NULL) { set_step("payload:alloc-rows"); return -1; }
+    /* filled off to the side and swapped in at the end, so a ping in flight never sees a list that
+       is half written */
+    plr_t *rows = (plr_t *) calloc((size_t) n, sizeof(plr_t));
+    if (rows == NULL) { set_step("payload:alloc-rows"); return -1; }
     int kept = 0;
     for (int i = 0; i < n; i++) {
         jobject o = (*env)->CallObjectMethod(env, arr, arrGet, i);
         if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); o = NULL; }
         if (o == NULL) continue;
-        plr_t *r = &g_rows[kept];
+        plr_t *r = &rows[kept];
         pl_json_str(env, o, jsonCls, "id", "", r->id, PLR_ID);
         pl_json_str(env, o, jsonCls, "name", "", r->name, PL_NAME);
         pl_json_str(env, o, jsonCls, "address", "", r->addr, PL_ADDR);
@@ -3608,14 +3765,15 @@ static int payload_parse_bytes(JNIEnv *env, const jbyte *buf, jsize len) {
     if (kServers) (*env)->DeleteLocalRef(env, kServers);
     if (jsonCls) (*env)->DeleteLocalRef(env, jsonCls);
     if (arrCls) (*env)->DeleteLocalRef(env, arrCls);
-    g_rows_n = kept;
-    set_step(kept > 0 ? "payload:ok" : "payload:no-usable-rows");
+    if (kept == 0) { free(rows); set_step("payload:no-usable-rows"); return 0; }
+    rows_install(rows, kept);
+    set_step("payload:ok");
     return kept;
 }
 
 /** the raw "cy" payload: same JSON, no carrier, opened with the session key */
 static int payload_from_cy(JNIEnv *env, jclass cls, jstring jblob) {
-    payload_reset();
+    trim_install(NULL, 0);
     set_step("payload:cy-entered");
     if (jblob == NULL) { set_step("payload:cy-args"); return -1; }
     /* the cipher arrives as base64 text out of the reply: decoding it here is what keeps the
@@ -3634,7 +3792,6 @@ static int payload_from_cy(JNIEnv *env, jclass cls, jstring jblob) {
     free(dec);
     jbyteArray jkc = sess_kc_array(env);
     if (jkc == NULL) { (*env)->DeleteLocalRef(env, jblobBytes); return -1; }
-    if (jkc == NULL) return -1;
     jbyteArray jaad = (*env)->NewByteArray(env, 5);
     if (jaad == NULL) { set_step("payload:cy-aad"); return -1; }
     const jbyte aad[5] = { 0x42, 0x4C, 0x42, 0x76, 0x31 };
@@ -3657,14 +3814,17 @@ static int payload_from_cy(JNIEnv *env, jclass cls, jstring jblob) {
 /** rows -> one text block (fields separated by \x1f, rows by \n), sealed by the vault, base64url.
  *  Kotlin stores this opaque string; the links inside it are ciphertext like everything else. */
 static jstring rows_seal(JNIEnv *env, jclass cls) {
-    if (g_rows_n <= 0) return NULL;
+    /* the store is only walked here, under the lock; the sealing below works from the copy, so a
+       sync that replaces the list cannot change the text half way through the vault call */
+    pthread_mutex_lock(&g_store_mtx);
+    if (g_rows_n <= 0) { pthread_mutex_unlock(&g_store_mtx); return NULL; }
     size_t cap = 64;
     for (int i = 0; i < g_rows_n; i++) {
         cap += strlen(g_rows[i].id) + strlen(g_rows[i].name) + strlen(g_rows[i].addr) +
                strlen(g_rows[i].cat) + strlen(g_rows[i].msg) + strlen(g_rows[i].link) + 32;
     }
     unsigned char *text = (unsigned char *) malloc(cap);
-    if (text == NULL) { set_step("seal-rows:alloc"); return NULL; }
+    if (text == NULL) { pthread_mutex_unlock(&g_store_mtx); set_step("seal-rows:alloc"); return NULL; }
     size_t o = 0;
     char portbuf[16];
     for (int i = 0; i < g_rows_n; i++) {
@@ -3673,12 +3833,13 @@ static jstring rows_seal(JNIEnv *env, jclass cls) {
         const char *parts[7] = { r->id, r->name, r->addr, portbuf, r->cat, r->msg, r->link };
         for (int k = 0; k < 7; k++) {
             size_t n = strlen(parts[k]);
-            if (o + n + 2 >= cap) { free(text); set_step("seal-rows:overflow"); return NULL; }
+            if (o + n + 2 >= cap) { free(text); pthread_mutex_unlock(&g_store_mtx); set_step("seal-rows:overflow"); return NULL; }
             memcpy(text + o, parts[k], n);
             o += n;
             text[o++] = (k == 6) ? '\n' : 0x1f;
         }
     }
+    pthread_mutex_unlock(&g_store_mtx);
     jbyteArray jtext = (*env)->NewByteArray(env, (jsize) o);
     if (jtext) (*env)->SetByteArrayRegion(env, jtext, 0, (jsize) o, (const jbyte *) text);
     free(text);
@@ -3692,7 +3853,9 @@ static jstring rows_seal(JNIEnv *env, jclass cls) {
 
 /** sealed rows back into memory; returns the row count or -1 */
 static int rows_restore(JNIEnv *env, jclass cls, jstring jsealed) {
-    payload_reset();
+    /* the panel is dropped as before; the rows a reader may be holding are not - this function
+       builds its list off to the side and swaps it in, so a dial never sees an empty store */
+    trim_install(NULL, 0);
     set_step("restore:entered");
     if (jsealed == NULL) { set_step("restore:null"); return -1; }
     jstring jplaintext = NULL;
@@ -3721,8 +3884,8 @@ static int rows_restore(JNIEnv *env, jclass cls, jstring jsealed) {
         (*env)->GetByteArrayRegion(env, plain, 0, n, (jbyte *) buf);
         buf[n] = 0;
         /* split rows and fields */
-        g_rows = (plr_t *) calloc(PLR_MAX, sizeof(plr_t));
-        if (g_rows == NULL) { free(buf); set_step("restore:alloc-rows"); return -1; }
+        plr_t *rows = (plr_t *) calloc(PLR_MAX, sizeof(plr_t));
+        if (rows == NULL) { free(buf); set_step("restore:alloc-rows"); return -1; }
         int kept = 0;
         char *row = (char *) buf;
         while (row != NULL && *row != 0 && kept < PLR_MAX) {
@@ -3739,7 +3902,7 @@ static int rows_restore(JNIEnv *env, jclass cls, jstring jsealed) {
                 p = sep + 1;
             }
             if (nf == 7) {
-                plr_t *r = &g_rows[kept];
+                plr_t *r = &rows[kept];
                 pl_copy(r->id, PLR_ID, f[0], (int) strlen(f[0]));
                 pl_copy(r->name, PL_NAME, f[1], (int) strlen(f[1]));
                 pl_copy(r->addr, PL_ADDR, f[2], (int) strlen(f[2]));
@@ -3752,8 +3915,9 @@ static int rows_restore(JNIEnv *env, jclass cls, jstring jsealed) {
             row = nl ? nl + 1 : NULL;
         }
         free(buf);
-        g_rows_n = kept;
-        set_step(kept > 0 ? "restore:ok" : "restore:empty");
+        if (kept == 0) { free(rows); set_step("restore:empty"); return 0; }
+        rows_install(rows, kept);
+        set_step("restore:ok");
         return kept;
     }
     (void) jplaintext;
@@ -3788,11 +3952,12 @@ JNIEXPORT jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_syncRun(JNIEnv *env, jclass cls) {
     g_sync_outcome = 0;
     g_sync_why[0] = 0;
-    if (g_resp == NULL || g_resp_n <= 0) { g_sync_outcome = 4; set_step("sync:no-body"); return NULL; }
-    char *txt = (char *) malloc((size_t) g_resp_n + 1);
-    if (txt == NULL) { g_sync_outcome = 4; set_step("sync:alloc"); return NULL; }
-    memcpy(txt, g_resp, (size_t) g_resp_n);
-    txt[g_resp_n] = 0;
+    int rn = 0;
+    char *txt = (char *) resp_take(&rn);
+    if (txt == NULL || rn <= 0) {
+        g_sync_outcome = 4; set_step("sync:no-body");
+        copy_ascii(g_sync_why, (int) sizeof(g_sync_why), "sync:no-body"); return NULL;
+    }
     jclass jsonCls = need_class(env, "org/json/JSONObject");
     jmethodID ctor = jsonCls ? (*env)->GetMethodID(env, jsonCls, "<init>", "(Ljava/lang/String;)V") : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); ctor = NULL; }
@@ -3800,7 +3965,10 @@ Java_ir_v2rayng_compose_core_NativeSec_syncRun(JNIEnv *env, jclass cls) {
     free(txt);
     jobject o = (jsonCls && ctor && jtxt) ? (*env)->NewObject(env, jsonCls, ctor, jtxt) : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); o = NULL; }
-    if (o == NULL) { g_sync_outcome = 4; set_step("sync:not-json"); return NULL; }
+    if (o == NULL) {
+        g_sync_outcome = 4; set_step("sync:not-json");
+        copy_ascii(g_sync_why, (int) sizeof(g_sync_why), "sync:not-json"); return NULL;
+    }
     jbyteArray out = NULL;
     char enc[8];
     memset(enc, 0, sizeof(enc));
@@ -3839,15 +4007,18 @@ Java_ir_v2rayng_compose_core_NativeSec_syncRun(JNIEnv *env, jclass cls) {
                     free(old);
                 }
             }
-            if (g_trim != NULL && g_trim_n > 0) {
-                out = (*env)->NewByteArray(env, g_trim_n);
-                if (out) (*env)->SetByteArrayRegion(env, out, 0, g_trim_n, (const jbyte *) g_trim);
+            int tn = 0;
+            unsigned char *panel = trim_take(&tn);
+            if (panel != NULL && tn > 0) {
+                out = (*env)->NewByteArray(env, tn);
+                if (out) (*env)->SetByteArrayRegion(env, out, 0, tn, (const jbyte *) panel);
                 g_sync_outcome = out ? 1 : 5;
                 set_step(rows > 0 ? "sync:ok" : "sync:no-rows");
             } else {
                 g_sync_outcome = 5;
                 set_step("sync:no-panel");
             }
+            free(panel);
         }
     } else {
         int v = pl_json_int(env, o, jsonCls, "v", 0);
