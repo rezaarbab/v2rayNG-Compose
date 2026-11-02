@@ -87,8 +87,8 @@ export default {
     // Only two endpoints exist:
     //   /api/key  - key issuance (device + 60-minute bucket, one-shot token)
     //   /api/sync - the single data channel, ALWAYS encrypted (no plaintext fallback)
-    if (path === "/api/key") return withDb(env, () => blobKeyIssue(env, request));
-    if (path === "/api/sync") return withDb(env, () => appSync(env, request));
+    if (path === "/api/key") return withDb(env, (b) => blobKeyIssue(env, request, b), request);
+    if (path === "/api/sync") return withDb(env, (b, st) => appSync(env, request, b, st), request);
 
     return new Response("not found", { status: 404 });
   },
@@ -96,12 +96,34 @@ export default {
 
 /** Run a DB-backed handler; on a table error, create/patch the schema and retry once. Forced,
  *  because a retry that skips the column ALTERs reproduces the very error it is meant to heal. */
-async function withDb(env, f) {
+/** Run the app's request, and re-run it only for the one failure ensureSchema can actually fix.
+ *
+ *  Two separate bugs lived here. (1) The body used to be read inside the handler, so the retry read
+ *  a consumed Request a second time, got null from its own .catch(() => null), and answered a
+ *  perfectly valid handset with {"ok":false,"error":"need device"} - measured, not suspected: with
+ *  one D1 fault per 40 statements, 4 of 20 concurrent devices got "need device" instead of their
+ *  servers (workercap.cjs, the real handler against an in-memory D1). So the body is read once,
+ *  here, and handed to both attempts.
+ *  (2) Re-running for ANY error was wrong too, because /api/sync consumes a one-shot token: by the
+ *  time the first attempt fails, bl_tokAdvance has already recorded that timestamp, so the retry's
+ *  same token is refused as a replay and the device is told enc:"x" - which the app reads as "the
+ *  worker knows a different key", throws away its session keys and issues a second request. A
+ *  transient database problem should cost the handset a retry, not its session.
+ *  So: a missing table or column (what ensureSchema creates) retries; everything else - overloaded,
+ *  busy, timeout - is left to surface, where the app's own handling keeps its keys and its acks. */
+async function withDb(env, f, request) {
+  let body;
+  if (request) {
+    try { body = await request.json(); } catch (e) { body = null; }
+  }
+  const st = { tokSpent: false };
   try {
-    return await f();
+    return await f(body, st);
   } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (!/no such table|no such column/i.test(msg) || st.tokSpent) throw e;
     try { await ensureSchema(env, true); } catch (e2) {}
-    return await f();
+    return await f(body, st);
   }
 }
 
@@ -113,8 +135,8 @@ async function appAuthOk(env, request) {
   return h === env.APP_TOKEN;
 }
 
-async function appSync(env, request) {
-  const b = await request.json().catch(() => null);
+async function appSync(env, request, b, st) {
+  if (b === undefined) b = await request.json().catch(() => null);
   // Throttled before any database read, and answered with an EMPTY 429 body on purpose.
   // enc:"n" (unchanged) would look smoother, but the app clears its queued acks on that path, so a
   // refused sync would silently drop the receipts for "connect"/"disconnect" and the admin's file
@@ -134,7 +156,7 @@ async function appSync(env, request) {
   // there is deliberately NO plaintext fallback anymore. The session keys are stored per device
   // in D1, so this path needs no shared secret at all any more.
   if (request.headers.get("x-blob") === "v1") {
-    return blobSyncProtected(env, request, b);
+    return blobSyncProtected(env, request, b, st);
   }
   return new Response(JSON.stringify({ ok: true, v: 2, enc: "h" }), { headers: jsonHeaders() });
 }
@@ -3366,7 +3388,7 @@ async function blobSealResponse(env, device, obj, kc) {
 }
 
 /** /api/sync with encrypted session. enc:"h" = handshake needed, enc:"x" = auth rejected. */
-async function blobSyncProtected(env, request, b) {
+async function blobSyncProtected(env, request, b, st) {
   let row = null;
   try {
     row = await env.DB.prepare("SELECT key, exp FROM blob_sessions WHERE device=?1 AND rot=0").bind(String(b.device)).first();
@@ -3379,6 +3401,12 @@ async function blobSyncProtected(env, request, b) {
   }
   const tok = await bl_tokenCheck(env, String(b.device), String(request.headers.get("x-btok") || ""), bl_hexToB(keyHex.slice(64, 128)));
   if (!tok.ok) return new Response(JSON.stringify({ ok: true, v: 2, enc: "x", why: "one-shot token did not verify (replayed, clock skew, or keys rotated)" }), { status: 403, headers: jsonHeaders() });
+  // The token is spent now: bl_tokAdvance recorded its ts, so a second attempt carrying the same
+  // token would be refused as a replay. withDb must therefore stop retrying this request from here
+  // on - a schema hiccup deeper down should surface as a failed sync the handset retries with a
+  // fresh token, not as enc:"x", which the app reads as "the worker knows a different key" and
+  // answers by throwing away its session keys.
+  st.tokSpent = true;
   const payload = await syncPayloadObj(env, request, b);
   const kc = bl_hexToB(keyHex.slice(0, 64));
   const sealed = await blobSealResponse(env, String(b.device), payload, kc);
@@ -3390,8 +3418,8 @@ async function blobSyncProtected(env, request, b) {
 /** /api/key - the app owns NO shared secret at all. It signs the one-shot message with a
  *  non-exportable AndroidKeyStore key and the worker answers with fresh RANDOM session keys,
  *  sealed before they are stored. A request without that signature (an old build) is refused. */
-async function blobKeyIssue(env, request) {
-  const b = await request.json().catch(() => null);
+async function blobKeyIssue(env, request, b) {
+  if (b === undefined) b = await request.json().catch(() => null);
   if (!b || !b.device) {
     return new Response(JSON.stringify({ ok: false, error: "issuance" }), { status: 400, headers: jsonHeaders() });
   }
