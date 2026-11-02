@@ -350,7 +350,7 @@ class XrayVpnService : VpnService() {
             if (ctl == null || NativeSec.coreStartWith(ctl, row, tunFd) != 1) {
                 // take the tunnel back down rather than leave a core-less TUN holding the VPN slot
                 stopCore()
-                XrayBridge.addLog("ERROR", "هستهٔ اتصال برای این سرور بالا نیامد")
+                XrayBridge.addLog("ERROR", "هستهٔ اتصال برای این سرور بالا نیامد [" + NativeSec.errInfo() + "]")
                 XrayBridge.setState(RealState.BROKEN, "core start failed")
                 return
             }

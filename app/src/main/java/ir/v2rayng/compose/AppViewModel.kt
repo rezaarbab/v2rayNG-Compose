@@ -169,7 +169,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             val s = store.load()
             settingsLoaded = true
             // the list lives in the library between syncs; take it back before anything reads it
+            // what the library ended up holding, said as one line on the log page - but only AFTER
+            // _settings is assigned below, because log() writes into that state and a line written
+            // before it would be replaced by the very restore that follows
+            var rowsLine: String? = null
             try {
+                var from = "already-there"
                 if (ir.v2rayng.compose.core.NativeSec.payloadRows() == 0) {
                     // the server rows are the library's own business now: it keeps its sealed copy
                     // in its own preference (it needs the Context for that), and the copy a previous
@@ -178,12 +183,21 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     val legacy = ir.v2rayng.compose.core.sec.SecurePrefs.get("srvrows")
                     if (!legacy.isNullOrEmpty() &&
                         ir.v2rayng.compose.core.NativeSec.rowsAdoptFrom(legacy) > 0
-                    ) ir.v2rayng.compose.core.sec.SecurePrefs.set("srvrows", "", ir.v2rayng.compose.AppCtx.app)
+                    ) {
+                        ir.v2rayng.compose.core.sec.SecurePrefs.set("srvrows", "", ir.v2rayng.compose.AppCtx.app)
+                        from = "adopted-from-old-build"
+                    }
                     if (ir.v2rayng.compose.core.NativeSec.payloadRows() == 0) {
-                        ir.v2rayng.compose.core.NativeSec.rowsRestore()
+                        if (ir.v2rayng.compose.core.NativeSec.rowsRestore() > 0) from = "restored-from-library"
+                        else from = "restored: nothing readable"
                     }
                 }
+                /* one line, one number: whether the library holds rows at all is the difference
+                   between "the list is empty because sync failed" and "the list is full but every
+                   dial finds no row" - and nothing about a server is in it */
+                rowsLine = "rows in library: " + ir.v2rayng.compose.core.NativeSec.payloadRows() + " (" + from + ")"
             } catch (_: Throwable) {
+                rowsLine = "rows in library: the lookup itself threw"
             }
             // palette, stickers and wallpaper are what the eye notices, so they are applied before
             // the server list is unsealed; anything the user changed in the meantime is replayed on
@@ -194,6 +208,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 merged = edit(merged)
             }
             _settings.value = merged
+            rowsLine?.let { log("INFO", it) }
             queueSave()
             val saved = store.loadServers()
             val sel = store.loadSelectedId()
@@ -1248,8 +1263,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                 probePing(row, srv.name)
                             } else {
                                 // nothing to measure: the list shows a server the library has no row
-                                // for, so report that instead of inventing a latency
-                                null to "no link"
+                                // for, so report that instead of inventing a latency. The count says
+                                // which of the two this is: an empty library (sync never landed) or a
+                                // full one whose ids do not match this row (a mapping bug).
+                                val n = ir.v2rayng.compose.core.NativeSec.payloadRows()
+                                log("WARN", "Ping " + srv.name + ": no row for it (library holds " + n + ")")
+                                null to if (n == 0) "no servers yet" else "no row"
                             }
                             put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms, pingErr = msErr) else it }) }
                             // country probe only for tunnels proven alive; broken ones get no flag
@@ -1330,7 +1349,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             // gives back is this probe's own core, so a probe that finishes first cannot take a
             // later one's core down with it
             val handle = ir.v2rayng.compose.core.NativeSec.probeStart(row, socksPort, cb)
-            if (handle == 0) return null
+            if (handle == 0) {
+                log("WARN", "Flag: the probe core did not start [" + ir.v2rayng.compose.core.NativeSec.errInfo() + "]")
+                return null
+            }
             var code: String? = null
             try {
                 // the trace page also echoes this device's user-agent, so the library reads it
@@ -1338,6 +1360,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 code = ir.v2rayng.compose.core.NativeSec.probe(
                     "https://www.cloudflare.com/cdn-cgi/trace", "loc", socksPort,
                 ).takeIf { it.length == 2 }
+                if (code == null) log("WARN", "Flag: no country in the answer [" + ir.v2rayng.compose.core.NativeSec.errInfo() + "]")
             } finally {
                 ir.v2rayng.compose.core.NativeSec.probeStop(handle)
             }

@@ -209,8 +209,10 @@ object BlobSecure {
             }
             if (status == -1) {
                 blog("sync: no answer (step=" + NativeSec.errInfo() + ")")
-                // transport failed - keep the session, let the caller retry on the next sync
-                fail("server unreachable (network or timeout)")
+                // transport failed - keep the session, let the caller retry on the next sync.
+                // the step belongs in the sentence the user can read: blog() writes nothing and
+                // there is no logcat here, so without it "network" is all anyone will ever see
+                fail("server unreachable (network or timeout) [" + NativeSec.errInfo() + "]")
                 return null
             }
             /* The reply is answered where it already is: which letter it carried, the carrier text,
@@ -235,7 +237,7 @@ object BlobSecure {
                     val why = NativeSec.syncReason()
                     blog("sync refused: " + why)
                     if (issued) {
-                        fail("payload verification failed ($why)")
+                        fail("payload verification failed ($why) [step=" + NativeSec.errInfo() + "]")
                         return null
                     }
                     issued = true
