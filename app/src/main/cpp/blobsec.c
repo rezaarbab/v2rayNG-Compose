@@ -2206,6 +2206,10 @@ Java_ir_v2rayng_compose_core_NativeSec_proofFor(JNIEnv *env, jclass cls, jstring
 #define PL_ADDR 256
 #define PL_CRED 256
 #define PL_MISC 256
+/* the link ceiling is shared: the row store holds one, and the parser copies the text it is about
+   to read into a buffer of this size, so it has to be defined before both (it lived down with the
+   store, where the parser could not see it) */
+#define PLR_LINK 2048
 
 static char pl_name[PL_NAME];
 static char pl_addr[PL_ADDR];
@@ -2351,12 +2355,20 @@ static int pl_parse_vmess(JNIEnv *env, const char *s, int n, int p) {
                     if (pl_security[0] == 0) strcpy(pl_security, "none");
                     if (pl_type[0] == 0) strcpy(pl_type, "tcp");
                     ok = 1;
+                } else {
+                    set_step("vmess:fields");
                 }
+            } else {
+                set_step("vmess:json");
             }
             if (jjs) (*env)->DeleteLocalRef(env, jjs);
             if (obj) (*env)->DeleteLocalRef(env, obj);
             if (jsonCls) (*env)->DeleteLocalRef(env, jsonCls);
+        } else {
+            set_step("vmess:b64");
         }
+    } else {
+        set_step("vmess:alloc");
     }
     free(b64);
     free(json);
@@ -2383,7 +2395,7 @@ static int pl_parse_ss(JNIEnv *env, const char *s, int n, int p) {
         pl_udecode(s + p, at - p, cred, sizeof(cred));
         if (pl_b64(cred, (int) strlen(cred), dec, sizeof(dec)) <= 0) strcpy(dec, cred);
         char *c = strchr(dec, ':');
-        if (c == NULL || c == dec) return 0;
+        if (c == NULL || c == dec) { set_step("ss:cred-inline"); return 0; }
         pl_copy(method, sizeof(method), dec, (int) (c - dec));
         pl_copy(pass, PL_CRED, c + 1, (int) strlen(c + 1));
         hostLen = bodyEnd - (at + 1);
@@ -2398,12 +2410,12 @@ static int pl_parse_ss(JNIEnv *env, const char *s, int n, int p) {
         if (blen >= (int) sizeof(b)) blen = (int) sizeof(b) - 1;
         memcpy(b, s + p, (size_t) blen);
         b[blen] = 0;
-        if (pl_b64(b, blen, dec, sizeof(dec)) <= 0) return 0;
+        if (pl_b64(b, blen, dec, sizeof(dec)) <= 0) { set_step("ss:b64"); return 0; }
         char *at2 = strrchr(dec, '@');
         char *colon2 = strrchr(dec, ':');
-        if (at2 == NULL || colon2 == NULL || colon2 <= at2) return 0;
+        if (at2 == NULL || colon2 == NULL || colon2 <= at2) { set_step("ss:shape"); return 0; }
         char *cc = memchr(dec, ':', (size_t) (at2 - dec));
-        if (cc == NULL || cc == dec) return 0;
+        if (cc == NULL || cc == dec) { set_step("ss:cred"); return 0; }
         pl_copy(method, sizeof(method), dec, (int) (cc - dec));
         pl_copy(pass, PL_CRED, cc + 1, (int) (at2 - cc - 1));
         pl_copy(hostPart, PL_ADDR, at2 + 1, (int) strlen(at2 + 1));
@@ -2411,7 +2423,7 @@ static int pl_parse_ss(JNIEnv *env, const char *s, int n, int p) {
     }
     int colon = -1;
     for (int i = 0; i < hostLen; i++) if (hostPart[i] == ':') colon = i;
-    if (colon <= 0) return 0;
+    if (colon <= 0) { set_step("ss:no-port"); return 0; }
     int hs = 0, he = colon;
     if (he - hs >= 2 && hostPart[hs] == '[' && hostPart[he - 1] == ']') { hs++; he--; }
     pl_copy(pl_addr, PL_ADDR, hostPart + hs, he - hs);
@@ -2421,7 +2433,7 @@ static int pl_parse_ss(JNIEnv *env, const char *s, int n, int p) {
         port = port * 10 + (hostPart[i] - '0');
         if (port > 65535) { port = 0; break; }
     }
-    if (pl_addr[0] == 0 || port <= 0 || method[0] == 0 || pass[0] == 0) return 0;
+    if (pl_addr[0] == 0 || port <= 0 || method[0] == 0 || pass[0] == 0) { set_step("ss:fields"); return 0; }
     pl_port = port;
     pl_kind = 3;
     strcpy(pl_method, method);
@@ -2431,23 +2443,55 @@ static int pl_parse_ss(JNIEnv *env, const char *s, int n, int p) {
     return 1;
 }
 
+/** case-insensitive prefix test - the Kotlin this replaced matched the scheme with
+ *  startsWith(literal, ignoreCase = true), and the panel saves the admin's textarea verbatim */
+static int pl_pref(const char *s, const char *lit, int len) {
+    for (int i = 0; i < len; i++) {
+        char a = s[i], b = lit[i];
+        if (a >= 'A' && a <= 'Z') a = (char) (a + 32);
+        if (b >= 'A' && b <= 'Z') b = (char) (b + 32);
+        if (a != b) return 0;
+        if (a == 0) return 0;
+    }
+    return 1;
+}
+
 static jint pl_parse_link(JNIEnv *env, jclass cls, jstring jlink) {
     pl_ok = 0;
     pl_name[0] = pl_addr[0] = pl_cred[0] = 0;
-    if (jlink == NULL) return 0;
-    const char *s = (*env)->GetStringUTFChars(env, jlink, NULL);
-    if (s == NULL) return 0;
-    int n = (int) strlen(s);
+    if (jlink == NULL) { set_step("link:none"); return 0; }
+    const char *sraw = (*env)->GetStringUTFChars(env, jlink, NULL);
+    if (sraw == NULL) {
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        set_step("link:chars");
+        return 0;
+    }
+    /* Trim, the way the Kotlin this replaced did (raw.trim()). The admin's link goes into the panel
+       through a textarea whose value is stored with no trim at all (worker.js: s_link.value), so a
+       pasted link carrying a trailing newline or a leading space reaches this function exactly like
+       that - and the memcmp port of the scheme test rejected it: one row out of twenty-one failed
+       with cfgforrow:parse while the rest dialled fine. */
+    char buf[PLR_LINK];
+    int lo = 0, hi = (int) strlen(sraw);
+    while (lo < hi && (sraw[lo] == ' ' || sraw[lo] == '\t' || sraw[lo] == '\n' || sraw[lo] == '\r')) lo++;
+    while (hi > lo && (sraw[hi - 1] == ' ' || sraw[hi - 1] == '\t' || sraw[hi - 1] == '\n' || sraw[hi - 1] == '\r')) hi--;
+    int n = hi - lo;
+    if (n <= 0) { (*env)->ReleaseStringUTFChars(env, jlink, sraw); set_step("link:empty"); return 0; }
+    if (n >= (int) sizeof(buf)) { (*env)->ReleaseStringUTFChars(env, jlink, sraw); set_step("link:too-long"); return 0; }
+    memcpy(buf, sraw + lo, (size_t) n);
+    buf[n] = 0;
+    (*env)->ReleaseStringUTFChars(env, jlink, sraw);
+    const char *s = buf;
     int p = 0;
-    if (n > 7 && (s[0] == 'v' || s[0] == 't')) {
-        if (n > 8 && memcmp(s, "vless://", 8) == 0) { pl_kind = 0; p = 8; }
-        else if (n > 9 && memcmp(s, "trojan://", 9) == 0) { pl_kind = 1; p = 9; }
+    if (n > 7 && (s[0] == 'v' || s[0] == 'V' || s[0] == 't' || s[0] == 'T')) {
+        if (n > 8 && pl_pref(s, "vless://", 8)) { pl_kind = 0; p = 8; }
+        else if (n > 9 && pl_pref(s, "trojan://", 9)) { pl_kind = 1; p = 9; }
     }
     if (p == 0) {
-        if (n > 9 && memcmp(s, "vmess://", 9) == 0) { int ok = pl_parse_vmess(env, s, n, 9); (*env)->ReleaseStringUTFChars(env, jlink, s); pl_ok = ok; return ok; }
-        if (n > 5 && memcmp(s, "ss://", 5) == 0) { int ok = pl_parse_ss(env, s, n, 5); (*env)->ReleaseStringUTFChars(env, jlink, s); pl_ok = ok; return ok; }
+        if (n > 9 && pl_pref(s, "vmess://", 9)) { int ok = pl_parse_vmess(env, s, n, 9); pl_ok = ok; return ok; }
+        if (n > 5 && pl_pref(s, "ss://", 5)) { int ok = pl_parse_ss(env, s, n, 5); pl_ok = ok; return ok; }
     }
-    if (!(pl_kind == 0 || pl_kind == 1) || p == 0) { (*env)->ReleaseStringUTFChars(env, jlink, s); return 0; }
+    if (!(pl_kind == 0 || pl_kind == 1) || p == 0) { set_step("link:scheme"); return 0; }
     int hashAt = -1, qAt = -1, atAt = -1;
     for (int i = p; i < n; i++) {
         if (s[i] == '#') { hashAt = i; break; }
@@ -2457,7 +2501,7 @@ static jint pl_parse_link(JNIEnv *env, jclass cls, jstring jlink) {
     int mainEnd = hashAt >= 0 ? hashAt : n;
     /* name from the fragment */
     if (hashAt >= 0) { pl_udecode(s + hashAt + 1, n - hashAt - 1, pl_name, PL_NAME); }
-    if (atAt < 0 || atAt >= mainEnd) { (*env)->ReleaseStringUTFChars(env, jlink, s); return 0; }
+    if (atAt < 0 || atAt >= mainEnd) { set_step("link:no-at"); return 0; }
     pl_copy(pl_cred, PL_CRED, s + p, atAt - p);
     /* host:port - take the last ':' before '?' and after the '@' */
     int hostStart = atAt + 1;
@@ -2467,7 +2511,7 @@ static jint pl_parse_link(JNIEnv *env, jclass cls, jstring jlink) {
     int hostFrom = slash >= 0 ? slash + 1 : hostStart;
     int colon = -1;
     for (int i = hostFrom; i < hpEnd; i++) if (s[i] == ':') colon = i;
-    if (colon <= hostFrom) { (*env)->ReleaseStringUTFChars(env, jlink, s); return 0; }
+    if (colon <= hostFrom) { set_step("link:no-port"); return 0; }
     int hs = hostFrom, he = colon;
     if (he - hs >= 2 && s[hs] == '[' && s[he - 1] == ']') { hs++; he--; }
     pl_copy(pl_addr, PL_ADDR, s + hs, he - hs);
@@ -2477,7 +2521,7 @@ static jint pl_parse_link(JNIEnv *env, jclass cls, jstring jlink) {
         port = port * 10 + (s[i] - '0');
         if (port > 65535) { port = 0; break; }
     }
-    if (pl_addr[0] == 0 || port <= 0) { (*env)->ReleaseStringUTFChars(env, jlink, s); return 0; }
+    if (pl_addr[0] == 0 || port <= 0) { set_step("link:host-or-port"); return 0; }
     pl_port = port;
     /* parameters */
     const char *q = NULL;
@@ -2504,7 +2548,6 @@ static jint pl_parse_link(JNIEnv *env, jclass cls, jstring jlink) {
     }
     if (pl_security[0] == 0) { strcpy(pl_security, pl_kind == 1 ? "tls" : "none"); }
     if (pl_type[0] == 0) { strcpy(pl_type, "tcp"); }
-    (*env)->ReleaseStringUTFChars(env, jlink, s);
     pl_ok = 1;
     return 1;
 }
@@ -3110,7 +3153,6 @@ static void sb_socks(sbuf *s, int port) {
 #define PLR_MAX 256
 #define PLR_ID 64
 #define PLR_CAT 64
-#define PLR_LINK 2048
 #define PLR_MISC 256
 
 typedef struct {
@@ -3225,7 +3267,16 @@ static jstring cfg_text(JNIEnv *env, jclass cls, jint row, jint mode, jint socks
     pthread_mutex_lock(&g_cfg_mtx);
     int ok = pl_parse_link(env, cls, jlink);
     (*env)->DeleteLocalRef(env, jlink);
-    if (ok != 1) { pthread_mutex_unlock(&g_cfg_mtx); set_step("cfgforrow:parse"); return NULL; }
+    if (ok != 1) {
+        pthread_mutex_unlock(&g_cfg_mtx);
+        /* the parser has already named which rejection happened (link:scheme, link:no-at, ss:b64,
+           vmess:fields ...); overwriting that with one generic word is how "cfgforrow:parse" came
+           back from the phone and told us nothing. Only keep the general label when the step does
+           not belong to one of the three parsers. */
+        if (strncmp(g_step, "link:", 5) != 0 && strncmp(g_step, "ss:", 3) != 0 &&
+            strncmp(g_step, "vmess:", 6) != 0) set_step("cfgforrow:parse");
+        return NULL;
+    }
     sbuf s;
     s.b = NULL; s.n = 0; s.cap = 0;
     if (!config_build(&s, mode, socksPort)) {
