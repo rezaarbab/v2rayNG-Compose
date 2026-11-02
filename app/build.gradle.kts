@@ -20,8 +20,8 @@ android {
         applicationId = "ir.blob.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.2"
+        versionCode = 13
+        versionName = "1.3"
         // the server identity is assembled in C (src/main/cpp/blobgate.c) and handed over JNI
         externalNativeBuild {
             cmake {

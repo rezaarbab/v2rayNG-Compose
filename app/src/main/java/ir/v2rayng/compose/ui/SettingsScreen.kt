@@ -657,7 +657,7 @@ fun SimpleHexColorDialog(title: String, current: Long, onSet: (Long) -> Unit, on
 }
 
 
-/** "Blob 1.2 (12)" - what is installed, for the one user who asks. Outside composition so the
+/** "Blob 1.3 (13)" - what is installed, for the one user who asks. Outside composition so the
  *  package lookup cannot sit in a try around a composable call. */
 private fun versionLine(): String {
     val ctx = ir.v2rayng.compose.AppCtx.app
