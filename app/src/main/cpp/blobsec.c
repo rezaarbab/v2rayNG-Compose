@@ -3267,7 +3267,7 @@ Java_ir_v2rayng_compose_core_NativeSec_measureDelay(JNIEnv *env, jclass cls, jin
     if (cfg == NULL) return -1;
     jclass lb = need_class(env, "libv2ray/Libv2ray");
     if (lb == NULL) { (*env)->DeleteLocalRef(env, cfg); return -1; }
-    jmethodID mMeas = mid_lookup(env, lb, "measureOutboundDelay",
+    jmethodID mMeas = mid_lookup_static(env, lb, "measureOutboundDelay",
         "(Ljava/lang/String;Ljava/lang/String;)J", "delay:measureOutboundDelay");
     if (mMeas == NULL) { (*env)->DeleteLocalRef(env, lb); (*env)->DeleteLocalRef(env, cfg); return -1; }
     jlong d = (*env)->CallStaticLongMethod(env, lb, mMeas, cfg, jurl);
@@ -3296,7 +3296,7 @@ Java_ir_v2rayng_compose_core_NativeSec_flagStart(JNIEnv *env, jclass cls, jint r
     jstring cfg = cfg_text(env, cls, row, 2, socksPort);
     if (cfg == NULL) return 0;
     jclass lb = need_class(env, "libv2ray/Libv2ray");
-    jmethodID mNew = lb ? mid_lookup(env, lb, "newCoreController",
+    jmethodID mNew = lb ? mid_lookup_static(env, lb, "newCoreController",
         "(Llibv2ray/CoreCallbackHandler;)Llibv2ray/CoreController;", "flag:newCoreController") : NULL;
     jobject ctrl = (lb && mNew) ? (*env)->CallStaticObjectMethod(env, lb, mNew, jcb) : NULL;
     if ((*env)->ExceptionCheck(env)) { step_failed(env, "flag:newCoreController"); ctrl = NULL; }

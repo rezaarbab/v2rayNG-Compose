@@ -1346,7 +1346,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                twenty-three rows falling back to tcp looks like a working list, and the reason the
                tunnel ping died - which is the actual bug - is never visible anywhere */
             if (via != "https") {
-                val why = detail.trim().take(70).replace('\n', ' ')
+                val why = detail.trim().take(150).replace('\n', ' ')
                 log("INFO", "Ping $who: ${ms}ms ($via fallback${if (why.isNotBlank()) ", real ping: $why" else ""})")
             }
         } else {
