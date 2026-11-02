@@ -755,9 +755,18 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         false
     }
 
+    /** Background refresh interval. Measured, not guessed: one sync is 17 D1 statements and 5 rows
+     *  written, so on the Free plan's 100k rows-written/day the 2-minute beat gave this worker
+     *  roughly 27 devices of room (720 syncs/day/device). At ten minutes the same database serves
+     *  about five times that. Freshness is not lost where it matters - the first sync still runs the
+     *  moment the app starts, and connecting, pulling to refresh and the admin's own actions sync
+     *  immediately - what moves is the delay before an unattended handset notices a changed list,
+     *  a forced-update dialog or a popup, and how stale last_seen looks in the panel. */
+    private val remoteBeatMs = 600_000L
+
     private fun startRemoteLoop() {
         viewModelScope.launch(Dispatchers.IO) {
-            // first sync right away, then every two minutes - and silent, because the user is
+            // first sync right away, then on the beat in remoteBeatMs - and silent, because the user is
             // already looking at everything that was stored on the device
             try {
                 val dev0 = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
@@ -772,7 +781,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             } catch (e: Exception) {
                 log("WARN", "لیست سرور گرفته نشد: " + e.javaClass.simpleName)
             }
-            delay(120_000L)
+            delay(remoteBeatMs)
             while (true) {
                 try {
                     val connected = _state.value.vpnState == VpnState.CONNECTED
@@ -785,7 +794,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     // no separate beat request - the sync body itself refreshes last_seen/connected
                 } catch (_: Exception) {
                 }
-                delay(120_000L)
+                delay(remoteBeatMs)
             }
         }
     }
