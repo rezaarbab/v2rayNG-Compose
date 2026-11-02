@@ -3667,7 +3667,12 @@ Java_ir_v2rayng_compose_core_NativeSec_tcpPingRow(JNIEnv *env, jclass cls, jint 
         clock_gettime(CLOCK_MONOTONIC, &t0);
         int ms = -1;
         if (connect(fd, res->ai_addr, res->ai_addrlen) == 0) {
-            ms = 0;
+            /* The handshake ended inside connect() - it took however long it took, and on a socket
+               that could not be made non-blocking it took the whole round trip. Reading the clock is
+               the only honest answer here: this line used to say 0, which is how twenty-three
+               servers in four countries started showing 1ms after the measurement moved to C. */
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            ms = (int) ((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000);
         } else if (errno == EINPROGRESS) {
             fd_set wf;
             FD_ZERO(&wf);

@@ -1254,6 +1254,8 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                 _state.value.vpnState != VpnState.CONNECTING
             val sem = Semaphore(10)
             val portSeq = AtomicInteger(0)
+            val flagRan = AtomicInteger(0)
+            val flagTcpOnly = AtomicInteger(0)
             coroutineScope {
                 for (srv in targets) {
                     launch(Dispatchers.IO) {
@@ -1273,14 +1275,26 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(ping = ms, pingErr = msErr) else it }) }
                             // country probe only for tunnels proven alive; broken ones get no flag
                             if (doFlags && ms != null && msErr == null) {
+                                flagRan.incrementAndGet()
                                 val code = probeFlag(row, 21000 + portSeq.getAndIncrement() % 60)
                                 if (code != null) {
                                     put { s -> s.copy(servers = s.servers.map { if (it.id == srv.id) it.copy(country = code) else it }) }
                                 }
+                            } else if (doFlags && ms != null && msErr == "tcp") {
+                                /* the reason no flag came for this row is the reason the tunnel ping
+                                   did not work, not anything about the country probe */
+                                flagTcpOnly.incrementAndGet()
                             }
                         }
                     }
                 }
+            }
+            if (doFlags) {
+                /* one line for the whole round. "ran for 0" with the tcp count next to it says the
+                   flags did not come because the tunnel ping never succeeded - not because the probe
+                   core, the socks port or the provider page failed, which is what the per-row lines
+                   would have said */
+                log("INFO", "flags: ran " + flagRan.get() + ", skipped on tcp-only ping " + flagTcpOnly.get() + ", probed rows " + targets.size)
             }
         }
     }
@@ -1328,7 +1342,13 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         }
         val who = label.ifBlank { "server" }
         if (ms != null) {
-            if (via != "https") log("INFO", "Ping $who: ${ms}ms ($via fallback)")
+            /* a fallback number has to say what the real measurement did: without the step here,
+               twenty-three rows falling back to tcp looks like a working list, and the reason the
+               tunnel ping died - which is the actual bug - is never visible anywhere */
+            if (via != "https") {
+                val why = detail.trim().take(70).replace('\n', ' ')
+                log("INFO", "Ping $who: ${ms}ms ($via fallback${if (why.isNotBlank()) ", real ping: $why" else ""})")
+            }
         } else {
             val d = detail.trim().take(90).replace('\n', ' ')
             log("WARN", "Ping $who: ${token.ifBlank { "timeout" }}${if (d.isNotBlank() && d != token) " - $d" else ""}")
