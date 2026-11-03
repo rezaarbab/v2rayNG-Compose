@@ -64,6 +64,16 @@ class XrayVpnService : VpnService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val statsRunnable = object : Runnable {
         override fun run() {
+            /* the bridge can be moved out of CONNECTED without this service being told: the app's
+               watchdog marks a dead tunnel BROKEN, and the core can end on its own and report IDLE.
+               Either way an ongoing notification naming a server must not keep ticking a connect
+               clock and counting traffic for a tunnel that carries nothing */
+            val held = XrayBridge.status.value.state
+            if (tunnelUp && held != RealState.CONNECTED && held != RealState.CONNECTING) {
+                // no state written: whoever moved it already said why
+                dropTunnel(null)
+                return
+            }
             val c = controller
             if (c != null) {
                 try {
@@ -126,7 +136,9 @@ class XrayVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                stopCore()
+                // a deliberate stop goes back to idle even when the last dial had failed: the user
+                // asked for no tunnel, so the screen must say disconnected, not keep the red
+                stopCore(RealState.IDLE)
                 stopForegroundCompat()
                 stopSelf()
                 return START_NOT_STICKY
@@ -144,9 +156,8 @@ class XrayVpnService : VpnService() {
                 // id is looked up here, and a server the store does not have cannot be dialed
                 val row = NativeSec.rowOf(target.id)
                 if (row < 0) {
+                    // refuseNoRow takes the notification down with it
                     refuseNoRow()
-                    stopForegroundCompat()
-                    stopSelf()
                     return START_NOT_STICKY
                 }
                 val name = dialName(target, row)
@@ -156,7 +167,13 @@ class XrayVpnService : VpnService() {
                     // server hot-swap: let the old core / TUN fully shut down before reconnecting
                     pending = target
                     mainHandler.postDelayed({
-                        if (controller == null && tunFd < 0) {
+                        if (controller != null || tunFd >= 0) {
+                            /* the old core did not finish coming down inside the settle window. The
+                               notification still names the server that was connected before, and a
+                               second core on the same fd is not a tunnel - so the dial is called
+                               what it is and the notification goes with it */
+                            dropTunnel(RealState.BROKEN, "old tunnel did not close")
+                        } else {
                             val swapRow = NativeSec.rowOf(target.id)
                             if (swapRow >= 0) {
                                 val swapName = dialName(target, swapRow)
@@ -182,7 +199,7 @@ class XrayVpnService : VpnService() {
 
     private fun refuseNoRow() {
         XrayBridge.addLog("ERROR", "این سرور در کتابخانهٔ برنامه نیست - یک‌بار همگام‌سازی انجام بده")
-        XrayBridge.setState(RealState.BROKEN, "no library row")
+        dropTunnel(RealState.BROKEN, "no library row")
     }
 
     private fun stopForegroundCompat() {
@@ -333,8 +350,8 @@ class XrayVpnService : VpnService() {
             XrayBridge.trace("Apps excluded from tunnel: $excluded")
             val tun = builder.setBlocking(true).establish()
             if (tun == null) {
-                XrayBridge.addLog("ERROR", "TUN create failed (another VPN active or duplicate)")
-                XrayBridge.setState(RealState.BROKEN, "TUN create failed")
+                // the VPN slot is taken by another tunnel, or this one was not given twice
+                dropTunnel(RealState.BROKEN, "TUN create failed")
                 return
             }
             tunFd = tun.detachFd()
@@ -348,10 +365,11 @@ class XrayVpnService : VpnService() {
                never holds the text that contains the address, the port and the id */
             val ctl = controller
             if (ctl == null || NativeSec.coreStartWith(ctl, row, tunFd) != 1) {
-                // take the tunnel back down rather than leave a core-less TUN holding the VPN slot
-                stopCore()
-                XrayBridge.addLog("ERROR", "هستهٔ اتصال برای این سرور بالا نیامد [" + NativeSec.errInfo() + "]")
-                XrayBridge.setState(RealState.BROKEN, "core start failed")
+                /* which step refused travels in the reason: the same "connection failed" otherwise
+                   covers a config the library would not build, a keystore that gave no key and a
+                   core that refused the fd - and the TUN has to go back, or a core-less tunnel
+                   keeps the VPN slot with nothing behind it */
+                dropTunnel(RealState.BROKEN, "core start failed [" + NativeSec.errInfo() + "]")
                 return
             }
             tunnelUp = true
@@ -362,13 +380,24 @@ class XrayVpnService : VpnService() {
             mainHandler.postDelayed(statsRunnable, 1200L)
         } catch (e: Exception) {
             // the user needs "it failed", not the exception text - that can carry the endpoint
-            XrayBridge.addLog("ERROR", "خطای هستهٔ اتصال")
             XrayBridge.trace("Core error: ${e.javaClass.simpleName}: ${e.message}")
-            XrayBridge.setState(RealState.BROKEN, "core error")
+            dropTunnel(RealState.BROKEN, "core error")
         }
     }
 
-    private fun stopCore() {
+    /** What the UI should be told after a tunnel comes down: a dial that failed stays red, because
+     *  passing IDLE here would make the app log "disconnected" and then sound the tunnel-died alarm
+     *  for a tunnel that was never connected. */
+    private fun afterStop(): RealState =
+        if (XrayBridge.status.value.state == RealState.BROKEN) RealState.BROKEN else RealState.IDLE
+
+    private fun stopCore(to: RealState = afterStop()) {
+        tunnelDown()
+        XrayBridge.setState(to)
+    }
+
+    /** everything the tunnel owns, leaving the state the app reads alone */
+    private fun tunnelDown() {
         tunnelUp = false
         connectedSince = 0L
         lastNotifiedSec = -1L
@@ -390,7 +419,17 @@ class XrayVpnService : VpnService() {
         // the UI follows this: without it the app keeps showing "connected" after the
         // notification's Disconnect stopped the tunnel
         XrayBridge.setTraffic(0L, 0L, 0.0, 0.0)
-        XrayBridge.setState(RealState.IDLE)
+    }
+
+    /** The tunnel is gone and so is the notification. An ongoing one survives the screen going back
+     *  to "failed" - it names a server, shows a clock and cannot be dismissed, so the phone reads
+     *  connected while the app says it never was. `to` null means the failure is already reported
+     *  and the state must not move again. */
+    private fun dropTunnel(to: RealState?, reason: String = "") {
+        tunnelDown()
+        stopForegroundCompat()
+        stopSelf()
+        if (to != null) XrayBridge.setState(to, reason)
     }
 
     override fun onRevoke() {

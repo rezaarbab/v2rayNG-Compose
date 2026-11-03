@@ -152,6 +152,12 @@ object S {
 
     const val SEARCH_SERVERS = "Search servers..."
     const val CAT_ALL = "All"
+    const val SORT_PING_DEFAULT = "Order"
+    const val SORT_PING_LOW = "Lowest ping"
+    const val SORT_PING_HIGH = "Highest ping"
+    const val PING_MIN = "min ms"
+    const val PING_MAX = "max ms"
+    const val PING_FILTER_CLEAR = "Clear ping filter"
     const val RESET_TRAFFIC = "Reset all traffic counters"
     const val REMOTE_TITLE = "Remote panel"
     const val PING_ON_START = "Ping on start"

@@ -88,6 +88,12 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     private var trafficBaseUp = 0L
     private var trafficBaseDown = 0L
 
+    /** The row these counters belong to, kept apart from selectedId on purpose. A hot swap writes
+     *  the new selection immediately and the old tunnel's IDLE arrives afterwards, so following
+     *  selectedId folded the previous server's whole session onto the server the user had just
+     *  switched to - the counters he reported moving with him. */
+    private var trafficOwner = ""
+
     /** Highest session counters seen, kept so the zeroing at disconnect cannot erase them. */
     private var sessionUp = 0L
     private var sessionDown = 0L
@@ -281,6 +287,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     _state.value.selectedId.startsWith("rv-")
                 if (real || st.state != ir.v2rayng.compose.core.RealState.IDLE) {
                     if (st.state != lastRealState) {
+                        val prev = lastRealState
                         lastRealState = st.state
                         if (st.state == ir.v2rayng.compose.core.RealState.IDLE ||
                             st.state == ir.v2rayng.compose.core.RealState.BROKEN
@@ -334,14 +341,18 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                             ir.v2rayng.compose.core.RealState.BROKEN -> {
                                 watchdogJob?.cancel()
                                 clearConnSince()
-                                // the tunnel dying with the app closed is exactly the event the user
-                                // must hear about without opening anything
-                                ir.v2rayng.compose.core.NotifyKit.alarm(
-                                    AppCtx.app,
-                                    "اتصال قطع شد",
-                                    (if (st.message.isNotBlank()) st.message else "تونل از کار افتاد") +
-                                        " - برای وصل شدن دوباره اپ را باز کن.",
-                                )
+                                /* the tunnel dying with the app closed is exactly the event the user
+                                   must hear about without opening anything - but a dial that never
+                                   came up is not a tunnel that died, and its alert was the second
+                                   half of "it failed yet a notification arrived" */
+                                if (prev == ir.v2rayng.compose.core.RealState.CONNECTED) {
+                                    ir.v2rayng.compose.core.NotifyKit.alarm(
+                                        AppCtx.app,
+                                        "اتصال قطع شد",
+                                        (if (st.message.isNotBlank()) st.message else "تونل از کار افتاد") +
+                                            " - برای وصل شدن دوباره اپ را باز کن.",
+                                    )
+                                }
                                 Remote.queueAck("event", name = "disconnect")
                                 persistTraffic("tunnel broke")
                                 log("ERROR", "${S.LOG_FAILED}${if (st.message.isNotBlank()) " - ${st.message}" else ""}")
@@ -394,7 +405,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     if (st.up > sessionUp) sessionUp = st.up
                     if (st.down > sessionDown) sessionDown = st.down
                     put { s ->
-                        val targetId = s.selectedId
+                        // the counters belong to the server that was dialed, not to whichever row
+                        // happens to be selected the moment the old tunnel reports it came down
+                        val targetId = trafficOwner.ifBlank { s.selectedId }
                         if (st.state == ir.v2rayng.compose.core.RealState.CONNECTED) {
                             appUp += st.upSpeed.toLong()
                             appDown += st.downSpeed.toLong()
@@ -518,6 +531,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      *  connect (st.up is 0) and for reopening the app while the tunnel is still running. */
     private fun captureTrafficBase(sessionUp: Long, sessionDown: Long) {
         val srv = _state.value.servers.firstOrNull { it.id == _state.value.selectedId } ?: return
+        trafficOwner = srv.id
         trafficBaseUp = (srv.up - sessionUp).coerceAtLeast(0L)
         trafficBaseDown = (srv.down - sessionDown).coerceAtLeast(0L)
         // a new session starts its own peak from zero, or the next fold would add it twice

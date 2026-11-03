@@ -61,14 +61,32 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var editSrv by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var catSel by remember { mutableStateOf("") } // empty string means All
+    /** 0 = the list order the admin sent, 1 = lowest ping first, 2 = highest ping first */
+    var pingSort by remember { mutableStateOf(0) }
+    var pingMin by remember { mutableStateOf("") }
+    var pingMax by remember { mutableStateOf("") }
     var delSrv by remember { mutableStateOf<ServerProfile?>(null) }
     var askDead by remember { mutableStateOf(false) }
     val deadCount = state.servers.count { it.ping == null && !it.pingErr.isNullOrBlank() }
 
+    // digits only: a filter box that accepts "abc" would silently hide everything
+    val minMs = pingMin.toIntOrNull()
+    val maxMs = pingMax.toIntOrNull()
+    /** An unmeasured row is not a slow row: it has no number, so it cannot be inside any range and
+     *  it sorts last whatever the direction. */
+    fun inRange(p: Int?): Boolean {
+        if (minMs == null && maxMs == null) return true
+        if (p == null) return false
+        if (minMs != null && p < minMs) return false
+        if (maxMs != null && p > maxMs) return false
+        return true
+    }
+
     val categories = state.servers.mapNotNull { it.category.takeIf { c -> c.isNotBlank() } }.distinct()
     val filtered = state.servers.filter { srv ->
         (catSel.isBlank() || srv.category == catSel) &&
-            (query.isBlank() || srv.name.contains(query, true) || srv.category.contains(query, true))
+            (query.isBlank() || srv.name.contains(query, true) || srv.category.contains(query, true)) &&
+            inRange(srv.ping)
     }
 
     Column(
@@ -115,6 +133,40 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        // scrollable, like the category row: three labels plus the ping fields must not be clipped
+        androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(listOf(0 to S.SORT_PING_DEFAULT, 1 to S.SORT_PING_LOW, 2 to S.SORT_PING_HIGH)) { (mode, label) ->
+                SelectChip(label, pingSort == mode) { pingSort = if (pingSort == mode) 0 else mode }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = pingMin,
+                onValueChange = { pingMin = it.filter(Char::isDigit).take(5) },
+                singleLine = true,
+                label = { Text(S.PING_MIN) },
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = pingMax,
+                onValueChange = { pingMax = it.filter(Char::isDigit).take(5) },
+                singleLine = true,
+                label = { Text(S.PING_MAX) },
+                modifier = Modifier.weight(1f),
+            )
+            if (minMs != null || maxMs != null) {
+                IconButton(onClick = { pingMin = ""; pingMax = "" }, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Filled.Clear,
+                        contentDescription = S.PING_FILTER_CLEAR,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
         Spacer(Modifier.height(10.dp))
 
         if (filtered.isEmpty()) {
@@ -127,10 +179,17 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             }
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                val sorted = filtered.sortedWith(
-                    compareByDescending<ir.v2rayng.compose.data.ServerProfile> { it.pinned }
-                        .thenBy { state.servers.indexOfFirst { x -> x.id == it.id } },
-                )
+                /* pinned-first is the list's own order. Choosing a ping direction is the user
+                   asking for the fastest - or the slowest - server at the top, so the pin does not
+                   interfere with it */
+                val sorted = when (pingSort) {
+                    1 -> filtered.sortedBy { it.ping ?: Int.MAX_VALUE }
+                    2 -> filtered.sortedByDescending { it.ping ?: Int.MIN_VALUE }
+                    else -> filtered.sortedWith(
+                        compareByDescending<ServerProfile> { it.pinned }
+                            .thenBy { state.servers.indexOfFirst { x -> x.id == it.id } },
+                    )
+                }
                 items(sorted, key = { it.id }) { srv ->
                     val avatar = if (settings.flagAvatars && srv.country.isNotBlank()) {
                         val fi = CountryFlags.byCode(srv.country)
