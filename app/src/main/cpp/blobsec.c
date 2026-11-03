@@ -166,7 +166,7 @@ static int hexeq(const unsigned char *a, const char *hex) {
 
 /* ---------------- known-answer self test ---------------- */
 
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_selftest(JNIEnv *env, jclass cls) {
     int bad = 0;
     unsigned char d[32];
@@ -203,7 +203,7 @@ Java_ir_v2rayng_compose_core_NativeSec_selftest(JNIEnv *env, jclass cls) {
 
 /* ---------------- JNI ---------------- */
 
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_hmac(JNIEnv *env, jclass cls, jbyteArray jkey, jbyteArray jmsg) {
     if (jkey == NULL || jmsg == NULL) return NULL;
     jsize kl = (*env)->GetArrayLength(env, jkey), ml = (*env)->GetArrayLength(env, jmsg);
@@ -280,7 +280,7 @@ static jbyteArray env_open(JNIEnv *env, jclass cls, jbyteArray jblob) {
     return out;
 }
 
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_b64d(JNIEnv *env, jclass cls, jstring js) {
     if (js == NULL) return NULL;
     const char *s = (*env)->GetStringUTFChars(env, js, NULL);
@@ -312,7 +312,7 @@ Java_ir_v2rayng_compose_core_NativeSec_b64d(JNIEnv *env, jclass cls, jstring js)
     return out;
 }
 
-JNIEXPORT jstring JNICALL
+static jstring JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_b64uEncode(JNIEnv *env, jclass cls, jbyteArray jb) {
     if (jb == NULL) return NULL;
     jsize n = (*env)->GetArrayLength(env, jb);
@@ -497,7 +497,7 @@ static void note_det(const char *fmt, int a, int b, int c, const char *d, const 
     snprintf(g_det, sizeof(g_det), fmt, a, b, c, d, e);
 }
 
-JNIEXPORT jstring JNICALL
+static jstring JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_err(JNIEnv *env, jclass cls) {
     char buf[352];
     if (g_last[0] != 0 && g_det[0] != 0) snprintf(buf, sizeof(buf), "%s | last=%s | %s", g_step, g_last, g_det);
@@ -986,7 +986,7 @@ static jbyteArray aad_bytes(JNIEnv *env) {
     return a;
 }
 
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_vaultReady(JNIEnv *env, jclass cls, jint which) {
     set_step("vault:entered");
     jstring jalias = alias_for(env, which);
@@ -1008,7 +1008,7 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultReady(JNIEnv *env, jclass cls, jint 
 }
 
 /** seal: iv(12) || AES-256-GCM ciphertext+tag, with the vault's own AAD */
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_vaultSeal(JNIEnv *env, jclass cls, jbyteArray jplain) {
     set_step("seal:entered");
     if (jplain == NULL) { set_step("seal:null-input"); return NULL; }
@@ -1076,7 +1076,7 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultSeal(JNIEnv *env, jclass cls, jbyteA
 }
 
 /** open a blob made by vaultSeal; NULL on a tag failure or a wrong key */
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(JNIEnv *env, jclass cls, jbyteArray jblob, jint which) {
     set_step("open:entered");
     if (jblob == NULL) { set_step("open:null-input"); return NULL; }
@@ -1144,7 +1144,7 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(JNIEnv *env, jclass cls, jbyteA
 /** seal then open the same bytes, in this library, with this key: 0 means the vault path
  * works end to end. Without this, "the stored value cannot be opened" has two readings - the code is
  * wrong, or the value was sealed under a key that no longer exists (which already happened once). */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_vaultRoundTrip(JNIEnv *env, jclass cls) {
     if (Java_ir_v2rayng_compose_core_NativeSec_vaultReady(env, cls, 0) == 0) return 2;
     jbyte sample[24];
@@ -1175,7 +1175,7 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultRoundTrip(JNIEnv *env, jclass cls) {
 /** is there an entry under this alias at all? - the caller must ask this before dropping,
  * because "the keystore did not answer" and "there is a key I cannot read" are different events and
  * only the second one justifies destroying anything. */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_vaultHas(JNIEnv *env, jclass cls, jint which) {
     jstring jalias = alias_for(env, which);
     if (jalias == NULL) return 0;
@@ -1196,7 +1196,7 @@ Java_ir_v2rayng_compose_core_NativeSec_vaultHas(JNIEnv *env, jclass cls, jint wh
 }
 
 /** drop an entry (the recovery path uses it when the keystore holds a key it cannot read) */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_vaultDrop(JNIEnv *env, jclass cls, jint which) {
     jstring jalias = alias_for(env, which);
     if (jalias == NULL) return 0;
@@ -1393,9 +1393,9 @@ static int make_pair(JNIEnv *env, jobject spec) {
     return done;
 }
 
-JNIEXPORT jint JNICALL Java_ir_v2rayng_compose_core_NativeSec_idDrop(JNIEnv *env, jclass cls);
+static jint JNICALL Java_ir_v2rayng_compose_core_NativeSec_idDrop(JNIEnv *env, jclass cls);
 
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_idEnsure(JNIEnv *env, jclass cls, jbyteArray challenge) {
     set_step("id:ensure-entered");
     if (priv_cached(env) != NULL) {
@@ -1426,7 +1426,7 @@ Java_ir_v2rayng_compose_core_NativeSec_idEnsure(JNIEnv *env, jclass cls, jbyteAr
     return made ? 2 : 0;
 }
 
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_idSign(JNIEnv *env, jclass cls, jbyteArray jmsg) {
     set_step("id:sign-entered");
     if (jmsg == NULL) { set_step("id:sign-null-msg"); return NULL; }
@@ -1474,7 +1474,7 @@ Java_ir_v2rayng_compose_core_NativeSec_idSign(JNIEnv *env, jclass cls, jbyteArra
 }
 
 /** X.509 SubjectPublicKeyInfo DER of the certificate's public key - what the worker imports */
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_idSpki(JNIEnv *env, jclass cls) {
     set_step("id:spki-entered");
     jstring jalias = id_alias(env);
@@ -1514,7 +1514,7 @@ Java_ir_v2rayng_compose_core_NativeSec_idSpki(JNIEnv *env, jclass cls) {
 }
 
 /** drop the identity entry (the retry path uses it when the keystore holds a key it cannot read) */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_idDrop(JNIEnv *env, jclass cls) {
     jstring jalias = id_alias(env);
     if (jalias == NULL) return 0;
@@ -1536,7 +1536,7 @@ Java_ir_v2rayng_compose_core_NativeSec_idDrop(JNIEnv *env, jclass cls) {
 }
 
 /** plain SHA-256, for the device fingerprint - the digest never leaves this library as code */
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_sha(JNIEnv *env, jclass cls, jbyteArray jin) {
     if (jin == NULL) return NULL;
     jsize n = (*env)->GetArrayLength(env, jin);
@@ -1555,7 +1555,7 @@ Java_ir_v2rayng_compose_core_NativeSec_sha(JNIEnv *env, jclass cls, jbyteArray j
  *  0 chain length, 1 attested (1/0), 2 unused, 3 self-signed (1/0), 4 issuer name,
  *  5 attestation-extension (1/0) - or null when the chain cannot be read at all. Kotlin assembles
  *  the map from this and holds no certificate API of its own, so these indexes are the contract. */
-JNIEXPORT jobjectArray JNICALL
+static jobjectArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_idChain(JNIEnv *env, jclass cls) {
     jstring jalias = id_alias(env);
     int err = 0;
@@ -1642,14 +1642,14 @@ Java_ir_v2rayng_compose_core_NativeSec_idChain(JNIEnv *env, jclass cls) {
  * bytes never have to be readable by anything written in Kotlin again.
  */
 
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_rndBytes(JNIEnv *env, jclass cls, jint count) {
     return rnd_bytes(env, (jsize) count);
 }
 
 /** 1 = this signature opens under this SPKI, 0 = it does not, -1 = the call could not be made
  *  (which step is in err(), and a -1 is a different bug from a 0) */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_verify(JNIEnv *env, jclass cls, jbyteArray jspki, jbyteArray jmsg, jbyteArray jsig) {
     if (jspki == NULL || jmsg == NULL || jsig == NULL) { set_step("ver:null-args"); return -1; }
     set_step("ver:entered");
@@ -2117,7 +2117,7 @@ static jstring tok_pack(JNIEnv *env, jclass cls, jstring jdevice, jbyteArray jkt
     return out;
 }
 
-JNIEXPORT jobjectArray JNICALL
+static jobjectArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_proofFor(JNIEnv *env, jclass cls, jstring jdevice) {
     set_step("proof:entered");
     if (jdevice == NULL) { set_step("proof:null-args"); return NULL; }
@@ -2687,7 +2687,7 @@ static int read_all(JNIEnv *env, jobject is, int rid) {
 /** POST one body to one of the two endpoints; kind 0 is the key door, 1 the sync door. The
  *  answer is the HTTP status, or -1 when the request never completed; the body of the reply
  *  is kept for netBody(). */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_netSend(JNIEnv *env, jclass cls, jstring jbody, jint kind, jstring jdevice, jint useToken) {
     call_begin("net:entered");
     resp_install(NULL, 0, 0);
@@ -2795,7 +2795,7 @@ done:
 /** a base address saved on this device; "" clears it back to the built-in one. Shape-checked:
  *  anything that is not an https origin is refused, because a wrong host here would send the
  *  device proof and the token somewhere else entirely. */
-JNIEXPORT void JNICALL
+static void JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_setBase(JNIEnv *env, jclass cls, jstring jbase) {
     g_base_ovr[0] = 0;
     if (jbase == NULL) { set_step("base:cleared"); return; }
@@ -2822,7 +2822,7 @@ static jobject g_ctx;
 static const char ROWS_PREF[] = "blob-rows";
 static const char ROWS_KEY[] = "srvrows";
 
-JNIEXPORT void JNICALL
+static void JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_setCtx(JNIEnv *env, jclass cls, jobject ctx) {
     if (g_ctx != NULL) { (*env)->DeleteGlobalRef(env, g_ctx); g_ctx = NULL; }
     if (ctx != NULL) g_ctx = (*env)->NewGlobalRef(env, ctx);
@@ -2956,7 +2956,7 @@ static jbyteArray kv_bytes(JNIEnv *env, const char *s, int n) {
  *  no longer open it. Why is one word in kvWhy() - "plaintext" tells the caller to re-seal it.
  *  A legacy plaintext value comes back as the modified UTF-8 Java held it; everything the vault
  *  opens is the UTF-8 the caller wrote. */
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_kvGetText(JNIEnv *env, jclass cls, jstring jfile, jstring jkey) {
     g_kv_why[0] = 0;
     if (g_ctx == NULL || jfile == NULL || jkey == NULL) {
@@ -3026,7 +3026,7 @@ Java_ir_v2rayng_compose_core_NativeSec_kvGetText(JNIEnv *env, jclass cls, jstrin
  *  holding a non-ASCII character, which is every Persian server name, and Java's string bytes are
  *  CESU-8 anyway while the vault keeps real UTF-8.
  */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_kvPutText(JNIEnv *env, jclass cls, jstring jfile, jstring jkey, jbyteArray jplain, jint useCommit) {
     g_kv_why[0] = 0;
     if (g_ctx == NULL || jfile == NULL || jkey == NULL || jplain == NULL) {
@@ -3070,13 +3070,13 @@ Java_ir_v2rayng_compose_core_NativeSec_kvPutText(JNIEnv *env, jclass cls, jstrin
 }
 
 /** the one-word verdict on the last kvGetText/kvPutText */
-JNIEXPORT jstring JNICALL
+static jstring JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_kvWhy(JNIEnv *env, jclass cls) {
     return (*env)->NewStringUTF(env, g_kv_why);
 }
 
 /** the reply this process last received, as bytes (NULL when there was none) */
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_keyWhyText(JNIEnv *env, jclass cls) {
     int n = (int) strlen(g_key_why);
     jbyteArray out = (*env)->NewByteArray(env, n);
@@ -3086,7 +3086,7 @@ Java_ir_v2rayng_compose_core_NativeSec_keyWhyText(JNIEnv *env, jclass cls) {
 
 /** read the key door's reply here: v>=2, enc "k", the two 32-byte keys and the bucket expiry.
  *  The keys go into this file's own session - they are not handed back in any form. */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_netKeyReply(JNIEnv *env, jclass cls) {
     call_begin("key:entered");
     g_key_why[0] = 0;
@@ -3150,12 +3150,12 @@ Java_ir_v2rayng_compose_core_NativeSec_netKeyReply(JNIEnv *env, jclass cls) {
 }
 
 /** when this process's session stops being usable, in epoch ms (0 = none) */
-JNIEXPORT jlong JNICALL
+static jlong JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_sessionExp(JNIEnv *env, jclass cls) {
     return g_have_sess ? (jlong) g_exp_ms : 0LL;
 }
 
-JNIEXPORT void JNICALL
+static void JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_sessionDrop(JNIEnv *env, jclass cls) {
     sess_clear();
     set_step("key:dropped");
@@ -3478,7 +3478,7 @@ static jstring cfg_text(JNIEnv *env, jclass cls, jint row, jint mode, jint socks
  * Now the text is assembled here and given to the core here, from the same thread and with the same
  * callback object the app already had; every answer below is a number.
  */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_coreStart(JNIEnv *env, jclass cls, jobject jcontroller, jint row, jint fd) {
     if (jcontroller == NULL) { set_step("start:no-controller"); return 0; }
     jstring cfg = cfg_text(env, cls, row, 0, 0);
@@ -3493,7 +3493,7 @@ Java_ir_v2rayng_compose_core_NativeSec_coreStart(JNIEnv *env, jclass cls, jobjec
 }
 
 /** the ping measurement for a row (mode 1 config): milliseconds, or -1 with the step that refused */
-JNIEXPORT jlong JNICALL
+static jlong JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_measureDelay(JNIEnv *env, jclass cls, jint row, jstring jurl) {
     call_begin("delay:entered");
     if (jurl == NULL) { set_step("delay:no-url"); return -1; }
@@ -3524,7 +3524,7 @@ static pthread_mutex_t g_flag_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /** start the short-lived core with a local socks inbound (mode 2 config) so the app can ask an
  *  external service where this server exits; the answer is the handle flagStop takes back, 0 = no */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_flagStart(JNIEnv *env, jclass cls, jint row, jint socksPort, jobject jcb) {
     if (jcb == NULL) { set_step("flag:no-callback"); return 0; }
     jstring cfg = cfg_text(env, cls, row, 2, socksPort);
@@ -3560,7 +3560,7 @@ Java_ir_v2rayng_compose_core_NativeSec_flagStart(JNIEnv *env, jclass cls, jint r
     return slot;
 }
 
-JNIEXPORT void JNICALL
+static void JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_flagStop(JNIEnv *env, jclass cls, jint handle) {
     if (handle <= 0 || handle > FLAG_SLOTS) return;
     jobject ctrl = NULL;
@@ -3651,7 +3651,7 @@ static void page_take(const char *buf, const char *key, char *out, int cap) {
  * those facts (the IP it was asked to display and a country code), so the page is read in this file
  * and only the requested keys leave it - the rest never becomes a value in Kotlin.
  */
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_netProbe(JNIEnv *env, jclass cls, jstring jurl, jstring jkeys, jint socksPort) {
     call_begin("page:entered");
     if (jurl == NULL || jkeys == NULL) { set_step("page:no-args"); return NULL; }
@@ -3816,7 +3816,7 @@ static int payload_from_carrier(JNIEnv *env, jclass cls, jstring jstego) {
     return n;
 }
 
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_payloadCount(JNIEnv *env, jclass cls) {
     pthread_mutex_lock(&g_store_mtx);
     int n = g_rows_n;
@@ -3827,7 +3827,7 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadCount(JNIEnv *env, jclass cls) {
 /** display fields only: 0 id, 1 name, 3 category, 4 msg. The address, the port and the link are
  *  deliberately not reachable from here - the app finds a row by its id and uses it inside this
  *  file, which is what the whole move was for. */
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_payloadField(JNIEnv *env, jclass cls, jint row, jint which) {
     char buf[PL_MISC];
     buf[0] = 0;
@@ -3854,7 +3854,7 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadField(JNIEnv *env, jclass cls, jin
 
 /* the row for the id the admin gave a server. This is now the handle the app keeps: the list on
  * screen is ids and display fields, and the address, the port and the link are only ever read here. */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_payloadRowOfId(JNIEnv *env, jclass cls, jstring jid) {
     if (jid == NULL) return -1;
     const char *id = (*env)->GetStringUTFChars(env, jid, NULL);
@@ -3872,7 +3872,7 @@ Java_ir_v2rayng_compose_core_NativeSec_payloadRowOfId(JNIEnv *env, jclass cls, j
 /** two quick tcp connects to the server itself, best of both, timed. The Kotlin did this with a
  *  Socket, which meant the address and the port had to exist in Kotlin; now the row is enough and
  *  the answer is a number. -1 means nothing answered inside the timeout. */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_tcpPingRow(JNIEnv *env, jclass cls, jint row, jint timeoutMs) {
     call_begin("tcp:entered");
     if (timeoutMs <= 0) return -1;
@@ -4208,7 +4208,7 @@ static char g_rows_saved[72];
  * with the key this file holds, the rows are sealed into the library's own preference, and what
  * goes back is the panel with the server list removed - plus a letter saying what happened.
  */
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_syncRun(JNIEnv *env, jclass cls) {
     call_begin("sync:entered");
     g_sync_outcome = 0;
@@ -4330,11 +4330,11 @@ Java_ir_v2rayng_compose_core_NativeSec_syncRun(JNIEnv *env, jclass cls) {
 /** what the last syncRun decided: 1 a panel is ready, 2 the payload did not open with this session's
  *  key, 3 the worker rotated its keys, 4 not json or an old worker, 5 opened with no panel to hand
  *  back, 6 refused outright, 7 an answer to the other request - nothing was taken from it */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_syncOutcome(JNIEnv *env, jclass cls) { return g_sync_outcome; }
 
 /** the worker's own reason, or the step that refused - protocol text, never server config */
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_syncWhy(JNIEnv *env, jclass cls) {
     if (g_sync_why[0] == 0) copy_ascii(g_sync_why, (int) sizeof(g_sync_why), g_step);
     int n = (int) strlen(g_sync_why);
@@ -4345,7 +4345,7 @@ Java_ir_v2rayng_compose_core_NativeSec_syncWhy(JNIEnv *env, jclass cls) {
 
 /** whether this sync's rows reached storage, and if not, the step that refused - a count and a step
  *  name, never a server */
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_rowsSaved(JNIEnv *env, jclass cls) {
     int n = (int) strlen(g_rows_saved);
     jbyteArray out = (*env)->NewByteArray(env, n);
@@ -4354,7 +4354,7 @@ Java_ir_v2rayng_compose_core_NativeSec_rowsSaved(JNIEnv *env, jclass cls) {
 }
 
 /** the rows the library keeps itself, read back at startup: how many, -1 when it has none */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_rowsRestoreSelf(JNIEnv *env, jclass cls) {
     if (g_ctx == NULL) { set_step("rows:no-ctx"); return -1; }
     char *mine = pref_get(env, ROWS_KEY);
@@ -4368,7 +4368,7 @@ Java_ir_v2rayng_compose_core_NativeSec_rowsRestoreSelf(JNIEnv *env, jclass cls) 
 }
 
 /** one-time move of the sealed rows out of the app's own settings blob; the library's copy wins */
-JNIEXPORT jint JNICALL
+static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_rowsAdopt(JNIEnv *env, jclass cls, jstring legacy) {
     if (g_ctx == NULL) { set_step("adopt:no-ctx"); return -1; }
     char *mine = pref_get(env, ROWS_KEY);
@@ -4758,7 +4758,7 @@ static const scr_fn SCR_PASSES[] = {
     scr_ipv4, scr_ipv6_short, scr_ipv6_long, scr_domains,
 };
 
-JNIEXPORT jbyteArray JNICALL
+static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_scrubUtf8(JNIEnv *env, jclass cls, jbyteArray jin) {
     if (jin == NULL) return NULL;
     jsize n = (*env)->GetArrayLength(env, jin);
@@ -4820,9 +4820,9 @@ Java_ir_v2rayng_compose_core_NativeSec_scrubUtf8(JNIEnv *env, jclass cls, jbyteA
  * rather than typed: a wrong descriptor does not fail to compile, it fails to register, on the
  * phone, at the first call.
  *
- * The functions stay exported here on purpose. If a class ever fails to resolve, the old
- * name-based lookup still finds every entry point and the library is no less usable than it was;
- * hiding the symbols is the step that follows, once this one has proven itself on a handset.
+ * The entry points below are static, and CMake links with -s, so neither .dynsym nor the symbol
+ * table carries their names: this table is now the only thing that binds a Java declaration to a C
+ * function, which is why a refused registration fails the load instead of falling back.
  */
 int blobgate_register(JNIEnv *env);
 
@@ -4886,9 +4886,13 @@ static int reg_sec(JNIEnv *env) {
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     JNIEnv *env = NULL;
     if ((*vm)->GetEnv(vm, (void **) &env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
-    /* fail-soft: a refused registration leaves the name-based linking intact */
-    reg_sec(env);
-    blobgate_register(env);
+    /* the entry points are static now, so there is no name for the linker to fall back to: if a
+       class does not resolve or a descriptor is refused, loading has to fail here rather than half
+       work. Both Java sides catch a thrown loadLibrary (NativeSec.READY, BlobGate.LOADED), so the
+       app degrades to the line it already prints - "sec library failed its self test" - and never
+       reaches an UnsatisfiedLinkError at a call site. */
+    if (!reg_sec(env)) return JNI_ERR;
+    if (!blobgate_register(env)) return JNI_ERR;
     return JNI_VERSION_1_6;
 }
 

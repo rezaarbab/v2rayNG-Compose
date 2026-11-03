@@ -45,7 +45,7 @@ int bg_str(int idx, char *out, int cap) {
   return (int) e->n;
 }
 
-JNIEXPORT jstring JNICALL
+static jstring JNICALL
 Java_ir_v2rayng_compose_core_BlobGate_nativeStr(JNIEnv *env, jclass cls, jint idx) {
   char buf[96];
   if (bg_str(idx, buf, (int) sizeof(buf)) <= 0) return NULL;
@@ -273,8 +273,9 @@ const char *const *bg_dead(unsigned int *n) { if (n) *n = 211; return dead; }
 /* register by table as well, from the same generated list the NativeSec side uses: one string in this
    library naming one entry point is one less line an analyst can read, and the descriptor here is
    computed from BlobGate.java rather than typed (chkjni_reg.cjs --emit).
-   Fail-soft, like the other half - if the class does not resolve, the name-based lookup still
-   finds the symbol below. */
+   The entry point below is static and the library links with -s, so this registration is the only
+   way the JVM can reach it - a refused registration fails the load, and BlobGate.LOADED turns that
+   into "the native gate did not answer" instead of a crash. */
 int blobgate_register(JNIEnv *env) {
     static JNINativeMethod m[] = {
         { "nativeStr", "(I)Ljava/lang/String;", (void *) Java_ir_v2rayng_compose_core_BlobGate_nativeStr },
