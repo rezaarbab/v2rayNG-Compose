@@ -157,6 +157,7 @@ object S {
     const val SORT_PING_HIGH = "Highest ping"
     const val PING_MIN = "min ms"
     const val PING_MAX = "max ms"
+    const val PING_FILTER = "Ping order and filter"
     const val PING_FILTER_CLEAR = "Clear ping filter"
     const val RESET_TRAFFIC = "Reset all traffic counters"
     const val REMOTE_TITLE = "Remote panel"

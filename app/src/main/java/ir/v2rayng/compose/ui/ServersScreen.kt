@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -65,6 +66,8 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var pingSort by remember { mutableStateOf(0) }
     var pingMin by remember { mutableStateOf("") }
     var pingMax by remember { mutableStateOf("") }
+    /** the order/filter row is hidden until the icon is tapped */
+    var pingPanel by remember { mutableStateOf(false) }
     var delSrv by remember { mutableStateOf<ServerProfile?>(null) }
     var askDead by remember { mutableStateOf(false) }
     val deadCount = state.servers.count { it.ping == null && !it.pingErr.isNullOrBlank() }
@@ -80,6 +83,17 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
         if (minMs != null && p < minMs) return false
         if (maxMs != null && p > maxMs) return false
         return true
+    }
+    /** The ping rule, written into the header line instead of onto the screen: the row of chips and
+     *  two number fields was a lot of height to keep standing there for a setting that is chosen
+     *  once, so it lives behind one icon now - but the list must still say why it looks like this. */
+    val pingOn = pingSort != 0 || minMs != null || maxMs != null
+    val pingRule = buildString {
+        if (pingSort == 1) append(" · ").append(S.SORT_PING_LOW)
+        if (pingSort == 2) append(" · ").append(S.SORT_PING_HIGH)
+        if (minMs != null && maxMs != null) append(" · ").append(minMs).append("-").append(maxMs).append("ms")
+        else if (minMs != null) append(" · >=").append(minMs).append("ms")
+        else if (maxMs != null) append(" · <=").append(maxMs).append("ms")
     }
 
     val categories = state.servers.mapNotNull { it.category.takeIf { c -> c.isNotBlank() } }.distinct()
@@ -100,7 +114,7 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = S.SERVERS_COUNT.format(state.servers.size),
+                    text = S.SERVERS_COUNT.format(filtered.size) + pingRule,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -121,6 +135,17 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             onValueChange = { query = it },
             singleLine = true,
             label = { Text(S.SEARCH_SERVERS) },
+            /* the order and the range live behind this one icon: they are chosen once, and two rows
+               of chips and number fields standing there all the time pushed the list down. The tint
+               says a rule is in force, and the line above names it */
+            trailingIcon = {
+                Icon(
+                    Icons.Filled.List,
+                    contentDescription = S.PING_FILTER + pingRule,
+                    tint = if (pingOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable { pingPanel = !pingPanel }.padding(horizontal = 10.dp),
+                )
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         if (categories.isNotEmpty()) {
@@ -133,37 +158,39 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
-        // scrollable, like the category row: three labels plus the ping fields must not be clipped
-        androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(listOf(0 to S.SORT_PING_DEFAULT, 1 to S.SORT_PING_LOW, 2 to S.SORT_PING_HIGH)) { (mode, label) ->
-                SelectChip(label, pingSort == mode) { pingSort = if (pingSort == mode) 0 else mode }
+        if (pingPanel) {
+            Spacer(Modifier.height(8.dp))
+            // scrollable, like the category row: three labels plus the ping fields must not be clipped
+            androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(listOf(0 to S.SORT_PING_DEFAULT, 1 to S.SORT_PING_LOW, 2 to S.SORT_PING_HIGH)) { (mode, label) ->
+                    SelectChip(label, pingSort == mode) { pingSort = if (pingSort == mode) 0 else mode }
+                }
             }
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = pingMin,
-                onValueChange = { pingMin = it.filter(Char::isDigit).take(5) },
-                singleLine = true,
-                label = { Text(S.PING_MIN) },
-                modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(
-                value = pingMax,
-                onValueChange = { pingMax = it.filter(Char::isDigit).take(5) },
-                singleLine = true,
-                label = { Text(S.PING_MAX) },
-                modifier = Modifier.weight(1f),
-            )
-            if (minMs != null || maxMs != null) {
-                IconButton(onClick = { pingMin = ""; pingMax = "" }, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        Icons.Filled.Clear,
-                        contentDescription = S.PING_FILTER_CLEAR,
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = pingMin,
+                    onValueChange = { pingMin = it.filter(Char::isDigit).take(5) },
+                    singleLine = true,
+                    label = { Text(S.PING_MIN) },
+                    modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = pingMax,
+                    onValueChange = { pingMax = it.filter(Char::isDigit).take(5) },
+                    singleLine = true,
+                    label = { Text(S.PING_MAX) },
+                    modifier = Modifier.weight(1f),
+                )
+                if (minMs != null || maxMs != null) {
+                    IconButton(onClick = { pingMin = ""; pingMax = "" }, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            Icons.Filled.Clear,
+                            contentDescription = S.PING_FILTER_CLEAR,
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
