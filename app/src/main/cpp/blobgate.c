@@ -268,3 +268,21 @@ static const char *const dead[211] = {
 };
 
 const char *const *bg_dead(unsigned int *n) { if (n) *n = 211; return dead; }
+
+
+/* register by table as well, from the same generated list the NativeSec side uses: one string in this
+   library naming one entry point is one less line an analyst can read, and the descriptor here is
+   computed from BlobGate.java rather than typed (chkjni_reg.cjs --emit).
+   Fail-soft, like the other half - if the class does not resolve, the name-based lookup still
+   finds the symbol below. */
+int blobgate_register(JNIEnv *env) {
+    static JNINativeMethod m[] = {
+        { "nativeStr", "(I)Ljava/lang/String;", (void *) Java_ir_v2rayng_compose_core_BlobGate_nativeStr },
+    };
+    jclass c = (*env)->FindClass(env, "ir/v2rayng/compose/core/BlobGate");
+    if (c == NULL) { (*env)->ExceptionClear(env); return 0; }
+    int rc = ((*env)->RegisterNatives(env, c, m, 1) == 0) ? 1 : 0;
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->DeleteLocalRef(env, c);
+    return rc;
+}

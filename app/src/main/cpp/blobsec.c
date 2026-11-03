@@ -4809,3 +4809,86 @@ Java_ir_v2rayng_compose_core_NativeSec_scrubUtf8(JNIEnv *env, jclass cls, jbyteA
     return out;
 }
 
+
+
+/* ============================ explicit registration ============================
+ * Every entry point used to be found by name: the JVM looked up
+ * Java_ir_v2rayng_compose_core_NativeSec_vaultOpen in the dynamic symbol table, so a strings dump
+ * of libblobgate.so listed the whole surface of the app - what it can do, with what arguments, in
+ * the order the source declares it. RegisterNatives moves that lookup out of the linker and into
+ * the table below, and the table is generated from the Java declarations (chkjni_reg.cjs --emit)
+ * rather than typed: a wrong descriptor does not fail to compile, it fails to register, on the
+ * phone, at the first call.
+ *
+ * The functions stay exported here on purpose. If a class ever fails to resolve, the old
+ * name-based lookup still finds every entry point and the library is no less usable than it was;
+ * hiding the symbols is the step that follows, once this one has proven itself on a handset.
+ */
+int blobgate_register(JNIEnv *env);
+
+static int reg_sec(JNIEnv *env) {
+    static JNINativeMethod m[] = {
+    { "selftest", "()I", (void *) Java_ir_v2rayng_compose_core_NativeSec_selftest },
+    { "hmac", "([B[B)[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_hmac },
+    { "b64d", "(Ljava/lang/String;)[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_b64d },
+    { "b64uEncode", "([B)Ljava/lang/String;", (void *) Java_ir_v2rayng_compose_core_NativeSec_b64uEncode },
+    { "vaultReady", "(I)I", (void *) Java_ir_v2rayng_compose_core_NativeSec_vaultReady },
+    { "vaultSeal", "([B)[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_vaultSeal },
+    { "vaultOpen", "([BI)[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_vaultOpen },
+    { "vaultDrop", "(I)I", (void *) Java_ir_v2rayng_compose_core_NativeSec_vaultDrop },
+    { "vaultHas", "(I)I", (void *) Java_ir_v2rayng_compose_core_NativeSec_vaultHas },
+    { "vaultRoundTrip", "()I", (void *) Java_ir_v2rayng_compose_core_NativeSec_vaultRoundTrip },
+    { "err", "()Ljava/lang/String;", (void *) Java_ir_v2rayng_compose_core_NativeSec_err },
+    { "idEnsure", "([B)I", (void *) Java_ir_v2rayng_compose_core_NativeSec_idEnsure },
+    { "idSign", "([B)[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_idSign },
+    { "idSpki", "()[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_idSpki },
+    { "idDrop", "()I", (void *) Java_ir_v2rayng_compose_core_NativeSec_idDrop },
+    { "idChain", "()[Ljava/lang/String;", (void *) Java_ir_v2rayng_compose_core_NativeSec_idChain },
+    { "sha", "([B)[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_sha },
+    { "rndBytes", "(I)[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_rndBytes },
+    { "verify", "([B[B[B)I", (void *) Java_ir_v2rayng_compose_core_NativeSec_verify },
+    { "scrubUtf8", "([B)[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_scrubUtf8 },
+    { "coreStart", "(Ljava/lang/Object;II)I", (void *) Java_ir_v2rayng_compose_core_NativeSec_coreStart },
+    { "measureDelay", "(ILjava/lang/String;)J", (void *) Java_ir_v2rayng_compose_core_NativeSec_measureDelay },
+    { "flagStart", "(IILjava/lang/Object;)I", (void *) Java_ir_v2rayng_compose_core_NativeSec_flagStart },
+    { "flagStop", "(I)V", (void *) Java_ir_v2rayng_compose_core_NativeSec_flagStop },
+    { "netProbe", "(Ljava/lang/String;Ljava/lang/String;I)[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_netProbe },
+    { "setCtx", "(Landroid/content/Context;)V", (void *) Java_ir_v2rayng_compose_core_NativeSec_setCtx },
+    { "syncRun", "()[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_syncRun },
+    { "syncOutcome", "()I", (void *) Java_ir_v2rayng_compose_core_NativeSec_syncOutcome },
+    { "syncWhy", "()[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_syncWhy },
+    { "rowsSaved", "()[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_rowsSaved },
+    { "rowsRestoreSelf", "()I", (void *) Java_ir_v2rayng_compose_core_NativeSec_rowsRestoreSelf },
+    { "rowsAdopt", "(Ljava/lang/String;)I", (void *) Java_ir_v2rayng_compose_core_NativeSec_rowsAdopt },
+    { "payloadCount", "()I", (void *) Java_ir_v2rayng_compose_core_NativeSec_payloadCount },
+    { "payloadField", "(II)[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_payloadField },
+    { "netSend", "(Ljava/lang/String;ILjava/lang/String;I)I", (void *) Java_ir_v2rayng_compose_core_NativeSec_netSend },
+    { "setBase", "(Ljava/lang/String;)V", (void *) Java_ir_v2rayng_compose_core_NativeSec_setBase },
+    { "keyWhyText", "()[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_keyWhyText },
+    { "netKeyReply", "()I", (void *) Java_ir_v2rayng_compose_core_NativeSec_netKeyReply },
+    { "sessionExp", "()J", (void *) Java_ir_v2rayng_compose_core_NativeSec_sessionExp },
+    { "sessionDrop", "()V", (void *) Java_ir_v2rayng_compose_core_NativeSec_sessionDrop },
+    { "kvGetText", "(Ljava/lang/String;Ljava/lang/String;)[B", (void *) Java_ir_v2rayng_compose_core_NativeSec_kvGetText },
+    { "kvPutText", "(Ljava/lang/String;Ljava/lang/String;[BI)I", (void *) Java_ir_v2rayng_compose_core_NativeSec_kvPutText },
+    { "kvWhy", "()Ljava/lang/String;", (void *) Java_ir_v2rayng_compose_core_NativeSec_kvWhy },
+    { "proofFor", "(Ljava/lang/String;)[Ljava/lang/String;", (void *) Java_ir_v2rayng_compose_core_NativeSec_proofFor },
+    { "payloadRowOfId", "(Ljava/lang/String;)I", (void *) Java_ir_v2rayng_compose_core_NativeSec_payloadRowOfId },
+    { "tcpPingRow", "(II)I", (void *) Java_ir_v2rayng_compose_core_NativeSec_tcpPingRow },
+    };
+    jclass c = need_class(env, "ir/v2rayng/compose/core/NativeSec");
+    if (c == NULL) return 0;
+    int rc = ((*env)->RegisterNatives(env, c, m, (int) (sizeof(m) / sizeof(m[0]))) == 0) ? 1 : 0;
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->DeleteLocalRef(env, c);
+    return rc;
+}
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
+    JNIEnv *env = NULL;
+    if ((*vm)->GetEnv(vm, (void **) &env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
+    /* fail-soft: a refused registration leaves the name-based linking intact */
+    reg_sec(env);
+    blobgate_register(env);
+    return JNI_VERSION_1_6;
+}
+
