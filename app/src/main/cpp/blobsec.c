@@ -5753,8 +5753,24 @@ Java_ir_v2rayng_compose_core_NativeSec_setCtx(JNIEnv *env, jclass cls, jobject c
 }
 
 /** put one string into the library's own file; 0 when the framework refused */
+static void pref_hold(const char *text, char *out, int cap) {
+    int i = 0;
+    if (text != NULL) { while (i < cap - 1 && text[i] != 0) { out[i] = text[i]; i++; } }
+    out[i] = 0;
+}
+
+/* a decoded literal is only good until six more have been decoded, and both prefs
+ * helpers below decode six of their own - so the names they were handed are copied out first.
+ * Without that, the prefs file name landed in a slot the getString descriptor was then written
+ * over, and Android answered 'File (Ljava/lang/String;...)Ljava/lang/String;.xml contains a path
+ * separator': by the time it arrived, the file name was a method signature. */
 static int pref_put_in(JNIEnv *env, const char *prefs_file, const char *key, const char *value, int use_commit) {
     if (g_ctx == NULL) { set_step("pref:no-ctx"); return 0; }
+    char filebuf[128], keybuf[128];
+    pref_hold(prefs_file, filebuf, (int) sizeof(filebuf));
+    pref_hold(key, keybuf, (int) sizeof(keybuf));
+    prefs_file = filebuf;
+    key = keybuf;
     jmethodID mGet = mid_named(env, sb(72), sb(73),
         sb(74), "pref:get-shs");
     jmethodID mEdit = mid_named(env, sb(75), sb(76),
@@ -5804,6 +5820,11 @@ static int pref_put_in(JNIEnv *env, const char *prefs_file, const char *key, con
  *  back as a real "" so a caller can tell "cleared" from "never written" */
 static char *pref_get_in(JNIEnv *env, const char *prefs_file, const char *key) {
     if (g_ctx == NULL) return NULL;
+    char filebuf[128], keybuf[128];
+    pref_hold(prefs_file, filebuf, (int) sizeof(filebuf));
+    pref_hold(key, keybuf, (int) sizeof(keybuf));
+    prefs_file = filebuf;
+    key = keybuf;
     jmethodID mGet = mid_named(env, sb(72), sb(73),
         sb(74), "pref:get-shs");
     jmethodID mStr = mid_named(env, sb(75), sb(84),
@@ -5882,10 +5903,10 @@ static jbyteArray kv_bytes(JNIEnv *env, const char *s, int n) {
 static jbyteArray JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_kvGetText(JNIEnv *env, jclass cls, jstring jfile, jstring jkey) {
     g_kv_why[0] = 0;
-    if (g_ctx == NULL || jfile == NULL || jkey == NULL) {
-        copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "no context");
-        return NULL;
-    }
+    /* one reason per condition: this line is what he reads on the log page, and four causes
+       wearing one name meant the next build was another guess */
+    if (g_ctx == NULL) { copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "no context"); return NULL; }
+    if (jfile == NULL || jkey == NULL) { copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "no file/key"); return NULL; }
     const char *file = (*env)->GetStringUTFChars(env, jfile, NULL);
     if (file == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "bad file name"); return NULL; }
     const char *key = (*env)->GetStringUTFChars(env, jkey, NULL);
@@ -5952,10 +5973,9 @@ Java_ir_v2rayng_compose_core_NativeSec_kvGetText(JNIEnv *env, jclass cls, jstrin
 static jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_kvPutText(JNIEnv *env, jclass cls, jstring jfile, jstring jkey, jbyteArray jplain, jint useCommit) {
     g_kv_why[0] = 0;
-    if (g_ctx == NULL || jfile == NULL || jkey == NULL || jplain == NULL) {
-        copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "no context");
-        return 0;
-    }
+    if (g_ctx == NULL) { copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "no context"); return 0; }
+    if (jfile == NULL || jkey == NULL) { copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "no file/key"); return 0; }
+    if (jplain == NULL) { copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "no value"); return 0; }
     jsize plen = (*env)->GetArrayLength(env, jplain);
     const char *file = (*env)->GetStringUTFChars(env, jfile, NULL);
     if (file == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "bad file name"); return 0; }

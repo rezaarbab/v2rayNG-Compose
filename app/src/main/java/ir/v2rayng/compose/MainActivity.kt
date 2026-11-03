@@ -15,6 +15,9 @@ import ir.v2rayng.compose.ui.AppRoot
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // before anything reads a stored value: the settings load below goes through the library,
+        // and the library cannot open the preference file until it has been given this Context
+        ir.v2rayng.compose.AppCtx.app = applicationContext
         ir.v2rayng.compose.core.CrashNote.install(this)
         lockHighRefreshRate()
         ir.v2rayng.compose.core.Persist.write { ir.v2rayng.compose.data.SettingsStore(this).load() }

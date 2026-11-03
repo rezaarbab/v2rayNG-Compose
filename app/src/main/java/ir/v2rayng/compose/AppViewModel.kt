@@ -45,9 +45,26 @@ import kotlinx.coroutines.withContext
 import kotlin.random.Random
 
 object AppCtx {
-    @Volatile
-    lateinit var app: android.content.Context
 
+    @Volatile
+    private var held: android.content.Context? = null
+
+    /** The library opens the preference file itself, so it needs this Context before anyone asks it
+     *  for a sealed value. Handing it over here - rather than at whatever line happens to load the
+     *  server rows - is what makes "the settings store said no context" impossible instead of a
+     *  matter of ordering: the first read of a stored value is already behind this assignment. */
+    var app: android.content.Context
+        get() = held ?: throw IllegalStateException("AppCtx.app has not been set yet")
+        set(value) {
+            if (held === value) return
+            held = value
+            try {
+                ir.v2rayng.compose.core.NativeSec.giveCtx(value)
+            } catch (_: Throwable) {
+            }
+        }
+
+    fun isReady(): Boolean = held != null
 }
 
 /** delay probes: https is the honest one, plain http survives anti-bot TLS blocks, tcp is the last resort */
