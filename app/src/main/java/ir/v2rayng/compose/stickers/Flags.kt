@@ -191,7 +191,9 @@ private fun build(): List<Sticker> {
     f("dj", "Djibouti", SKY, listOf(hb(0.5f, 0.99f, GREEN), vb(0.05f, 0.40f, WHITE), cb(RED, ToyCircle(0.20f, 0.32f, 0.08f))))
     f("dk", "Denmark", RED, NV(RED, WHITE))
     f("dm", "Dominica", GREEN, listOf(hb(0.366f, 0.634f, GOLD), hb(0.634f, 0.99f, BLACK), cb(RED, ToyCircle(0.5f, 0.5f, 0.14f))))
-    f("do", "Dominican Republic", NAVY, listOf(rc(0.05f, 0.10f, 0.48f, 0.48f, BLUE), rc(0.52f, 0.10f, 0.95f, 0.48f, RED), rc(0.05f, 0.52f, 0.48f, 0.90f, RED), rc(0.52f, 0.52f, 0.95f, 0.90f, BLUE), cb(WHITE, ToyCircle(0.5f, 0.5f, 0.10f))))
+    // the cross is drawn first and the four quarters reach it, so every edge belongs to a quarter;
+    // inset quarters left the same navy ring here that gb had
+    f("do", "Dominican Republic", NAVY, listOf(rc(0.01f, 0.42f, 0.99f, 0.58f, WHITE), rc(0.42f, 0.01f, 0.58f, 0.99f, WHITE), rc(0.01f, 0.01f, 0.45f, 0.45f, BLUE), rc(0.55f, 0.01f, 0.99f, 0.45f, RED), rc(0.01f, 0.55f, 0.45f, 0.99f, RED), rc(0.55f, 0.55f, 0.99f, 0.99f, BLUE), cb(WHITE, ToyCircle(0.5f, 0.5f, 0.10f))))
     f("dz", "Algeria", GREEN, listOf(vb(0.50f, 0.99f, WHITE), cb(WHITE, ToyCircle(0.30f, 0.5f, 0.16f)), cb(RED, ToyCircle(0.34f, 0.5f, 0.13f))))
     f("ec", "Ecuador", GOLD, listOf(hb(0.5f, 0.75f, BLUE), hb(0.75f, 0.99f, RED), cb(GREEN, ToyCircle(0.5f, 0.38f, 0.16f))))
     f("ee", "Estonia", NAVY, TRIH(NAVY, BLACK, WHITE))
@@ -206,10 +208,12 @@ private fun build(): List<Sticker> {
     f("fo", "Faroe Islands", WHITE, NV(WHITE, RED) + listOf(vb(0.32f, 0.38f, NAVY)))
     f("fr", "France", WHITE, V3(BLUE, WHITE, RED))
     f("ga", "Gabon", GREEN, TRIH(GREEN, GOLD, BLUE))
+    // St George on the blue field, with the cross reaching every edge. The panel of white used to be
+    // one inset rectangle, so the navy base survived only as a thin ring around the whole flag - and
+    // navy at 46dp reads as a black outline
     f("gb", "United Kingdom", NAVY, listOf(
-        rc(0.05f, 0.10f, 0.95f, 0.90f, WHITE),
-        rc(0.42f, 0.10f, 0.58f, 0.90f, WHITE), rc(0.05f, 0.42f, 0.95f, 0.58f, WHITE),
-        rc(0.45f, 0.10f, 0.55f, 0.90f, RED), rc(0.05f, 0.45f, 0.95f, 0.55f, RED),
+        rc(0.01f, 0.40f, 0.99f, 0.60f, WHITE), rc(0.40f, 0.01f, 0.60f, 0.99f, WHITE),
+        rc(0.01f, 0.455f, 0.99f, 0.545f, RED), rc(0.455f, 0.01f, 0.545f, 0.99f, RED),
     ))
     f("gd", "Grenada", RED, listOf(hb(0.24f, 0.44f, GOLD), hb(0.44f, 0.62f, GREEN), hb(0.62f, 0.82f, GOLD), cb(RED, ToyCircle(0.5f, 0.53f, 0.08f))))
     f("ge", "Georgia", WHITE, CROSS(RED) + listOf(rc(0.30f, 0.16f, 0.40f, 0.26f, RED), rc(0.30f, 0.74f, 0.40f, 0.84f, RED), rc(0.60f, 0.16f, 0.70f, 0.26f, RED), rc(0.60f, 0.74f, 0.70f, 0.84f, RED)))

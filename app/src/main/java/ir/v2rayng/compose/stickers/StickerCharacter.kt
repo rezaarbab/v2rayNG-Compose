@@ -202,11 +202,16 @@ fun StickerCharacter(
         val flagRadius = if (isFlag) env.flagRound.floatValue.coerceIn(0f, 1f) * flagYScale * s * 0.5f else 0f
         fun p(x: Float, y: Float): Offset = Offset(x * s, (y - 0.5f) * s * flagYScale + 0.5f * s)
 
-        drawOval(
-            color = Color.Black.copy(alpha = 0.20f),
-            topLeft = Offset(0.23f * s, 0.885f * s),
-            size = Size(0.54f * s, 0.08f * s),
-        )
+        /* the blob's ground shadow. A flag is a rectangle with nothing standing on the ground, and
+           at flagStretch 1 this ellipse lands across its bottom edge - a dark line where the
+           intention was a shadow */
+        if (!isFlag) {
+            drawOval(
+                color = Color.Black.copy(alpha = 0.20f),
+                topLeft = Offset(0.23f * s, 0.885f * s),
+                size = Size(0.54f * s, 0.08f * s),
+            )
+        }
 
         var gx = 0f
         var gy = 0f
