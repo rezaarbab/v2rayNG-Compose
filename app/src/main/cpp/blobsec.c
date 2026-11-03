@@ -2614,6 +2614,9 @@ static unsigned char g_kc[32];
 static unsigned char g_kt[32];
 static long long g_exp_ms;
 static int g_have_sess;
+/* the key door's own answer in words - enc, v and the worker's why - so the refusal sentence can
+ * be written without the reply body ever becoming a value outside this file */
+static char g_key_why[160];
 
 int bg_str(int idx, char *out, int cap);   /* blobgate.c */
 
@@ -2907,13 +2910,10 @@ static char *pref_get(JNIEnv *env, const char *key) {
 
 /** the reply this process last received, as bytes (NULL when there was none) */
 JNIEXPORT jbyteArray JNICALL
-Java_ir_v2rayng_compose_core_NativeSec_netBody(JNIEnv *env, jclass cls) {
-    int n = 0;
-    unsigned char *body = resp_take(&n, NULL);
-    if (body == NULL || n <= 0) { free(body); return NULL; }
+Java_ir_v2rayng_compose_core_NativeSec_keyWhyText(JNIEnv *env, jclass cls) {
+    int n = (int) strlen(g_key_why);
     jbyteArray out = (*env)->NewByteArray(env, n);
-    if (out) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) body);
-    free(body);
+    if (out && n) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) g_key_why);
     return out;
 }
 
@@ -2922,9 +2922,14 @@ Java_ir_v2rayng_compose_core_NativeSec_netBody(JNIEnv *env, jclass cls) {
 JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_netKeyReply(JNIEnv *env, jclass cls) {
     call_begin("key:entered");
+    g_key_why[0] = 0;
     int rn = 0;
     char *txt = (char *) resp_take(&rn, NULL);
-    if (txt == NULL || rn <= 0 || rn > 65536) { free(txt); set_step("key:no-body"); return -1; }
+    if (txt == NULL || rn <= 0 || rn > 65536) {
+        free(txt);
+        copy_ascii(g_key_why, (int) sizeof(g_key_why), "the key door answered with no body");
+        set_step("key:no-body"); return -1;
+    }
     int rc = -1;
     jclass jsonCls = need_class(env, "org/json/JSONObject");
     jmethodID ctor = jsonCls ? (*env)->GetMethodID(env, jsonCls, "<init>", "(Ljava/lang/String;)V") : NULL;
@@ -2933,7 +2938,10 @@ Java_ir_v2rayng_compose_core_NativeSec_netKeyReply(JNIEnv *env, jclass cls) {
     free(txt);
     jobject o = (jsonCls && ctor && jtxt) ? (*env)->NewObject(env, jsonCls, ctor, jtxt) : NULL;
     if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); o = NULL; }
-    if (o == NULL || jsonCls == NULL) { set_step("key:json"); rc = -1; }
+    if (o == NULL || jsonCls == NULL) {
+        copy_ascii(g_key_why, (int) sizeof(g_key_why), "the key door answered and it is not json");
+        set_step("key:json"); rc = -1;
+    }
     else {
         int v = pl_json_int(env, o, jsonCls, "v", 0);
         char enc[8];
@@ -2956,6 +2964,14 @@ Java_ir_v2rayng_compose_core_NativeSec_netKeyReply(JNIEnv *env, jclass cls) {
             rc = 1;
             set_step("key:ok");
         } else {
+            /* what the worker said, without ever handing its reply to Kotlin: the old code copied
+               the whole body out as bytes so Kotlin could dig enc/why/v back out of it, which put
+               the encrypted text of a response - and the keys themselves, when they were in it -
+               one method return away from a tracer. Protocol text only, from here on. */
+            char w[120];
+            memset(w, 0, sizeof(w));
+            pl_json_str(env, o, jsonCls, "why", "", w, (int) sizeof(w));
+            snprintf(g_key_why, sizeof(g_key_why), "enc=%s v=%d %s", enc, v, w);
             rc = 0;
             set_step("key:refused");
         }

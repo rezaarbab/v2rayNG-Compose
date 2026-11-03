@@ -137,7 +137,7 @@ object BlobSecure {
                 blog("issueKeys: OK, keys live until epoch-ms " + NativeSec.sessionExpMs())
                 return true
             }
-            val why = refused("session keys", status, replyText()) + (if (lastProofNote.isNotBlank()) " [" + lastProofNote + "]" else "")
+            val why = refused("session keys", status) + (if (lastProofNote.isNotBlank()) " [" + lastProofNote + "]" else "")
             blog("issueKeys: " + why)
             fail(why)
             false
@@ -145,16 +145,6 @@ object BlobSecure {
             blog("issueKeys: exception " + e.javaClass.simpleName)
             fail("key request failed (network)")
             false
-        }
-    }
-
-    /** the reply the library last read, as text ("" when there was none) */
-    private fun replyText(): String {
-        val b = NativeSec.replyBody() ?: return ""
-        return try {
-            String(b, Charsets.UTF_8)
-        } catch (_: Exception) {
-            ""
         }
     }
 
@@ -275,16 +265,20 @@ object BlobSecure {
         }
     }
 
-    /** Turn a refused response into one readable sentence: status, the enc code the worker chose
-     *  and the reason the worker itself gave (which is protocol text, never server config). */
-    private fun refused(what: String, status: Int, text: String): String {
-        val o = try { JSONObject(text) } catch (_: Exception) { null }
-        val enc = o?.optString("enc", "").orEmpty()
-        val why = o?.optString("why", "").orEmpty()
+    /** Turn a refused key issuance into one readable sentence, from the library's own summary of
+     *  the reply ("enc=x v=0 <the worker's why>"). The body itself stays inside C: reading it here
+     *  is what put an encrypted response - and, on the accepting path, the fresh session keys -
+     *  into a Kotlin value that a method tracer prints. Status, the enc code and the worker's own
+     *  reason are protocol text, never server config. */
+    private fun refused(what: String, status: Int): String {
+        val t = NativeSec.keyWhy()
+        val enc = Regex("enc=(\\S+)").find(t)?.groupValues?.get(1).orEmpty()
+        val v = Regex("v=(\\d+)").find(t)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val why = t.replace(Regex("^enc=\\S+ v=\\d+\\s*"), "")
         val tail = when {
             why.isNotBlank() -> ": " + why
             enc == "x" -> " (auth refused - worker has a different key for this device?)"
-            (o?.optInt("v", 0) ?: 0) < 2 -> " - the worker in the cloud is an old build (deploy it)"
+            v < 2 -> " - the worker in the cloud is an old build (deploy it)"
             else -> ""
         }
         return what + " refused (HTTP " + status + (if (enc.isNotBlank()) ", enc " + enc else "") + ")" + tail

@@ -764,15 +764,32 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
      *  a forced-update dialog or a popup, and how stale last_seen looks in the panel. */
     private val remoteBeatMs = 600_000L
 
+    /** The opening sync is skipped when the last successful one is younger than this. Measured with
+     *  the offline worker harness: one app start is 14 D1 statements, 4 rows written and 83 KB down,
+     *  so a user who closes and reopens the app 100 times a day costs the free database 400 rows for
+     *  nothing - the list on screen is the stored one until the beat brings a new copy anyway. */
+    private val openSyncFloorMs = 90_000L
+
+    /** Plain prefs on purpose: this is one epoch-millisecond counter with no user data in it, and
+     *  SecureKeys seals every value, which would put a keystore operation in front of every launch
+     *  to read a number. */
+    private fun beatPrefs(): android.content.SharedPreferences =
+        ir.v2rayng.compose.AppCtx.app.getSharedPreferences("beat", android.content.Context.MODE_PRIVATE)
+
     private fun startRemoteLoop() {
         viewModelScope.launch(Dispatchers.IO) {
             // first sync right away, then on the beat in remoteBeatMs - and silent, because the user is
             // already looking at everything that was stored on the device
+            val since = System.currentTimeMillis() - beatPrefs().getLong("last_sync", 0L)
+            if (since in 0 until openSyncFloorMs) {
+                log("INFO", "sync: the opening request is held, the last one was " + (since / 1000) + "s ago")
+            } else
             try {
                 val dev0 = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
                 val r0 = Remote.sync(dev0, "sync", _state.value.vpnState == VpnState.CONNECTED)
                 if (r0 != null) {
                     applyRemote(r0)
+                    beatPrefs().edit().putLong("last_sync", System.currentTimeMillis()).apply()
                     infoToast(if (r0.unchanged) "Server list unchanged" else "Found " + r0.servers.size + " servers")
                 } else {
                     val r0why = Remote.lastFail ?: "unknown"
@@ -787,7 +804,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                     val connected = _state.value.vpnState == VpnState.CONNECTED
                     val dev = Remote.deviceId(ir.v2rayng.compose.AppCtx.app)
                     val res = Remote.sync(dev, "heartbeat", connected)
-                    if (res != null) applyRemote(res)
+                    if (res != null) {
+                        applyRemote(res)
+                        beatPrefs().edit().putLong("last_sync", System.currentTimeMillis()).apply()
+                    }
                     // a heartbeat that fails while nobody is looking is not a log line for the user;
                     // it goes to logcat, and the next successful one simply continues
                     else ir.v2rayng.compose.core.XrayBridge.trace("heartbeat: " + (Remote.lastFail ?: "unknown"))

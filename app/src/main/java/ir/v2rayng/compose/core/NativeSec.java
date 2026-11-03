@@ -432,7 +432,7 @@ public final class NativeSec {
         }
     }
 
-    private static native byte[] netBody();
+    private static native byte[] keyWhyText();
 
     private static native int netKeyReply();
 
@@ -461,13 +461,14 @@ public final class NativeSec {
         }
     }
 
-    /** the reply the library last read (NULL when nothing came back) */
-    public static byte[] replyBody() {
-        if (!READY) return null;
+    /** what the key door answered, in words - protocol text only; the reply body itself stays in C */
+    public static String keyWhy() {
+        if (!READY) return "";
         try {
-            return netBody();
+            byte[] b = keyWhyText();
+            return b == null ? "" : new String(b, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Throwable t) {
-            return null;
+            return "";
         }
     }
 
