@@ -524,8 +524,12 @@ function bl_canaryLink(real, sinkHosts, nameMode, fixedName, device) {
 
 /** Ensure the device owns `want` traps and hand them back in the same shape as listServers. */
 async function canaryFor(env, device, shared) {
-  const cfg = await getSettings(env, ["canary_on", "canary_count", "canary_hosts", "canary_name_mode", "canary_name"]);
+  const cfg = await getSettings(env, ["canary_on", "canary_count", "canary_hosts", "canary_cat", "canary_name_mode", "canary_name"]);
   if (cfg.canary_on !== "1") return [];
+  // an empty setting means each trap keeps the category of the real row it was built from, which
+  // is what makes them indistinguishable in the list; a chosen category applies to trap rows built
+  // from now on, so changing it needs the traps dropped once to be rebuilt
+  const catChoice = String(cfg.canary_cat || "").trim().slice(0, 64);
   const nameMode = String(cfg.canary_name_mode || "real");
   const fixedName = String(cfg.canary_name || "");
   const want = Math.max(0, Math.min(12, Number(cfg.canary_count || 3)));
@@ -552,17 +556,18 @@ async function canaryFor(env, device, shared) {
     // sometimes yields nothing - try a few different sources before giving up on the slot
     for (let t = 0; t < 3 && !gen; t++) gen = bl_canaryLink(bl_pick(pool), sinkHosts, nameMode, fixedName, device);
     if (!gen) continue;
+    const cat = catChoice || String(gen.category || "").slice(0, 64);
     const ord = 1000 + Math.floor(Math.random() * 90000); // scattered among the real rows
     try {
       const ins = await env.DB.prepare(
         "INSERT INTO servers (name, address, port, link, category, ord, active, msg, owner) VALUES (?1,?2,?3,?4,?5,?6,1,'',?7)",
       ).bind(gen.name, String(gen.address).slice(0, 256), Number(gen.port) || 443, String(gen.link).slice(0, 4096),
-        String(gen.category).slice(0, 64), ord, String(device).slice(0, 128)).run();
+        cat, ord, String(device).slice(0, 128)).run();
       const m = (ins && ins.meta) || {};
       const rowId = Number(m.last_row_id || (m.row && m.row.last_row_id) || 0);
       // a missing last_row_id must not hand every trap the same id - the app keys its rows on it
       const idStr = rowId > 0 ? String(rowId) : "t" + Date.now().toString(36) + "-" + i;
-      made.push({ id: idStr, name: gen.name, address: gen.address, port: gen.port, link: gen.link, category: gen.category, msg: "" });
+      made.push({ id: idStr, name: gen.name, address: gen.address, port: gen.port, link: gen.link, category: cat, msg: "" });
     } catch (e3) {}
   }
   if (made.length) srvAllInvalidate();
@@ -1335,7 +1340,7 @@ async function adminApi(env, b, request) {
           } }), { headers: jsonHeaders() });
       }
       case "canary.state": {
-        const c = await getSettings(env, ["canary_on", "canary_count", "canary_hosts", "info_min", "canary_name_mode", "canary_name"]);
+        const c = await getSettings(env, ["canary_on", "canary_count", "canary_hosts", "canary_cat", "info_min", "canary_name_mode", "canary_name"]);
         let tot = 0;
         try {
           tot = Number((await env.DB.prepare("SELECT COUNT(*) c FROM servers WHERE COALESCE(owner,'')<>'' AND active=1").first()).c);
@@ -1356,7 +1361,7 @@ async function adminApi(env, b, request) {
           locks = Number((await env.DB.prepare("SELECT COUNT(*) c FROM auth_lock WHERE until>?1").bind(Date.now()).first()).c);
         } catch (e) {}
         return okJson({
-          canary: { on: c.canary_on === "1" ? "1" : "0", count: c.canary_count || "3", hosts: c.canary_hosts || "", nameMode: c.canary_name_mode || "real", name: c.canary_name || "" },
+          canary: { on: c.canary_on === "1" ? "1" : "0", count: c.canary_count || "3", hosts: c.canary_hosts || "", cat: c.canary_cat || "", nameMode: c.canary_name_mode || "real", name: c.canary_name || "" },
           infoMin: c.info_min === "1" ? "1" : "0",
           trapTotal: tot,
           legacyClients: legacyC,
@@ -1428,6 +1433,7 @@ async function adminApi(env, b, request) {
         await setSetting(env, "canary_on", b.on ? "1" : "0");
         await setSetting(env, "canary_count", String(Math.max(0, Math.min(12, Number(b.count || 0)))));
         await setSetting(env, "canary_hosts", String(b.hosts || "").slice(0, 500));
+        await setSetting(env, "canary_cat", String(b.cat || "").trim().slice(0, 64));
         await setSetting(env, "canary_name_mode", (b.nameMode === "fixed" || b.nameMode === "random") ? b.nameMode : "real");
         await setSetting(env, "canary_name", String(b.name || "").slice(0, 64));
         await setSetting(env, "info_min", b.infoMin ? "1" : "0");
@@ -2029,6 +2035,7 @@ function panelPage(env) {
 <div><div class=lbl>ارسال سرور تله</div><label class=switch><input type=checkbox id=cy_on><span></span></label> <span class=note>روشن باشد</span></div>
 <div><div class=lbl>تعداد برای هر دستگاه (۰ تا ۱۲)</div><input id=cy_count type=number min=0 max=12 value=3></div>
 <div><div class=lbl>میزبان مخصوص تله‌ها (اختیاری، با کاما)</div><input id=cy_hosts placeholder="خالی = همان میزبان‌های واقعی"></div>
+<div><div class=lbl>دستهٔ سرورهای تله</div><input id=cy_cat list=catlist placeholder="خالی = دستهٔ سرور واقعی"></div>
 <div><div class=lbl>نام سرورهای تله</div><select id=cy_name_mode><option value=real>مثل نام سرورهای واقعی (تصادفی)</option><option value=fixed>یک نام ثابت برای همه دستگاه‌ها</option><option value=random>تصادفیِ ثابت برای هر دستگاه</option></select></div>
 <div><div class=lbl>نام ثابت (فقط در حالت «یک نام ثابت»)</div><input id=cy_name placeholder="مثلاً: سرور اصلی"></div>
 </div>
@@ -2048,7 +2055,7 @@ function panelPage(env) {
 <button class="gray sm" onclick=unlockIp()>🔓 باز کردن قفل IP همین دستگاه</button>
 </div>
 <div id=sec_diag class=note style="margin-top:8px"></div>
-<p class=note>سرور تله از یک کانفیگ واقعی ساخته میشود: کلید عبورش (uuid یا پسورد) عوض میشود و پورتش هم بعضی وقتا، یا میزبانش اگر کادر میزبان مخصوص را پر کرده باشی. اسمش از همان استخر اسم‌های واقعی برمی‌دارد، پس در لیست قابل تشخیص نیست و لو دهنده نمی‌تواندشان حذف کند. این سرورها <b>فقط به همان دستگاه</b> فرستاده میشوند و کار نمیکنند؛ هر کس لیستش را لو بدهد، با چسباندن متن پایین اینجا همان شخص پیدا میشود.</p>
+<p class=note>سرور تله از یک کانفیگ واقعی ساخته میشود: کلید عبورش (uuid یا پسورد) عوض میشود و پورتش هم بعضی وقتا، یا میزبانش اگر کادر میزبان مخصوص را پر کرده باشی. اسمش از همان استخر اسم‌های واقعی برمی‌دارد، پس در لیست قابل تشخیص نیست و لو دهنده نمی‌تواندشان حذف کند. این سرورها <b>فقط به همان دستگاه</b> فرستاده میشوند و کار نمیکنند؛ هر کس لیستش را لو بدهد، با چسباندن متن پایین اینجا همان شخص پیدا میشود. دسته را خالی بگذار تا هر تله دستهٔ همان سرور واقعی را بگیرد؛ اگر دستهٔ ویژه‌ای انتخاب کنی فقط ردیف‌های تازه همان دسته را می‌گیرند (برای تغییر دستهٔ تله‌های ساخته‌شده، اول «پاک کردن همهٔ سرورهای تله» را بزن) و بدان که یک نام دستهٔ عجیب خودش نشانه‌ای است که لو دهنده می‌تواند تله‌ها را از رویش پیدا کند.</p>
 <div class=lbl>متن لو رفته (لینک‌ها، سابسکریپشن، پیام چت) را اینجا بچسبان</div>
 <textarea id=lk_text rows=5 placeholder="vless://...."></textarea>
 <button onclick=runLeak() style=margin-top:8px>🔎 بررسی نشتی</button>
@@ -2462,9 +2469,12 @@ async function loadCanary(){const j=await api({action:'canary.state'});const c=j
  if($('cy_on'))$('cy_on').checked=String(c.on)==='1';
  if($('cy_count'))$('cy_count').value=String(c.count||3);
  if($('cy_hosts'))$('cy_hosts').value=String(c.hosts||'');
+ if($('cy_cat'))$('cy_cat').value=String(c.cat||'');
  if($('cy_name_mode'))$('cy_name_mode').value=String(c.nameMode||'real');
  if($('cy_name'))$('cy_name').value=String(c.name||'');
- if($('im_on'))$('im_on').checked=String(c.infoMin)==='1';
+ // infoMin comes back at the top level, not inside canary - reading it from c left the switch
+ // showing off every time the card reloaded, whatever was stored
+ if($('im_on'))$('im_on').checked=String(j.infoMin)==='1';
  if($('cy_cnt'))$('cy_cnt').textContent=(Number(j.trapTotal)||0)+' سرور تله فعال · '+((j.legacyClients==null)?'?':j.legacyClients)+' دستگاه با نشست قدیمی';
  const d=j.diag||{};
  if($('cy_diag'))$('cy_diag').innerHTML='<b>وضعیت ساخت:</b> '+esc(d.why||'?')+
@@ -2475,7 +2485,7 @@ async function loadCanary(){const j=await api({action:'canary.state'});const c=j
   '<br><span class=note>'+(ar.secret==='set'?'رمز SESSION_SEAL (یا BLOB_ROOT) تنظیم است - نشست‌های تازه رمزنگاری می‌شوند':'<b style=color:red>هیچ رمز SESSION_SEAL/BLOB_ROOT روی ورکر تنظیم نیست، پس کلیدهای نشست متن روشن می‌مانند</b>')+
   ' · قفل تلاش لاگین فعال='+(j.loginLocks||0)+'</span>'}
 async function saveCanary(){await api({action:'canary.set',on:$('cy_on').checked,count:Number($('cy_count').value||0),
- hosts:$('cy_hosts').value,nameMode:$('cy_name_mode').value,name:$('cy_name').value,infoMin:$('im_on').checked});
+ hosts:$('cy_hosts').value,cat:$('cy_cat').value,nameMode:$('cy_name_mode').value,name:$('cy_name').value,infoMin:$('im_on').checked});
  toast('ذخیره شد - سرورهای تله در همگام‌سازی بعدی هر دستگاه ساخته میشوند');loadCanary()}
 async function purgeData(){const n=Number($('pr_days').value||30);
  if(!confirm('رویدادهای قدیمی‌تر از '+n+' روز حذف شوند؟ (تاریخچهٔ ریکوست دستگاه‌ها می‌رود، خود دستگاه‌ها می‌مانند)'))return;
