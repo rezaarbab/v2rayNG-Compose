@@ -7,6 +7,9 @@
 #include <jni.h>
 #include <string.h>
 
+/* the encrypted literal decoder, defined in blobsec.c */
+extern const char *sb(int idx);
+
 #define BG_N 8
 
 typedef struct { const unsigned char *b; unsigned int n; unsigned char salt; } bg_e;
@@ -275,15 +278,34 @@ const char *const *bg_dead(unsigned int *n) { if (n) *n = 211; return dead; }
    computed from BlobGate.java rather than typed (chkjni_reg.cjs --emit).
    The entry point below is static and the library links with -s, so this registration is the only
    way the JVM can reach it - a refused registration fails the load, and BlobGate.LOADED turns that
-   into "the native gate did not answer" instead of a crash. */
-int blobgate_register(JNIEnv *env) {
-    static JNINativeMethod m[] = {
-        { "nativeStr", "(I)Ljava/lang/String;", (void *) Java_ir_v2rayng_compose_core_BlobGate_nativeStr },
+   into "the native gate did not answer" instead of a crash. */int blobgate_register(JNIEnv *env) {
+    /* 1 entry points, named by index: the name and the signature come out of the
+     * same encrypted table as every other interface string, so the registration no longer reads as
+     * an inventory of what this library can be asked to do. One RegisterNatives per method, because
+     * sb() keeps six decoded strings alive at most and 1 rows would need twice that.
+     * ART copies the name and the signature when it registers, so the window may reuse them. */
+    static const short g_gate_names[] = {
+        262,
+    };
+    static const short g_gate_sigs[] = {
+        263,
+    };
+    static const void *const g_gate_fns[] = {
+        (void *) Java_ir_v2rayng_compose_core_BlobGate_nativeStr,
     };
     jclass c = (*env)->FindClass(env, "ir/v2rayng/compose/core/BlobGate");
-    if (c == NULL) { (*env)->ExceptionClear(env); return 0; }
-    int rc = ((*env)->RegisterNatives(env, c, m, 1) == 0) ? 1 : 0;
-    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (c == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return 0; }
+    for (int i = 0; i < (int) (sizeof(g_gate_fns) / sizeof(g_gate_fns[0])); i++) {
+        JNINativeMethod one;
+        one.name = (char *) sb(g_gate_names[i]);
+        one.signature = (char *) sb(g_gate_sigs[i]);
+        one.fnPtr = (void *) g_gate_fns[i];
+        if ((*env)->RegisterNatives(env, c, &one, 1) != 0) {
+            if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+            (*env)->DeleteLocalRef(env, c);
+            return 0;
+        }
+    }
     (*env)->DeleteLocalRef(env, c);
-    return rc;
+    return 1;
 }
