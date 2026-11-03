@@ -104,8 +104,14 @@ private fun rc(x0: Float, y0: Float, x1: Float, y1: Float, color: Color) = FlagB
 
 private fun cb(color: Color, vararg cs: ToyCircle) = FlagBand(color, cs.toList())
 
-private fun TRIH(a: Color, m: Color, b: Color) = listOf(hb(0.366f, 0.634f, m), hb(0.634f, 0.99f, b))
-private fun TRIV(l: Color, m: Color, r: Color) = listOf(vb(0.05f, 0.35f, l), vb(0.65f, 0.99f, r))
+/* The middle of a tricolour was left to the base colour, so every call that passed a middle
+ * different from the base - TRIV(BLACK, GOLD, RED) for Belgium, TRIV(GREEN, WHITE, ORANGE) for
+ * Ireland - silently lost that colour: the base painted the whole flag and only the two outer
+ * bands were drawn over it. All three bands are drawn now. Where the caller's first colour already
+ * equalled the base nothing changes, because the same colour is laid over the same area, and the
+ * band edges are the ones the file already used (0.35 / 0.366), so no flag moves. */
+private fun TRIH(a: Color, m: Color, b: Color) = listOf(hb(0.01f, 0.366f, a), hb(0.366f, 0.634f, m), hb(0.634f, 0.99f, b))
+private fun TRIV(l: Color, m: Color, r: Color) = listOf(vb(0.01f, 0.35f, l), vb(0.35f, 0.65f, m), vb(0.65f, 0.99f, r))
 private fun V3(l: Color, m: Color, r: Color) = listOf(vb(0.05f, 0.35f, l), vb(0.35f, 0.65f, m), vb(0.65f, 0.99f, r))
 private fun H2(t: Color) = listOf(hb(0.01f, 0.50f, t))
 private fun V2(l: Color) = listOf(vb(0.50f, 0.99f, l))
@@ -134,7 +140,8 @@ private fun build(): List<Sticker> {
     f("ad", "Andorra", BLUE, V3(BLUE, GOLD, RED))
     f("ae", "United Arab Emirates", GREEN, listOf(hb(0.366f, 0.634f, WHITE), hb(0.634f, 0.99f, BLACK), vb(0.05f, 0.28f, RED)))
     f("af", "Afghanistan", BLACK, TRIH(BLACK, RED, GREEN))
-    f("ag", "Antigua and Barbuda", NAVY, listOf(hb(0.10f, 0.35f, NAVY), hb(0.35f, 0.55f, BLUE), hb(0.55f, 0.75f, WHITE), hb(0.75f, 0.99f, NAVY)))
+    // red above and below, the blue field inverted-V'd between white fimbriations, gold rising sun
+    f("ag", "Antigua and Barbuda", RED, listOf(hb(0.01f, 0.32f, RED), hb(0.32f, 0.36f, WHITE), hb(0.36f, 0.64f, BLUE), hb(0.64f, 0.68f, WHITE), hb(0.68f, 0.99f, RED), cb(GOLD, ToyCircle(0.5f, 0.22f, 0.11f))))
     f("ai", "Anguilla", BLUE, miniUK())
     f("al", "Albania", RED, listOf(cb(BLACK, ToyCircle(0.5f, 0.5f, 0.13f))))
     f("am", "Armenia", RED, TRIH(RED, BLUE, GOLD))
@@ -146,7 +153,9 @@ private fun build(): List<Sticker> {
     f("ax", "Aland Islands", BLUE, NV(BLUE, GOLD) + listOf(vb(0.31f, 0.39f, RED), hb(0.43f, 0.57f, RED)))
     f("az", "Azerbaijan", SKY, listOf(hb(0.366f, 0.634f, RED), hb(0.634f, 0.99f, GREEN), cb(WHITE, ToyCircle(0.5f, 0.5f, 0.10f))))
     f("ba", "Bosnia and Herzegovina", NAVY, listOf(vb(0.05f, 0.55f, GOLD), hb(0.66f, 0.99f, NAVY)))
-    f("bb", "Barbados", BLUE, listOf(cb(GOLD, ToyCircle(0.5f, 0.5f, 0.14f))))
+    // three vertical bands (blue-gold-blue) with the black broken trident: head and shaft, the two
+    // outer prongs left out. It used to be a gold disc on a blue field, which is not this flag
+    f("bb", "Barbados", BLUE, TRIV(BLUE, GOLD, BLUE) + listOf(cb(BLACK, ToyCircle(0.5f, 0.40f, 0.055f)), rc(0.485f, 0.44f, 0.515f, 0.66f, BLACK)))
     f("bd", "Bangladesh", GREEN, DISK(RED, 0.24f))
     f("be", "Belgium", BLACK, TRIV(BLACK, GOLD, RED))
     f("bf", "Burkina Faso", RED, listOf(hb(0.5f, 0.99f, GREEN), cb(GOLD, ToyCircle(0.5f, 0.42f, 0.11f))))
@@ -163,7 +172,8 @@ private fun build(): List<Sticker> {
     f("bt", "Bhutan", GOLD, listOf(cb(Color(0xFFE8663C), ToyCircle(0.5f, 0.5f, 0.16f))))
     f("bw", "Botswana", SKY, listOf(hb(0.42f, 0.50f, BLACK), hb(0.50f, 0.58f, WHITE)))
     f("by", "Belarus", RED, listOf(hb(0.66f, 0.99f, GREEN), vb(0.05f, 0.22f, WHITE)))
-    f("bz", "Belize", NAVY, listOf(cb(WHITE, ToyCircle(0.5f, 0.5f, 0.20f)), cb(BLUE, ToyCircle(0.5f, 0.5f, 0.14f))))
+    // blue field with red borders top and bottom and the white coat of arms between them
+    f("bz", "Belize", BLUE, listOf(hb(0.01f, 0.11f, RED), hb(0.89f, 0.99f, RED), cb(WHITE, ToyCircle(0.5f, 0.5f, 0.21f)), cb(GREEN, ToyCircle(0.5f, 0.5f, 0.13f))))
     f("ca", "Canada", WHITE, listOf(vb(0.05f, 0.30f, RED), vb(0.70f, 0.99f, RED), cb(RED, ToyCircle(0.5f, 0.5f, 0.10f))))
     f("cd", "DR Congo", SKY, listOf(vb(0.62f, 0.72f, RED), cb(GOLD, ToyCircle(0.24f, 0.28f, 0.09f))))
     f("cf", "Central African Republic", BLUE, listOf(hb(0.10f, 0.30f, BLUE), hb(0.30f, 0.50f, WHITE), hb(0.50f, 0.70f, GREEN), hb(0.70f, 0.90f, GOLD), vb(0.05f, 0.25f, RED)))
@@ -208,12 +218,11 @@ private fun build(): List<Sticker> {
     f("fo", "Faroe Islands", WHITE, NV(WHITE, RED) + listOf(vb(0.32f, 0.38f, NAVY)))
     f("fr", "France", WHITE, V3(BLUE, WHITE, RED))
     f("ga", "Gabon", GREEN, TRIH(GREEN, GOLD, BLUE))
-    // St George on the blue field, with the cross reaching every edge. The panel of white used to be
-    // one inset rectangle, so the navy base survived only as a thin ring around the whole flag - and
-    // navy at 46dp reads as a black outline
-    f("gb", "United Kingdom", NAVY, listOf(
-        rc(0.01f, 0.40f, 0.99f, 0.60f, WHITE), rc(0.40f, 0.01f, 0.60f, 0.99f, WHITE),
-        rc(0.01f, 0.455f, 0.99f, 0.545f, RED), rc(0.455f, 0.01f, 0.545f, 0.99f, RED),
+    // He asked for the flag he knows: a red St George cross on white, reaching every edge. The blue
+    // field version made the dark navy the largest area of a 46dp badge, which is the "black line
+    // around it" he reported - the saltire of the Union Jack is not drawn here either way
+    f("gb", "United Kingdom", WHITE, listOf(
+        rc(0.42f, 0.01f, 0.58f, 0.99f, RED), rc(0.01f, 0.42f, 0.99f, 0.58f, RED),
     ))
     f("gd", "Grenada", RED, listOf(hb(0.24f, 0.44f, GOLD), hb(0.44f, 0.62f, GREEN), hb(0.62f, 0.82f, GOLD), cb(RED, ToyCircle(0.5f, 0.53f, 0.08f))))
     f("ge", "Georgia", WHITE, CROSS(RED) + listOf(rc(0.30f, 0.16f, 0.40f, 0.26f, RED), rc(0.30f, 0.74f, 0.40f, 0.84f, RED), rc(0.60f, 0.16f, 0.70f, 0.26f, RED), rc(0.60f, 0.74f, 0.70f, 0.84f, RED)))
@@ -258,7 +267,7 @@ private fun build(): List<Sticker> {
     f("kg", "Kyrgyzstan", RED, listOf(cb(GOLD, ToyCircle(0.5f, 0.5f, 0.14f))))
     f("kh", "Cambodia", BLUE, listOf(hb(0.32f, 0.68f, RED), cb(WHITE, ToyCircle(0.5f, 0.5f, 0.12f))))
     f("ki", "Kiribati", RED, listOf(hb(0.56f, 0.68f, WHITE), hb(0.68f, 0.78f, BLUE), cb(GOLD, ToyCircle(0.5f, 0.38f, 0.12f))))
-    f("km", "Comoros", GOLD, listOf(hb(0.10f, 0.325f, GOLD), hb(0.325f, 0.55f, WHITE), hb(0.55f, 0.775f, RED), hb(0.775f, 0.90f, NAVY), vb(0.05f, 0.30f, GREEN), cb(WHITE, ToyCircle(0.18f, 0.5f, 0.09f))))
+    f("km", "Comoros", GOLD, listOf(hb(0.10f, 0.325f, GOLD), hb(0.325f, 0.55f, WHITE), hb(0.55f, 0.775f, RED), hb(0.775f, 0.90f, GREEN), vb(0.05f, 0.30f, GREEN), cb(WHITE, ToyCircle(0.18f, 0.5f, 0.09f))))
     f("kn", "St. Kitts and Nevis", GREEN, listOf(hb(0.366f, 0.634f, BLACK), hb(0.634f, 0.99f, RED), cb(WHITE, ToyCircle(0.32f, 0.36f, 0.05f))))
     f("kp", "North Korea", BLUE, listOf(hb(0.16f, 0.24f, WHITE), hb(0.24f, 0.76f, RED), hb(0.76f, 0.84f, WHITE), cb(WHITE, ToyCircle(0.28f, 0.5f, 0.13f))))
     f("kr", "South Korea", WHITE, listOf(cb(NAVY, ToyCircle(0.5f, 0.5f, 0.15f)), cb(RED, ToyCircle(0.5f, 0.44f, 0.11f))))
@@ -334,7 +343,9 @@ private fun build(): List<Sticker> {
     f("rw", "Rwanda", SKY, TRIH(SKY, GOLD, GREEN) + listOf(cb(GOLD, ToyCircle(0.5f, 0.32f, 0.11f))))
     f("sa", "Saudi Arabia", GREEN, listOf(hb(0.40f, 0.52f, WHITE)))
     f("sb", "Solomon Islands", GREEN, listOf(hb(0.10f, 0.50f, SKY), hb(0.50f, 0.90f, GREEN), cb(GOLD, ToyCircle(0.5f, 0.5f, 0.12f))))
-    f("sc", "Seychelles", NAVY, listOf(vb(0.05f, 0.40f, NAVY), vb(0.40f, 0.62f, RED), hb(0.62f, 0.90f, GREEN), cb(WHITE, ToyCircle(0.32f, 0.42f, 0.08f))))
+    // five rays radiating from the hoist top - blue, gold, red, white, green; the disc that stood in
+    // for them dropped the gold and the white entirely
+    f("sc", "Seychelles", NAVY, listOf(vb(0.01f, 0.34f, NAVY), vb(0.34f, 0.50f, GOLD), vb(0.50f, 0.64f, RED), hb(0.64f, 0.80f, WHITE), hb(0.80f, 0.99f, GREEN)))
     f("sd", "Sudan", RED, TRIH(RED, WHITE, BLACK) + listOf(vb(0.05f, 0.34f, GREEN)))
     f("se", "Sweden", BLUE, NV(BLUE, GOLD))
     f("sg", "Singapore", RED, listOf(hb(0.5f, 0.90f, WHITE), cb(WHITE, ToyCircle(0.34f, 0.30f, 0.12f)), cb(RED, ToyCircle(0.40f, 0.30f, 0.13f))))
