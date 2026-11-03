@@ -113,27 +113,12 @@ public final class NativeSec {
         return READY && vaultHas(which) == 1;
     }
 
-    /** the keystore vault: alias, AAD and cipher all live in blobsec.c; which=1 is the old key */
+    /** the keystore vault: alias, AAD and cipher all live in blobsec.c; which=1 is the old key.
+     *  vaultSeal/vaultOpen have no caller here any more - the library calls them on itself from
+     *  kvPutText/kvGetText - but the declarations stay, because they are what makes those
+     *  exported symbols exist for C to call. */
     public static boolean vaultOk(int which) {
         return READY && vaultReady(which) == 1;
-    }
-
-    public static byte[] seal(byte[] plain) {
-        if (!READY || plain == null) return null;
-        try {
-            return vaultSeal(plain);
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
-    public static byte[] unseal(byte[] blob, int which) {
-        if (!READY || blob == null) return null;
-        try {
-            return vaultOpen(blob, which);
-        } catch (Throwable t) {
-            return null;
-        }
     }
 
     public static boolean dropKey(int which) {
@@ -467,6 +452,50 @@ public final class NativeSec {
         try {
             byte[] b = keyWhyText();
             return b == null ? "" : new String(b, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private static native byte[] kvGetText(String prefsFile, String key);
+
+    private static native int kvPutText(String prefsFile, String key, byte[] plainUtf8, int useCommit);
+
+    private static native String kvWhy();
+
+    /** read a sealed preference with the ciphertext handled entirely inside the library; null when
+     *  the value is absent or this device's key can no longer open it (kvReason() says which) */
+    public static String kvGet(String prefsFile, String key) {
+        if (!READY || prefsFile == null || key == null) return null;
+        try {
+            byte[] b = kvGetText(prefsFile, key);
+            return b == null ? null : new String(b, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** seal and store; false means the keystore or the write refused, and kvReason() says where.
+     *  commit=true waits for the write instead of handing it to a background thread, which is what
+     *  the app does off the main thread because MIUI kills the process on a swipe. The plaintext
+     *  crosses as UTF-8 bytes, never as a String: Java strings reach C as modified UTF-8, which is
+     *  not the same byte sequence for an emoji. */
+    public static boolean kvPut(String prefsFile, String key, String plain, boolean commit) {
+        if (!READY || prefsFile == null || key == null || plain == null) return false;
+        try {
+            byte[] utf8 = plain.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            return kvPutText(prefsFile, key, utf8, commit ? 1 : 0) == 1;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** one word about the last kvGet/kvPut - "ok", "plaintext", "none", "no context", ... */
+    public static String kvReason() {
+        if (!READY) return "";
+        try {
+            String s = kvWhy();
+            return s == null ? "" : s;
         } catch (Throwable t) {
             return "";
         }

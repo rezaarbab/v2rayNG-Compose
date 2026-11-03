@@ -489,7 +489,7 @@ class SettingsStore(context: Context) {
         if (raw == blobJson) return
         blobJson = raw
         SecurePrefs.set(BLOB_KEY, raw, ctx)
-        lastSaveVerified = SecurePrefs.verify(BLOB_KEY, raw, ctx)
+        lastSaveVerified = SecurePrefs.verify(BLOB_KEY, raw)
     }
 }
 

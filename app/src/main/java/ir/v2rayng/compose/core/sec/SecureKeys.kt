@@ -28,10 +28,13 @@ object SecJournal {
 }
 
 /**
- * Every value persisted in SharedPreferences is sealed with the AndroidKeyStore
- * master key (AES-256-GCM, StrongBox when available) - plaintext never touches
- * prefs files. Broken/unrecognized seals still read as legacy plaintext so old
- * installs migrate seamlessly; every freshly written value is sealed.
+ * Every value persisted in SharedPreferences is sealed with the AndroidKeyStore master key
+ * (AES-256-GCM in the TEE) - plaintext never touches the prefs file, and the sealed bytes never
+ * reach this file either: seal, base64, write, read, decode and open all happen in blobsec.c
+ * behind BlobVault, because a method tracer prints what a function returns and a ciphertext used
+ * to be the return value of every save.
+ * A value this device can no longer open reads as absent, never as its own ciphertext, and a
+ * legacy plaintext value is read as-is and re-sealed once on the way out.
  */
 object SecurePrefs {
 
@@ -53,7 +56,7 @@ object SecurePrefs {
 
     private fun note(line: String) = SecJournal.note(line)
 
-    /** Reading a value is a StrongBox unseal (~200ms on the phone in the APP_SCOUT traces), and
+    /** Reading a value is a keystore open (~200ms on the phone in the APP_SCOUT traces), and
      *  startup touches the same keys repeatedly, so decoded values are memoized for the process
      *  and dropped the moment the key is written. */
     private val memo = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -62,27 +65,26 @@ object SecurePrefs {
         memo.remove(key)
         val t0 = android.os.SystemClock.elapsedRealtime()
         try {
-            val ed = sp(context).edit()
             if (value == null) {
+                val ed = sp(context).edit()
                 ed.remove(key)
-            } else {
-                val sealed = BlobVault.seal(value.toByteArray(Charsets.UTF_8))
-                if (sealed == null) {
-                    // silent no-op is what made "nothing saves" undiagnosable
-                    sealFailSet().add(key)
-                    note("SEAL FAIL ${key} (${value.length}ch) in ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-                    return
-                }
-                ed.putString(key, sealed)
-                memo[key] = value
+                ed.apply()
+                return
             }
             // apply() only hands the write to a background thread, and MIUI kills the process when
-            // the app is swiped away - on a worker thread the write is committed instead, so a
-            // setting saved a second ago is still there when the app opens again
+            // the app is swiped away - off the main thread the same write is committed instead, so
+            // a setting saved a second ago is still there when the app opens again. The choice is
+            // passed down: the seal, the base64 and the Editor all live in the library now.
             val onMain = android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
-            if (onMain) ed.apply() else ed.commit()
+            if (!BlobVault.put(PREFS, key, value, !onMain)) {
+                // silent no-op is what made "nothing saves" undiagnosable
+                sealFailSet().add(key)
+                note("SEAL FAIL ${key} (${value.length}ch) in ${android.os.SystemClock.elapsedRealtime() - t0}ms (${BlobVault.lastStage.take(90)})")
+                return
+            }
+            memo[key] = value
             note(
-                "write ${key} ${value?.length ?: 0}ch " +
+                "write ${key} ${value.length}ch " +
                     (if (onMain) "apply" else "commit") + " ${android.os.SystemClock.elapsedRealtime() - t0}ms"
             )
         } catch (e: Exception) {
@@ -119,27 +121,25 @@ object SecurePrefs {
     var verifyNote: String? = null
         private set
 
-    /** Prove a write landed instead of assuming it - reads prefs directly, bypassing the memo. */
-    fun verify(key: String, expected: String, context: Context? = null): Boolean {
+    /** Prove a write landed instead of assuming it - opens the stored value through the vault, so
+     *  this object's memo cannot make the check agree with itself. */
+    fun verify(key: String, expected: String): Boolean {
         val t0 = android.os.SystemClock.elapsedRealtime()
-        val raw = try { sp(context).getString(key, null) } catch (_: Exception) { null }
-        val storedLen = raw?.length ?: 0
-        val out: ByteArray? = raw?.let { BlobVault.unseal(it) }
+        val out = BlobVault.get(PREFS, key)
+        val why = BlobVault.lastStage
         val ok = when {
-            raw == null -> {
-                verifyNote = "$key: nothing stored"
-                false
-            }
             out == null -> {
-                // the self check is what separates "the native vault is broken" (check != 0) from
-                // "this value was sealed under a key that no longer exists" (check == 0)
-                verifyNote = "stored ${storedLen}ch cannot be opened (${BlobVault.lastStage}; " +
-                    "selfcheck=" + ir.v2rayng.compose.core.NativeSec.vaultSelfCheck() + ")"
+                // "nothing stored" and "stored but this device cannot open it" need different fixes,
+                // and the self check is what separates "the native vault is broken" (check != 0)
+                // from "this value was sealed under a key that no longer exists" (check == 0)
+                verifyNote = if (why == "none") "$key: nothing stored"
+                else "stored value cannot be opened ($why; selfcheck=" +
+                    ir.v2rayng.compose.core.NativeSec.vaultSelfCheck() + ")"
                 false
             }
-            out.toString(Charsets.UTF_8) == expected -> true
+            out == expected -> true
             else -> {
-                verifyNote = "opened ${out.size}B, expected ${expected.length}ch"
+                verifyNote = "read ${out.length}ch, expected ${expected.length}ch"
                 false
             }
         }
@@ -156,70 +156,46 @@ object SecurePrefs {
     }
 
     private fun readStored(key: String, context: Context?): String? {
-        val t0 = android.os.SystemClock.elapsedRealtime()
-        return try {
-            val s = sp(context)
-            val raw = s.getString(key, null)
-            if (raw != null) {
-                if (raw.isEmpty()) return raw
-                val opened = BlobVault.unseal(raw)
-                val ms = android.os.SystemClock.elapsedRealtime() - t0
-                if (opened != null) {
-                    note("read ${key} ok ${ms}ms (${raw.length}ch)")
-                    return String(opened, Charsets.UTF_8)
-                }
-                if (looksPlaintext(raw)) {
-                    note("read ${key} plaintext legacy ${ms}ms")
-                    // old install plaintext -> read it, then seal it once with the master key
-                    legacyMigrate(s, key, raw)
-                    return raw
-                }
-                note("read ${key} UNDECIPHERABLE ${ms}ms (${raw.length}ch) -> treated as absent")
+        val v = BlobVault.get(PREFS, key)
+        val why = BlobVault.lastStage
+        return when {
+            v != null -> {
+                // "plaintext" is a value an old install wrote in the clear: hand it back as it is
+                // and seal it once here, so the prefs file becomes ciphertext over time
+                if (why == "plaintext") legacyMigrate(key, v)
+                v
+            }
+            why.startsWith("undecipherable") -> {
+                note("read $key $why -> treated as absent")
                 // Sealed with a key this device no longer has. Handing it back as if it were a
                 // value (and re-sealing it over itself) poisoned the stored data and made every
                 // later read fail, which is what looked like "nothing saves anymore".
                 unreadableSet().add(key)
-                return null
+                null
             }
-            // old installs stored real typed primitives -> serialize once to a sealed string
-            val v = s.all[key] ?: return null
-            note("read ${key} typed-legacy ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-            (v as? String ?: v.toString()).also { legacyMigrate(s, key, it) }
-        } catch (e: Exception) {
-            note("read ${key} ERROR ${e.javaClass.simpleName} ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-            null
+            else -> typedLegacy(key, context)
         }
     }
 
-    /**
-     * Old installs hold plaintext/typed values - on first successful read the
-     * value is re-sealed with the AndroidKeyStore master key so the prefs file
-     * becomes fully ciphertext over time.
-     */
-    /** Our ciphertext is base64url without padding, so it is only ever [A-Za-z0-9-_] and at least
-     *  38 characters (12-byte IV + 16-byte tag for an empty payload). Anything else - JSON, a
-     *  boolean, a number, a short id, a uuid, a URL - can only be legacy plaintext. */
-    private fun looksPlaintext(v: String): Boolean {
-        if (v.length < 38) return true
-        var i = 0
-        while (i < v.length) {
-            val c = v[i]
-            val ok = c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c == '-' || c == '_'
-            if (!ok) return true
-            i++
-        }
-        return false
+    /** A value an old install stored as a real boolean/int/float rather than as a string. Only for
+     *  a "none" verdict, and only when the raw map holds something that is not a String: with the
+     *  vault refusing, a String in that map is our own ciphertext and re-sealing it over itself is
+     *  exactly the poisoning the branch above exists to avoid. */
+    private fun typedLegacy(key: String, context: Context?): String? {
+        if (BlobVault.lastStage != "none") return null
+        val v = try { sp(context).all[key] } catch (_: Exception) { null } ?: return null
+        if (v is String) return null
+        note("read $key typed-legacy")
+        return v.toString().also { legacyMigrate(key, it) }
     }
 
-    private fun legacyMigrate(s: android.content.SharedPreferences, key: String, plain: String) {
+    private fun legacyMigrate(key: String, plain: String) {
         if (plain.isEmpty()) return
         if (!migratedSet().add(key)) return
-        try {
-            if (plain.length > 256 * 1024) return
-            val sealed = BlobVault.seal(plain.toByteArray(Charsets.UTF_8)) ?: return
-            s.edit().putString(key, sealed).apply()
-        } catch (_: Exception) {
-        }
+        if (plain.length > 256 * 1024) return
+        // applied, not committed: a migration that does not land is retried on the next start,
+        // and it is not worth blocking a read on a disk sync
+        BlobVault.put(PREFS, key, plain, false)
     }
 
     fun getString(key: String, def: String, context: Context? = null): String = get(key, context) ?: def

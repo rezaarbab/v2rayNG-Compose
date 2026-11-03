@@ -20,8 +20,8 @@ import ir.v2rayng.compose.core.NativeSec
  */
 object BlobVault {
 
+    /** which keystore alias: 0 is the one in use, 1 the StrongBox key this app used to write with */
     private const val CURRENT = 0
-    private const val LEGACY = 1
 
     /** What happened to the key, for the app log - "cannot read" and "no key at all" are very
      *  different states and the user sees only "nothing saves" without this. */
@@ -69,66 +69,44 @@ object BlobVault {
         return false
     }
 
-    /** Where the last unseal stopped, for the log page - "cannot be opened" alone does not say
+    /** Where the last operation stopped, for the log page - "cannot be opened" alone does not say
      *  whether the base64, the length, the keystore or the tag is what refused. */
     @Volatile
     var lastStage: String = ""
         private set
 
-    /** returns base64url(iv || ct) or null when the keystore refuses */
-    fun seal(plain: ByteArray): String? {
+    /** Seal and store. The plaintext goes in and nothing but a verdict comes back - the sealed
+     *  bytes and their base64 form used to cross through Kotlin on the way to SharedPreferences,
+     *  which put a ciphertext in every method return a tracer prints. */
+    fun put(prefsFile: String, key: String, plain: String, commit: Boolean): Boolean {
         if (!ready()) {
-            lastStage = "seal: no key [selfcheck=" + NativeSec.vaultSelfCheck() + " " + NativeSec.note() + " step=" + NativeSec.errInfo() + "]"
-            return null
+            lastStage = "no key [selfcheck=" + NativeSec.vaultSelfCheck() + " " + NativeSec.note() +
+                " step=" + NativeSec.errInfo() + "]"
+            return false
         }
         val t0 = android.os.SystemClock.elapsedRealtime()
         // one operation at a time: concurrent use of a keystore key fails on some devices
-        val out = synchronized(this) { NativeSec.seal(plain) }
-        if (out == null) {
-            usable = false
-            // -1 = the library did not pass its own known-answer test, so nothing it does can be
-            // trusted; -2 = it did not load at all; 2..6 = where the seal/open round trip stopped
-            lastStage = "seal: native refused [selfcheck=" + NativeSec.vaultSelfCheck() + " " + NativeSec.note() + " step=" + NativeSec.errInfo() + "]"
-            SecJournal.note("seal ERROR ${plain.size}B ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-            return null
-        }
-        SecJournal.note("seal ${plain.size}B ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-        return BlobB64.encode(out)
+        val ok = synchronized(this) { NativeSec.kvPut(prefsFile, key, plain, commit) }
+        lastStage = NativeSec.kvReason()
+        if (!ok) usable = false
+        SecJournal.note((if (ok) "put " else "put FAIL ") + key + " " + plain.length + "ch " +
+            (if (commit) "commit" else "apply") + " ${android.os.SystemClock.elapsedRealtime() - t0}ms" +
+            (if (ok) "" else " (${lastStage.take(90)})"))
+        return ok
     }
 
-    fun unseal(raw: String): ByteArray? {
-        val blob = BlobB64.decode(raw)
-        if (blob == null) {
-            lastStage = "base64"
-            return null
-        }
-        if (blob.size < 13) {
-            lastStage = "too short (${blob.size}B)"
-            return null
-        }
+    /** Read and open. null means absent or unreadable; lastStage says which, and "plaintext" means
+     *  the value predates sealing and should be written back sealed. */
+    fun get(prefsFile: String, key: String): String? {
         val t0 = android.os.SystemClock.elapsedRealtime()
-        if (!ready()) {
-            lastStage = "no key (step=" + NativeSec.errInfo() + ")"
-            return null
-        }
-        val out = synchronized(this) { NativeSec.unseal(blob, CURRENT) }
-        if (out != null) {
-            lastStage = "ok"
-            SecJournal.note("unseal ${out.size}B ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-            return out
-        }
-        // written before the StrongBox key was dropped - open it with the old key; the next seal
-        // rewrites it under the new one, so this path disappears after the first save
-        val viaOld = synchronized(this) { NativeSec.unseal(blob, LEGACY) }
-        if (viaOld != null) {
-            lastStage = "ok (legacy key)"
-            SecJournal.note("unseal ${viaOld.size}B with LEGACY key ${android.os.SystemClock.elapsedRealtime() - t0}ms (will be resealed)")
-            return viaOld
-        }
-        // "tag fail" is only true when the step is open:cipher.doFinal; anything earlier means the
-        // call itself refused and the stored bytes were never offered to the cipher
-        lastStage = "cannot open ${blob.size}B stored [step=" + NativeSec.errInfo() + "]"
-        SecJournal.note("unseal BadPadding ${android.os.SystemClock.elapsedRealtime() - t0}ms")
-        return null
+        // asked for, but its answer is not used to refuse: an old install's plaintext has to stay
+        // readable on a device whose keystore is refusing today, and the sealed form simply
+        // follows it into the same call
+        ready()
+        val out = synchronized(this) { NativeSec.kvGet(prefsFile, key) }
+        lastStage = NativeSec.kvReason()
+        SecJournal.note("get " + key + " " + (out?.length ?: -1) + "ch " +
+            "${android.os.SystemClock.elapsedRealtime() - t0}ms (${lastStage.take(70)})")
+        return out
     }
 }

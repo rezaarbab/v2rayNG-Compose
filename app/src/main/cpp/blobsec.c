@@ -2830,7 +2830,7 @@ Java_ir_v2rayng_compose_core_NativeSec_setCtx(JNIEnv *env, jclass cls, jobject c
 }
 
 /** put one string into the library's own file; 0 when the framework refused */
-static int pref_put(JNIEnv *env, const char *key, const char *value) {
+static int pref_put_in(JNIEnv *env, const char *prefs_file, const char *key, const char *value, int use_commit) {
     if (g_ctx == NULL) { set_step("pref:no-ctx"); return 0; }
     jmethodID mGet = mid_named(env, "android/content/Context", "getSharedPreferences",
         "(Ljava/lang/String;I)Landroid/content/SharedPreferences;", "pref:get-shs");
@@ -2840,7 +2840,7 @@ static int pref_put(JNIEnv *env, const char *key, const char *value) {
         "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;", "pref:putString");
     jmethodID mApply = mid_named(env, "android/content/SharedPreferences$Editor", "apply", "()V", "pref:apply");
     if (mGet == NULL || mEdit == NULL || mPut == NULL || mApply == NULL) return 0;
-    jstring file = (*env)->NewStringUTF(env, ROWS_PREF);
+    jstring file = (*env)->NewStringUTF(env, prefs_file);
     jstring k = (*env)->NewStringUTF(env, key);
     jstring v = (*env)->NewStringUTF(env, value);
     int ok = 0;
@@ -2854,8 +2854,16 @@ static int pref_put(JNIEnv *env, const char *key, const char *value) {
                 jobject ed2 = (*env)->CallObjectMethod(env, ed, mPut, k, v);
                 if ((*env)->ExceptionCheck(env)) { step_failed(env, "pref:putString"); ed2 = NULL; }
                 if (ed2 != NULL) {
-                    (*env)->CallVoidMethod(env, ed2, mApply);
-                    if (step_failed(env, "pref:apply")) ok = 0; else ok = 1;
+                    if (use_commit) {
+                        jmethodID mCommit = mid_named(env, "android/content/SharedPreferences$Editor", "commit", "()Z", "pref:commit");
+                        if (mCommit != NULL) {
+                            ok = (*env)->CallBooleanMethod(env, ed2, mCommit) ? 1 : 0;
+                            if (step_failed(env, "pref:commit")) ok = 0;
+                        }
+                    } else {
+                        (*env)->CallVoidMethod(env, ed2, mApply);
+                        if (step_failed(env, "pref:apply")) ok = 0; else ok = 1;
+                    }
                 }
                 if (ed2) (*env)->DeleteLocalRef(env, ed2);
                 if (ed) (*env)->DeleteLocalRef(env, ed);
@@ -2869,32 +2877,30 @@ static int pref_put(JNIEnv *env, const char *key, const char *value) {
     return ok;
 }
 
-/** read one string back; caller frees */
-static char *pref_get(JNIEnv *env, const char *key) {
+/** read one string back; caller frees. NULL means the key is absent - a stored empty string comes
+ *  back as a real "" so a caller can tell "cleared" from "never written" */
+static char *pref_get_in(JNIEnv *env, const char *prefs_file, const char *key) {
     if (g_ctx == NULL) return NULL;
     jmethodID mGet = mid_named(env, "android/content/Context", "getSharedPreferences",
         "(Ljava/lang/String;I)Landroid/content/SharedPreferences;", "pref:get-shs");
     jmethodID mStr = mid_named(env, "android/content/SharedPreferences", "getString",
         "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "pref:getString");
     if (mGet == NULL || mStr == NULL) return NULL;
-    jstring file = (*env)->NewStringUTF(env, ROWS_PREF);
+    jstring file = (*env)->NewStringUTF(env, prefs_file);
     jstring k = (*env)->NewStringUTF(env, key);
-    jstring empty = (*env)->NewStringUTF(env, "");
     char *out = NULL;
-    if (file && k && empty) {
+    if (file && k) {
         jobject sp = (*env)->CallObjectMethod(env, g_ctx, mGet, file, (jint) 0);
         if ((*env)->ExceptionCheck(env)) { step_failed(env, "pref:get"); sp = NULL; }
         if (sp != NULL) {
-            jstring v = (jstring) (*env)->CallObjectMethod(env, sp, mStr, k, empty);
+            jstring v = (jstring) (*env)->CallObjectMethod(env, sp, mStr, k, NULL);
             if ((*env)->ExceptionCheck(env)) { step_failed(env, "pref:getString"); v = NULL; }
             if (v != NULL) {
                 const char *sv = (*env)->GetStringUTFChars(env, v, NULL);
                 if (sv != NULL) {
                     int n = (int) strlen(sv);
-                    if (n > 0) {
-                        out = (char *) malloc((size_t) n + 1);
-                        if (out) { memcpy(out, sv, (size_t) n); out[n] = 0; }
-                    }
+                    out = (char *) malloc((size_t) n + 1);
+                    if (out) { memcpy(out, sv, (size_t) n); out[n] = 0; }
                     (*env)->ReleaseStringUTFChars(env, v, sv);
                 }
             }
@@ -2904,8 +2910,169 @@ static char *pref_get(JNIEnv *env, const char *key) {
     }
     if (file) (*env)->DeleteLocalRef(env, file);
     if (k) (*env)->DeleteLocalRef(env, k);
-    if (empty) (*env)->DeleteLocalRef(env, empty);
     return out;
+}
+
+static int pref_put(JNIEnv *env, const char *key, const char *value) {
+    return pref_put_in(env, ROWS_PREF, key, value, 0);
+}
+
+static char *pref_get(JNIEnv *env, const char *key) {
+    return pref_get_in(env, ROWS_PREF, key);
+}
+
+/* ---- sealed settings that never show their ciphertext to the caller ----
+ * Every persisted value is sealed with the keystore key. Until now the sealed bytes and their
+ * base64 text were handed to Kotlin to carry into SharedPreferences, and a method tracer prints
+ * what a function returns - so every save printed a ciphertext and every read printed the
+ * plaintext straight out of the vault. These entry points do the whole trip in this file: the
+ * preference read/write, the base64, the seal, the open, the legacy-key fallback and the
+ * plaintext that old installs still hold. What crosses back is the plaintext the screen shows
+ * anyway, plus one word about what happened.
+ */
+static char g_kv_why[176];
+
+/** our own text is base64url without padding, so anything else - JSON, a boolean, a number, a
+ *  uuid - can only be a value an old install wrote in the clear */
+static int kv_looks_plaintext(const char *v) {
+    size_t n = strlen(v);
+    if (n < 38) return 1;
+    for (size_t i = 0; i < n; i++) {
+        char c = v[i];
+        int ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                 c == '-' || c == '_';
+        if (!ok) return 1;
+    }
+    return 0;
+}
+
+static jbyteArray kv_bytes(JNIEnv *env, const char *s, int n) {
+    jbyteArray out = (*env)->NewByteArray(env, n);
+    if (out && n > 0) (*env)->SetByteArrayRegion(env, out, 0, n, (const jbyte *) s);
+    return out;
+}
+
+/** read one sealed preference: the plaintext, or NULL when it is absent or this device's key can
+ *  no longer open it. Why is one word in kvWhy() - "plaintext" tells the caller to re-seal it.
+ *  A legacy plaintext value comes back as the modified UTF-8 Java held it; everything the vault
+ *  opens is the UTF-8 the caller wrote. */
+JNIEXPORT jbyteArray JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_kvGetText(JNIEnv *env, jclass cls, jstring jfile, jstring jkey) {
+    g_kv_why[0] = 0;
+    if (g_ctx == NULL || jfile == NULL || jkey == NULL) {
+        copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "no context");
+        return NULL;
+    }
+    const char *file = (*env)->GetStringUTFChars(env, jfile, NULL);
+    if (file == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "bad file name"); return NULL; }
+    const char *key = (*env)->GetStringUTFChars(env, jkey, NULL);
+    if (key == NULL) {
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        (*env)->ReleaseStringUTFChars(env, jfile, file);
+        copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "bad key name");
+        return NULL;
+    }
+    char *raw = pref_get_in(env, file, key);
+    jbyteArray out = NULL;
+    if (raw == NULL) {
+        copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "none");
+    } else if (raw[0] == 0) {
+        copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "empty");
+        out = (*env)->NewByteArray(env, 0);
+    } else {
+        int rl = (int) strlen(raw);
+        char *dec = (char *) malloc((size_t) rl + 1);
+        int dl = dec ? pl_b64(raw, rl, dec, rl) : 0;
+        if (dl >= 13) {
+            jbyteArray jb = kv_bytes(env, dec, dl);
+            jbyteArray plain = jb ? Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(env, cls, jb, 0) : NULL;
+            int viaLegacy = 0;
+            if (plain == NULL) {
+                plain = jb ? Java_ir_v2rayng_compose_core_NativeSec_vaultOpen(env, cls, jb, 1) : NULL;
+                viaLegacy = 1;
+            }
+            if (plain != NULL) {
+                out = plain;
+                copy_ascii(g_kv_why, (int) sizeof(g_kv_why), viaLegacy ? "ok (legacy key)" : "ok");
+            }
+            if (jb) (*env)->DeleteLocalRef(env, jb);
+        }
+        if (dec) free(dec);
+        if (out == NULL) {
+            if (kv_looks_plaintext(raw)) {
+                out = kv_bytes(env, raw, rl);
+                copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "plaintext");
+            } else {
+                char w[150];
+                snprintf(w, sizeof(w), "undecipherable %dch [step=%s]", rl, g_step);
+                copy_ascii(g_kv_why, (int) sizeof(g_kv_why), w);
+            }
+        }
+    }
+    free(raw);
+    (*env)->ReleaseStringUTFChars(env, jkey, key);
+    (*env)->ReleaseStringUTFChars(env, jfile, file);
+    return out;
+}
+
+/** seal and store one value; 0 means the keystore refused, and kvWhy() says where. useCommit is the
+ *  caller's answer to "may this write be handed to a background thread": the app commits when it is
+ *  not on the main thread, because MIUI kills the process on a swipe and an applied write can go
+ *  with it.
+ *
+ *  The plaintext arrives as UTF-8 bytes rather than as a String. GetStringUTFRegion counts its
+ *  length in UTF-16 characters while GetStringUTFLength counts modified-UTF-8 bytes, so pairing the
+ *  second with the first - which is what this call did before - reads past the end of every value
+ *  holding a non-ASCII character, which is every Persian server name, and Java's string bytes are
+ *  CESU-8 anyway while the vault keeps real UTF-8.
+ */
+JNIEXPORT jint JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_kvPutText(JNIEnv *env, jclass cls, jstring jfile, jstring jkey, jbyteArray jplain, jint useCommit) {
+    g_kv_why[0] = 0;
+    if (g_ctx == NULL || jfile == NULL || jkey == NULL || jplain == NULL) {
+        copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "no context");
+        return 0;
+    }
+    jsize plen = (*env)->GetArrayLength(env, jplain);
+    const char *file = (*env)->GetStringUTFChars(env, jfile, NULL);
+    if (file == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "bad file name"); return 0; }
+    const char *key = (*env)->GetStringUTFChars(env, jkey, NULL);
+    if (key == NULL) {
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        (*env)->ReleaseStringUTFChars(env, jfile, file);
+        copy_ascii(g_kv_why, (int) sizeof(g_kv_why), "bad key name");
+        return 0;
+    }
+    /* the caller's array goes to Cipher.doFinal as it is: copying it here would mean reading it,
+       and reading it is what aborted the process once already when a release was missed */
+    jbyteArray sealed = Java_ir_v2rayng_compose_core_NativeSec_vaultSeal(env, cls, jplain);
+    int rc = 0;
+    if (sealed != NULL) {
+        jstring b64 = Java_ir_v2rayng_compose_core_NativeSec_b64uEncode(env, cls, sealed);
+        const char *bs = b64 ? (*env)->GetStringUTFChars(env, b64, NULL) : NULL;
+        if (bs != NULL) {
+            rc = pref_put_in(env, file, key, bs, useCommit);
+            (*env)->ReleaseStringUTFChars(env, b64, bs);
+        } else if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        if (b64) (*env)->DeleteLocalRef(env, b64);
+    }
+    if (!rc) {
+        char w[150];
+        snprintf(w, sizeof(w), "seal or write refused [step=%s]", g_step);
+        copy_ascii(g_kv_why, (int) sizeof(g_kv_why), w);
+    } else {
+        snprintf(g_kv_why, sizeof(g_kv_why), "stored %ldB", (long) plen);
+    }
+    if (sealed) (*env)->DeleteLocalRef(env, sealed);
+    (*env)->ReleaseStringUTFChars(env, jkey, key);
+    (*env)->ReleaseStringUTFChars(env, jfile, file);
+    return rc;
+}
+
+/** the one-word verdict on the last kvGetText/kvPutText */
+JNIEXPORT jstring JNICALL
+Java_ir_v2rayng_compose_core_NativeSec_kvWhy(JNIEnv *env, jclass cls) {
+    return (*env)->NewStringUTF(env, g_kv_why);
 }
 
 /** the reply this process last received, as bytes (NULL when there was none) */
@@ -4124,7 +4291,7 @@ Java_ir_v2rayng_compose_core_NativeSec_syncRun(JNIEnv *env, jclass cls) {
                 /* the payload carried no usable server and the load emptied the rows: put the sealed
                    ones back, otherwise every dial for a listed server finds no row and does nothing */
                 char *old = pref_get(env, ROWS_KEY);
-                if (old != NULL) {
+                if (old != NULL && old[0] != 0) {
                     jstring jold = (*env)->NewStringUTF(env, old);
                     if (jold != NULL) { rows_restore(env, cls, jold); (*env)->DeleteLocalRef(env, jold); }
                     free(old);
@@ -4191,7 +4358,7 @@ JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_rowsRestoreSelf(JNIEnv *env, jclass cls) {
     if (g_ctx == NULL) { set_step("rows:no-ctx"); return -1; }
     char *mine = pref_get(env, ROWS_KEY);
-    if (mine == NULL) { set_step("rows:none"); return -1; }
+    if (mine == NULL || mine[0] == 0) { set_step("rows:none"); return -1; }
     jstring jm = (*env)->NewStringUTF(env, mine);
     free(mine);
     if (jm == NULL) return -1;
@@ -4205,7 +4372,8 @@ JNIEXPORT jint JNICALL
 Java_ir_v2rayng_compose_core_NativeSec_rowsAdopt(JNIEnv *env, jclass cls, jstring legacy) {
     if (g_ctx == NULL) { set_step("adopt:no-ctx"); return -1; }
     char *mine = pref_get(env, ROWS_KEY);
-    if (mine != NULL) { free(mine); set_step("adopt:have-own"); return 0; }
+    if (mine != NULL && mine[0] != 0) { free(mine); set_step("adopt:have-own"); return 0; }
+    if (mine != NULL) free(mine);
     if (legacy == NULL) { set_step("adopt:none"); return 0; }
     const char *lv = (*env)->GetStringUTFChars(env, legacy, NULL);
     if (lv == NULL) { if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env); return 0; }
