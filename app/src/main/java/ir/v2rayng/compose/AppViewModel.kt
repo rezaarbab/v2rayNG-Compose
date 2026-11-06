@@ -601,6 +601,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setFlagAvatars(v: Boolean) = setSettings { it.copy(flagAvatars = v) }
     fun setPlainMode(v: Boolean) = setSettings { it.copy(plainMode = v) }
     fun setFlagStyle(v: Int) = setSettings { it.copy(flagStyle = v.coerceIn(0, 1)) }
+    /** kind: 1 = blobs, 2 = toys, 4 = flags. */
+    fun setEyes(kind: Int, on: Boolean) = setSettings {
+        it.copy(eyes = if (on) it.eyes or kind else it.eyes and kind.inv())
+    }
     fun setConnectFlagDancer(v: Boolean) = setSettings { it.copy(connectFlagDancer = v) }
     fun setFlagStretch(v: Float) = setSettings { it.copy(flagStretch = v.coerceIn(0.5f, 1f)) }
     fun setFlagRound(v: Float) = setSettings { it.copy(flagRound = v.coerceIn(0f, 1f)) }

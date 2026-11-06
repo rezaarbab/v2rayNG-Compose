@@ -128,6 +128,14 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(S.STICKERS, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 ToggleRow(S.PLAIN_ALL, S.PLAIN_ALL_SUB, settings.plainMode) { vm.setPlainMode(it) }
+                /* one row, three toggles: which art is allowed to have a face. All three on is the
+                   old sticker book; all three off is the flat set he liked. */
+                Text(S.EYES_TITLE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SelectChip(S.EYES_BLOBS, (settings.eyes and 1) != 0) { vm.setEyes(1, (settings.eyes and 1) == 0) }
+                    SelectChip(S.EYES_TOYS, (settings.eyes and 2) != 0) { vm.setEyes(2, (settings.eyes and 2) == 0) }
+                    SelectChip(S.EYES_FLAGS, (settings.eyes and 4) != 0) { vm.setEyes(4, (settings.eyes and 4) == 0) }
+                }
                 Text(S.FLAG_STYLE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SelectChip(S.FLAG_PLAIN, settings.flagStyle == 0) { vm.setFlagStyle(0) }

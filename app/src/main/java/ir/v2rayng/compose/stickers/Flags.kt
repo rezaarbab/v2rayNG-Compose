@@ -100,14 +100,19 @@ private val SKY = Color(0xFF75AADB)
 private val ORANGE = Color(0xFFE77A1E)
 private val GREY = Color(0xFF9BA8B4)
 
+/* Bands are rectangles. They used to be run through chaikin first, which turns a rectangle into a
+ * rounded blob: a tricolour's three straight stripes came out as three capsules, with the base
+ * colour showing at the corners as if the band had been cut with a circle. The sticker look is the
+ * rounded silhouette and the face, drawn by StickerCharacter - the colour blocks themselves are
+ * the flag. */
 private fun hb(y0: Float, y1: Float, color: Color) = FlagBand(
     color,
-    listOf(ToyPoly(chaikin(listOf(Offset(0.01f, y0), Offset(0.99f, y0), Offset(0.99f, y1), Offset(0.01f, y1)), 2))),
+    listOf(ToyPoly(listOf(Offset(0.01f, y0), Offset(0.99f, y0), Offset(0.99f, y1), Offset(0.01f, y1)))),
 )
 
 private fun vb(x0: Float, x1: Float, color: Color) = FlagBand(
     color,
-    listOf(ToyPoly(chaikin(listOf(Offset(x0, 0.01f), Offset(x1, 0.01f), Offset(x1, 0.99f), Offset(x0, 0.99f)), 2))),
+    listOf(ToyPoly(listOf(Offset(x0, 0.01f), Offset(x1, 0.01f), Offset(x1, 0.99f), Offset(x0, 0.99f)))),
 )
 
 private fun rc(x0: Float, y0: Float, x1: Float, y1: Float, color: Color) = FlagBand(

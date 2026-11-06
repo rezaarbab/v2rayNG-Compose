@@ -20,6 +20,8 @@ class StickerEnv {
     val flagRound = mutableFloatStateOf(0.45f)
     // a country flag is data, not decoration: 0 draws a real flag, 1 draws the sticker version
     val flagStyle = mutableIntStateOf(0)
+    // which art wears a face: bit 0 blobs, bit 1 toys, bit 2 flags
+    val eyes = mutableIntStateOf(3)
     /** The dance belongs to the finger when motion is set to "on touch": a sticker moves while it
      *  is being touched and holds still the moment it is not. */
     val touchOnly = mutableStateOf(true)

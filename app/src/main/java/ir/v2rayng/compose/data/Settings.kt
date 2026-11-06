@@ -88,6 +88,9 @@ data class Settings(
      *  can change is how the flag is drawn - 0 is a real flag (square corners, real proportions,
      *  no gloss, no eyes), 1 is the sticker version with the face and the rounding. */
     val flagStyle: Int = 0,
+    /** Which art wears a face: bit 0 blobs, bit 1 toys, bit 2 flags. A flag is a picture of a
+     *  country, so it starts faceless; the blobs are the app's character, so they keep theirs. */
+    val eyes: Int = 3,
 )
 
 fun parseList(s: String, def: List<Int>): List<Int> {
@@ -285,6 +288,7 @@ class SettingsStore(context: Context) {
             bubbleColor = l("bubbleColor", -1L),
             plainMode = b("plainMode", true),
             flagStyle = i("flagStyle", 0),
+            eyes = i("eyes", 3),
         )
     }
 
@@ -498,6 +502,7 @@ class SettingsStore(context: Context) {
         p("bubbleColor", s.bubbleColor)
         p("plainMode", s.plainMode)
         p("flagStyle", s.flagStyle)
+        p("eyes", s.eyes)
         val raw = j.toString()
         if (raw == blobJson) return
         blobJson = raw
