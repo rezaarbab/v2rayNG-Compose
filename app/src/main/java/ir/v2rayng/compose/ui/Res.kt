@@ -67,6 +67,8 @@ object S {
     const val FLAG_STYLE = "Flag style"
     const val FLAG_PLAIN = "Plain flag"
     const val FLAG_STICKER = "Sticker flag"
+    const val SHOW_COUNTRY = "Country names"
+    const val SHOW_COUNTRY_SUB = "Write the country behind a flag, in the list and on the connect screen"
     const val MOTION_WARN_TITLE = "Turn motion on?"
     const val MOTION_WARN_BODY = "Animation keeps the screen redrawing while it runs, so the battery drains faster and the phone gets warmer. Turn it on anyway?"
     const val MOTION_WARN_ON = "Turn on"

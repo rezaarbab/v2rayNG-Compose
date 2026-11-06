@@ -56,6 +56,7 @@ import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.stickers.Sticker
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.V2Stickers
+import ir.v2rayng.compose.stickers.countryNameOf
 import ir.v2rayng.compose.stickers.countryWords
 
 @Composable
@@ -361,7 +362,16 @@ private fun ServerRow(
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
                 val sub = buildString {
-                    if (profile.note.isNotBlank()) append(profile.note)
+                    /* the flag already says it, but only to someone who knows the flags; the name
+                       goes first on the line that was already there, so no row gets taller */
+                    if (settings.showCountry) {
+                        val cn = countryNameOf(profile.country)
+                        if (cn.isNotBlank()) append(cn)
+                    }
+                    if (profile.note.isNotBlank()) {
+                        if (isNotEmpty()) append("  ·  ")
+                        append(profile.note)
+                    }
                     if (profile.category.isNotBlank()) {
                         if (isNotEmpty()) append("  ·  ")
                         append(profile.category)

@@ -76,6 +76,12 @@ fun flagCodeFromName(name: String): String {
     return flagCodeFromWords(name)
 }
 
+/** The country's own name for a code: "de" -> "Germany". Empty when the code has no flag. */
+fun countryNameOf(code: String): String {
+    val i = CountryFlags.byCode(code)
+    return if (i >= 0) CountryFlags.list[i].name else ""
+}
+
 /** Everything a row's flag stands for, as text: the country name, its ISO code and every alias
  *  that points at the same flag. A server named "CDN1 🇩🇪" is found by "ger", "de" or "Germany". */
 fun countryWords(code: String): List<String> = wordsByCode[code.lowercase().trim()] ?: emptyList()

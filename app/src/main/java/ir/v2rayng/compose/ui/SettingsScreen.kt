@@ -141,6 +141,7 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     SelectChip(S.FLAG_PLAIN, settings.flagStyle == 0) { vm.setFlagStyle(0) }
                     SelectChip(S.FLAG_STICKER, settings.flagStyle == 1) { vm.setFlagStyle(1) }
                 }
+                ToggleRow(S.SHOW_COUNTRY, S.SHOW_COUNTRY_SUB, settings.showCountry) { vm.setShowCountry(it) }
                 Text(S.SHAPE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SelectChip(S.STYLE_BLOB, settings.stickerStyle == 0, { vm.setStickerStyle(0) })

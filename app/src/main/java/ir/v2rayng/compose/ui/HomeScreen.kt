@@ -129,10 +129,10 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                         val flagCode = state.ipCountry.uppercase()
                         val altCode = state.altCountry.uppercase()
                         val disagree = state.altCountry.isNotBlank() && altCode != flagCode && state.altIp.isNotBlank()
-                        IpRow(flagCode, state.myIp, { vm.checkMyIp() }, "CF")
+                        IpRow(flagCode, state.myIp, { vm.checkMyIp() }, "CF", settings.showCountry)
                         if (disagree) {
                             Spacer(Modifier.height(2.dp))
-                            IpRow(altCode, state.altIp, { vm.checkMyIp() }, "WHO")
+                            IpRow(altCode, state.altIp, { vm.checkMyIp() }, "WHO", settings.showCountry)
                         }
                     }
                 }
@@ -203,6 +203,16 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                                     fontWeight = FontWeight.Bold,
                                 )
                                 // no address under the name: the app knows this server by its id only
+                                val countryLabel = if (settings.showCountry) {
+                                    ir.v2rayng.compose.stickers.countryNameOf(sel.country)
+                                } else ""
+                                if (countryLabel.isNotBlank()) {
+                                    Text(
+                                        text = countryLabel,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                             PingChip(sel.ping, sel.pingErr)
                         }
@@ -332,7 +342,7 @@ private fun TrafficArrow(up: Boolean, accent: Color) {
 
 
 @Composable
-private fun IpRow(flagCode: String, ip: String, onCheck: () -> Unit, prefix: String = "CF") {
+private fun IpRow(flagCode: String, ip: String, onCheck: () -> Unit, prefix: String = "CF", showName: Boolean = false) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         val fi = if (flagCode.isNotBlank()) ir.v2rayng.compose.stickers.CountryFlags.byCode(flagCode) else -1
         if (fi >= 0) {
@@ -342,11 +352,17 @@ private fun IpRow(flagCode: String, ip: String, onCheck: () -> Unit, prefix: Str
             )
             Spacer(Modifier.width(5.dp))
         }
+        /* the code is for whoever reads codes; the name is what everyone else recognises */
+        val label = if (showName) {
+            ir.v2rayng.compose.stickers.countryNameOf(flagCode).ifBlank { flagCode }
+        } else {
+            flagCode
+        }
         Text(
             text = if (ip.isBlank()) {
-                "$prefix: ".plus(flagCode.ifBlank { S.MY_IP })
+                "$prefix: ".plus(label.ifBlank { S.MY_IP })
             } else {
-                "$prefix ${S.MY_IP}: $ip".plus(if (flagCode.isNotBlank()) " ($flagCode)" else "")
+                "$prefix ${S.MY_IP}: $ip".plus(if (label.isNotBlank()) " ($label)" else "")
             },
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

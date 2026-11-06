@@ -92,6 +92,8 @@ data class Settings(
     /** Which art wears a face: bit 0 blobs, bit 1 toys, bit 2 flags. A flag is a picture of a
      *  country, so it starts faceless; the blobs are the app's character, so they keep theirs. */
     val eyes: Int = 3,
+    /** The country behind a flag, written out next to it in the list and on the connect screen. */
+    val showCountry: Boolean = true,
 )
 
 fun parseList(s: String, def: List<Int>): List<Int> {
@@ -290,6 +292,7 @@ class SettingsStore(context: Context) {
             plainMode = b("plainMode", true),
             flagStyle = i("flagStyle", 0),
             eyes = i("eyes", 3),
+            showCountry = b("showCountry", true),
         )
     }
 
@@ -504,6 +507,7 @@ class SettingsStore(context: Context) {
         p("plainMode", s.plainMode)
         p("flagStyle", s.flagStyle)
         p("eyes", s.eyes)
+        p("showCountry", s.showCountry)
         val raw = j.toString()
         if (raw == blobJson) return
         blobJson = raw

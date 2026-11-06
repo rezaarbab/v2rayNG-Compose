@@ -628,6 +628,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setNotifColor(v: Long) = setSettings { it.copy(notifColor = v) }
     fun setFlagAvatars(v: Boolean) = setSettings { it.copy(flagAvatars = v) }
     fun setPlainMode(v: Boolean) = setSettings { it.copy(plainMode = v) }
+    fun setShowCountry(v: Boolean) = setSettings { it.copy(showCountry = v) }
     fun setFlagStyle(v: Int) = setSettings { it.copy(flagStyle = v.coerceIn(0, 1)) }
     /** kind: 1 = blobs, 2 = toys, 4 = flags. */
     fun setEyes(kind: Int, on: Boolean) = setSettings {
