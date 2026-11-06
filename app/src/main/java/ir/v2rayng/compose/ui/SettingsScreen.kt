@@ -72,6 +72,11 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var showBubbleHex by remember { mutableStateOf(false) }
     var showCreator by remember { mutableStateOf(false) }
     var showRemoteUrl by remember { mutableStateOf(false) }
+    /** what to write once the user has agreed to what motion costs - null means no dialog is up */
+    var motionWarn by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val askMotion: (Boolean, () -> Unit) -> Unit = { needsWarning, set ->
+        if (needsWarning) motionWarn = set else set()
+    }
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadApps(context) }
 
@@ -119,6 +124,8 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(S.STICKERS, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                ToggleRow(S.PLAIN_ALL, S.PLAIN_ALL_SUB, settings.plainMode) { vm.setPlainMode(it) }
+                ToggleRow(S.PLAIN_FLAGS, S.PLAIN_FLAGS_SUB, settings.plainFlags) { vm.setPlainFlags(it) }
                 Text(S.SHAPE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SelectChip(S.STYLE_BLOB, settings.stickerStyle == 0, { vm.setStickerStyle(0) })
@@ -131,9 +138,18 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     SelectChip(S.CREATOR_TITLE, false, { showCreator = true })
                 }
 
-                ToggleRow(S.MOTION_ALL, S.MOTION_ALL_SUB, settings.motionGlobal) { vm.setMotionGlobal(it) }
+                ToggleRow(S.MOTION_ALL, S.MOTION_ALL_SUB, settings.motionGlobal) {
+                    askMotion(it && !settings.motionGlobal) { vm.setMotionGlobal(it) }
+                }
 
-                ToggleRow(S.ANIMATION, S.ANIMATION_SUB, settings.animate && settings.motionGlobal) { vm.setAnimate(it) }
+                ToggleRow(S.ANIMATION, S.ANIMATION_SUB, settings.animate && settings.motionGlobal) {
+                    /* this switch shows the AND of both, so agreeing to it has to move both - a
+                       confirm that left the row showing "off" would be a lie about what was turned on */
+                    askMotion(it && !(settings.animate && settings.motionGlobal)) {
+                        vm.setAnimate(it)
+                        if (it) vm.setMotionGlobal(true)
+                    }
+                }
 
                 Text(S.SPEED_STICKERS.format(settings.speed), style = MaterialTheme.typography.bodyMedium)
                 Slider(value = settings.speed, onValueChange = { vm.setSpeed(it) }, valueRange = 0.25f..2f)
@@ -368,6 +384,17 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     }
     if (showRemoteUrl) {
         RemoteUrlDialog(vm.remoteBase(), vm) { showRemoteUrl = false }
+    }
+    motionWarn?.let { turnOn ->
+        AlertDialog(
+            onDismissRequest = { motionWarn = null },
+            title = { Text(S.MOTION_WARN_TITLE) },
+            text = { Text(S.MOTION_WARN_BODY) },
+            confirmButton = {
+                TextButton(onClick = { motionWarn = null; turnOn() }) { Text(S.MOTION_WARN_ON) }
+            },
+            dismissButton = { TextButton(onClick = { motionWarn = null }) { Text(S.MOTION_WARN_OFF) } },
+        )
     }
 }
 

@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -108,7 +109,28 @@ fun StickerCharacter(
     val env = LocalStickerEnv.current
     var rootPos by remember { mutableStateOf(Offset.Zero) }
     var side by remember { mutableStateOf(IntSize.Zero) }
+    val pressed = remember { mutableStateOf(false) }
     val frozenPhase = remember(sticker) { ((sticker.id.hashCode() and 0x3FF) % 997) / 997f }
+
+    /* Read at Initial pass and nothing is consumed: the tap, the hold and the list scroll all see
+     * exactly the events they saw before this existed. */
+    val touchMod = if (env.touchOnly.value) {
+        Modifier.pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    val ev = awaitPointerEvent(PointerEventPass.Initial)
+                    val down = ev.changes.any { it.pressed }
+                    if (down != pressed.value) pressed.value = down
+                }
+            }
+        }
+    } else {
+        Modifier
+    }
+
+    val isFlag = sticker.art is FlagArt
+    val plain = env.plain.value || (isFlag && env.plainFlags.value)
+    val motionActive = !env.touchOnly.value || pressed.value
 
     val tables: BlobTables? = remember(sticker) {
         when (val art = sticker.art) {
@@ -135,7 +157,7 @@ fun StickerCharacter(
     val textMeasurer = rememberTextMeasurer()
 
     val dance = Modifier.graphicsLayer {
-        if (mood == StickerMood.SLEEP || decorative || !env.enabled.value) {
+        if (plain || mood == StickerMood.SLEEP || decorative || !env.enabled.value || !motionActive) {
             translationX = 0f; translationY = 0f
             scaleX = 1f; scaleY = 1f; rotationZ = 0f
             // the blink is normally driven from this block; when it is skipped the value used to
@@ -181,13 +203,14 @@ fun StickerCharacter(
         modifier = modifier
             .size(sizeDp)
             .then(positionMod)
+            .then(touchMod)
             .then(gestures ?: Modifier)
             .then(dance)
     ) {
         val s = size.width
         val customSpeed = CustomStickers.speedOf(sticker)
         val animOn = env.enabled.value
-        val static = mood == StickerMood.SLEEP || !animOn || decorative
+        val static = plain || mood == StickerMood.SLEEP || !animOn || decorative || !motionActive
         val tImg = if (static) {
             frozenPhase
         } else {
@@ -197,15 +220,14 @@ fun StickerCharacter(
         }
 
         // flags: user-controlled aspect (square..long) and corner rounding (sharp..semicircle)
-        val isFlag = sticker.art is FlagArt
         val flagYScale = if (isFlag) env.flagStretch.floatValue.coerceIn(0.5f, 1f) else 1f
         val flagRadius = if (isFlag) env.flagRound.floatValue.coerceIn(0f, 1f) * flagYScale * s * 0.5f else 0f
         fun p(x: Float, y: Float): Offset = Offset(x * s, (y - 0.5f) * s * flagYScale + 0.5f * s)
 
         /* the blob's ground shadow. A flag is a rectangle with nothing standing on the ground, and
            at flagStretch 1 this ellipse lands across its bottom edge - a dark line where the
-           intention was a shadow */
-        if (!isFlag) {
+           intention was a shadow. A plain icon has no ground either. */
+        if (!isFlag && !plain) {
             drawOval(
                 color = Color.Black.copy(alpha = 0.20f),
                 topLeft = Offset(0.23f * s, 0.885f * s),
@@ -264,7 +286,7 @@ fun StickerCharacter(
             is BlobArt -> {
                 val tb = tables
                 val bodyColor = art.color
-                if (tb == null) {
+                if (tb == null || plain) {
                     drawCircle(bodyColor, radius = 0.34f * s, center = p(0.5f, 0.5f))
                 } else {
                     val t = if (static) {
@@ -294,11 +316,11 @@ fun StickerCharacter(
                     drawPath(shapePath, bodyColor)
                 }
 
-                drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
+                if (!plain) drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
 
                 val hw = 0.036f * s
                 val hh = 0.07f * blinkCur.floatValue * s
-                val eyes = listOf(0.38f to 0.47f, 0.62f to 0.47f)
+                val eyes = if (plain) emptyList() else listOf(0.38f to 0.47f, 0.62f to 0.47f)
                 for ((ex, ey) in eyes) {
                     val c = p(ex, ey) + Offset(gx, gy)
                     drawOval(
@@ -317,9 +339,9 @@ fun StickerCharacter(
             is ToyArt -> {
                 drawOps(art.ops, art.color)
 
-                drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
+                if (!plain) drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
 
-                for (e in art.eyes) {
+                for (e in (if (plain) emptyList() else art.eyes)) {
                     val c = p(e.cx, e.cy) + Offset(gx, gy)
                     val w = e.w * s
                     val h = e.h * s * blinkCur.floatValue
@@ -358,11 +380,11 @@ fun StickerCharacter(
                     }
                 }
 
-                drawCircle(Color.White.copy(alpha = 0.14f), radius = 0.10f * s, center = p(0.42f, 0.37f))
+                if (!plain) drawCircle(Color.White.copy(alpha = 0.14f), radius = 0.10f * s, center = p(0.42f, 0.37f))
 
                 val hw = 0.045f * s
                 val hh = 0.13f * blinkCur.floatValue * s
-                val eyes = listOf(0.40f to 0.50f, 0.60f to 0.50f)
+                val eyes = if (plain) emptyList() else listOf(0.40f to 0.50f, 0.60f to 0.50f)
                 for ((i, eye) in eyes.withIndex()) {
                     val c = p(eye.first, eye.second) + Offset(gx, gy)
                     rotate(if (i == 0) -8f else 8f, pivot = c) {
@@ -438,9 +460,9 @@ fun StickerCharacter(
                     }
                 }
 
-                drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
+                if (!plain) drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
 
-                if (art.eyes) {
+                if (art.eyes && !plain) {
                     val hw = 0.036f * s
                     val hh = 0.07f * blinkCur.floatValue * s
                     val eyes = listOf(0.38f to 0.47f, 0.62f to 0.47f)

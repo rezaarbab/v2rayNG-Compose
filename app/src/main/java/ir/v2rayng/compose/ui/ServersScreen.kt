@@ -56,6 +56,7 @@ import ir.v2rayng.compose.stickers.CountryFlags
 import ir.v2rayng.compose.stickers.Sticker
 import ir.v2rayng.compose.stickers.StickerCharacter
 import ir.v2rayng.compose.stickers.V2Stickers
+import ir.v2rayng.compose.stickers.countryWords
 
 @Composable
 fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
@@ -91,15 +92,20 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     val pingRule = buildString {
         if (pingSort == 1) append(" · ").append(S.SORT_PING_LOW)
         if (pingSort == 2) append(" · ").append(S.SORT_PING_HIGH)
+        if (pingSort == 3) append(" · ").append(S.SORT_PING_DEAD)
         if (minMs != null && maxMs != null) append(" · ").append(minMs).append("-").append(maxMs).append("ms")
         else if (minMs != null) append(" · >=").append(minMs).append("ms")
         else if (maxMs != null) append(" · <=").append(maxMs).append("ms")
     }
 
     val categories = state.servers.mapNotNull { it.category.takeIf { c -> c.isNotBlank() } }.distinct()
+    /* the flag is the only place a country is written on a row, so its name is what the search has
+       to look at: "germany" finding "CDN1 🇩🇪" is the whole point of the avatar */
+    val q = query.trim()
     val filtered = state.servers.filter { srv ->
         (catSel.isBlank() || srv.category == catSel) &&
-            (query.isBlank() || srv.name.contains(query, true) || srv.category.contains(query, true)) &&
+            (q.isBlank() || srv.name.contains(q, true) || srv.category.contains(q, true) ||
+                countryWords(srv.country).any { it.contains(q, true) }) &&
             inRange(srv.ping)
     }
 
@@ -162,7 +168,7 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             Spacer(Modifier.height(8.dp))
             // scrollable, like the category row: three labels plus the ping fields must not be clipped
             androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(listOf(0 to S.SORT_PING_DEFAULT, 1 to S.SORT_PING_LOW, 2 to S.SORT_PING_HIGH)) { (mode, label) ->
+                items(listOf(0 to S.SORT_PING_DEFAULT, 1 to S.SORT_PING_LOW, 2 to S.SORT_PING_HIGH, 3 to S.SORT_PING_DEAD)) { (mode, label) ->
                     SelectChip(label, pingSort == mode) { pingSort = if (pingSort == mode) 0 else mode }
                 }
             }
@@ -212,6 +218,9 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 val sorted = when (pingSort) {
                     1 -> filtered.sortedBy { it.ping ?: Int.MAX_VALUE }
                     2 -> filtered.sortedByDescending { it.ping ?: Int.MIN_VALUE }
+                    // a row with no number is the one worth looking at first: it is the one that is
+                    // not answering. Stable sort, so the rest keeps the order the admin sent.
+                    3 -> filtered.sortedBy { if (it.ping == null) 0 else 1 }
                     else -> filtered.sortedWith(
                         compareByDescending<ServerProfile> { it.pinned }
                             .thenBy { state.servers.indexOfFirst { x -> x.id == it.id } },

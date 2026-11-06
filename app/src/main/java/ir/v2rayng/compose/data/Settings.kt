@@ -34,12 +34,12 @@ data class Settings(
     val mainColor: Long = -1L,
     val mainSize: Int = 0,
     val mainIndex: Int = -1,
-    val followFinger: Boolean = true,
-    val animate: Boolean = true,
-    val motionGlobal: Boolean = true,
-    val stateMotion: Boolean = true,
+    val followFinger: Boolean = false,
+    val animate: Boolean = false,
+    val motionGlobal: Boolean = false,
+    val stateMotion: Boolean = false,
     val showNotification: Boolean = true,
-    val notifSticker: Boolean = true,
+    val notifSticker: Boolean = false,
     val notifColor: Long = -1L,
     val flagAvatars: Boolean = true,
     val connectFlagDancer: Boolean = true,
@@ -47,7 +47,7 @@ data class Settings(
     val flagRound: Float = 0.45f,
     val speed: Float = 1f,
     val bgSpeed: Float = 1f,
-    val navStickers: Boolean = true,
+    val navStickers: Boolean = false,
     val autoFlag: Boolean = true,
     val navOrder: String = "0,1,2,3,4",
     val navIcons: String = "0,1,2,3,4",
@@ -77,8 +77,14 @@ data class Settings(
     val autoPingNew: Boolean = true,
     val flagOnStart: Boolean = true,
     val autoFlagNew: Boolean = true,
-    val bubbleOn: Boolean = true,
+    val bubbleOn: Boolean = false,
     val bubbleColor: Long = -1L,
+    /** Everything flat: no faces, no gloss, no shadow, no morphing - a coloured icon instead of a
+     *  sticker. This is the default because the sticker art is the app's personality, and the
+     *  person who does not want it should not have to find four switches to opt out of it. */
+    val plainMode: Boolean = true,
+    /** Flags specifically, for when the sticker packs are back on: a country flag without eyes. */
+    val plainFlags: Boolean = true,
 )
 
 fun parseList(s: String, def: List<Int>): List<Int> {
@@ -177,6 +183,7 @@ class SettingsStore(context: Context) {
             accent = p.getInt("accent", 0),
             customAccent = p.getLong("customAccent", -1L),
             stickerStyle = p.getInt("style", 0),
+            plainMode = p.getBoolean("plain", true),
         )
     } catch (_: Exception) {
         Settings(dark = darkFast())
@@ -229,18 +236,18 @@ class SettingsStore(context: Context) {
             mainColor = l("mainColor", -1L),
             mainSize = i("mainSize", 0),
             mainIndex = i("mainIndex", -1),
-            followFinger = b("followFinger", true),
-            animate = b("animate", true),
-            motionGlobal = b("motionGlobal", true),
-            stateMotion = b("stateMotion", true),
+            followFinger = b("followFinger", false),
+            animate = b("animate", false),
+            motionGlobal = b("motionGlobal", false),
+            stateMotion = b("stateMotion", false),
             showNotification = b("showNotification", true),
-            notifSticker = b("notifSticker", true),
+            notifSticker = b("notifSticker", false),
             notifColor = l("notifColor", -1L),
             flagAvatars = b("flagAvatars", true),
             connectFlagDancer = b("connectFlagDancer", true),
             speed = f("speed", 1f),
             bgSpeed = f("bgSpeed", 1f),
-            navStickers = b("navStickers", true),
+            navStickers = b("navStickers", false),
             autoFlag = b("autoFlag", true),
             navOrder = t("navOrder", "0,1,2,3,4"),
             navIcons = t("navIcons", "0,1,2,3,4"),
@@ -272,8 +279,10 @@ class SettingsStore(context: Context) {
             autoFlagNew = b("autoFlagNew", true),
             flagStretch = f("flagStretch", 0.66f),
             flagRound = f("flagRound", 0.45f),
-            bubbleOn = b("bubbleOn", true),
+            bubbleOn = b("bubbleOn", false),
             bubbleColor = l("bubbleColor", -1L),
+            plainMode = b("plainMode", true),
+            plainFlags = b("plainFlags", true),
         )
     }
 
@@ -415,6 +424,7 @@ class SettingsStore(context: Context) {
                 .putInt("accent", s.accent)
                 .putLong("customAccent", s.customAccent)
                 .putInt("style", s.stickerStyle)
+                .putBoolean("plain", s.plainMode)
                 .apply()
         } catch (_: Exception) {
         }
@@ -485,6 +495,8 @@ class SettingsStore(context: Context) {
         p("flagRound", s.flagRound)
         p("bubbleOn", s.bubbleOn)
         p("bubbleColor", s.bubbleColor)
+        p("plainMode", s.plainMode)
+        p("plainFlags", s.plainFlags)
         val raw = j.toString()
         if (raw == blobJson) return
         blobJson = raw

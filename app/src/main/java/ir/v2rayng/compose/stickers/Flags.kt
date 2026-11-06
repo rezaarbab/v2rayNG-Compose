@@ -76,6 +76,19 @@ fun flagCodeFromName(name: String): String {
     return flagCodeFromWords(name)
 }
 
+/** Everything a row's flag stands for, as text: the country name, its ISO code and every alias
+ *  that points at the same flag. A server named "CDN1 🇩🇪" is found by "ger", "de" or "Germany". */
+fun countryWords(code: String): List<String> = wordsByCode[code.lowercase().trim()] ?: emptyList()
+
+// lazy for the same reason as flagNameToCode: it walks CountryFlags.list
+private val wordsByCode: Map<String, List<String>> by lazy {
+    val out = HashMap<String, ArrayList<String>>()
+    CountryFlags.list.forEach { out[it.id] = ArrayList() }
+    flagNameToCode.forEach { (word, iso) -> out[iso.lowercase()]?.add(word) }
+    out.forEach { (code, list) -> list.add(code.uppercase()) }
+    out
+}
+
 private val RED = Color(0xFFE03C31)
 private val BLUE = Color(0xFF2C5BD6)
 private val NAVY = Color(0xFF12203A)

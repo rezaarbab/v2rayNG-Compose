@@ -107,7 +107,8 @@ fun PingChip(ping: Int?, err: String? = null) {
         ping != null && ping <= 150 -> Color(0xFF2BD48A) to "$ping ms"
         ping != null && ping <= 300 -> Color(0xFFFFB24A) to "$ping ms"
         ping != null -> Color(0xFFFF7C7C) to "$ping ms"
-        !err.isNullOrBlank() -> Color(0xFFFF7C7C) to err
+        // no answer is not a slow answer: grey, the same colour as "not measured yet"
+        !err.isNullOrBlank() -> Color(0xFF9BA8B4) to err
         else -> Color(0xFF9BA8B4) to "-"
     }
     Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(50)) {
