@@ -212,7 +212,8 @@ class XrayVpnService : VpnService() {
     }
 
     private fun stickerBitmap(settings: ir.v2rayng.compose.data.Settings): Bitmap? {
-        if (!settings.notifSticker) return null
+        // plain mode is a client with no stickers anywhere, including the notification shade
+        if (!settings.notifSticker || settings.plainMode) return null
         val size = 256
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)

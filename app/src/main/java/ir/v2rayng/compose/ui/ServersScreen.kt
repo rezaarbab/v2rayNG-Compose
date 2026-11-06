@@ -71,11 +71,16 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var pingPanel by remember { mutableStateOf(false) }
     var delSrv by remember { mutableStateOf<ServerProfile?>(null) }
     var askDead by remember { mutableStateOf(false) }
-    val deadCount = state.servers.count { it.ping == null && !it.pingErr.isNullOrBlank() }
+    // tcp-only counts: a SYN answer with no tunnel behind it is as dead as a timeout
+    val deadCount = state.servers.count { !it.pingErr.isNullOrBlank() }
 
     // digits only: a filter box that accepts "abc" would silently hide everything
     val minMs = pingMin.toIntOrNull()
     val maxMs = pingMax.toIntOrNull()
+    /** A number that came from a TCP SYN with nothing behind it - "tcp 3 ms" - is not a latency, it
+     *  is a middlebox answering. It is dead: shown grey, never counted as a ping, and never allowed
+     *  to sit at the top of "lowest ping" looking like the fastest server. */
+    fun pingOf(srv: ServerProfile): Int? = srv.ping.takeIf { srv.pingErr.isNullOrBlank() }
     /** An unmeasured row is not a slow row: it has no number, so it cannot be inside any range and
      *  it sorts last whatever the direction. */
     fun inRange(p: Int?): Boolean {
@@ -92,7 +97,6 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     val pingRule = buildString {
         if (pingSort == 1) append(" · ").append(S.SORT_PING_LOW)
         if (pingSort == 2) append(" · ").append(S.SORT_PING_HIGH)
-        if (pingSort == 3) append(" · ").append(S.SORT_PING_DEAD)
         if (minMs != null && maxMs != null) append(" · ").append(minMs).append("-").append(maxMs).append("ms")
         else if (minMs != null) append(" · >=").append(minMs).append("ms")
         else if (maxMs != null) append(" · <=").append(maxMs).append("ms")
@@ -106,7 +110,9 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
         (catSel.isBlank() || srv.category == catSel) &&
             (q.isBlank() || srv.name.contains(q, true) || srv.category.contains(q, true) ||
                 countryWords(srv.country).any { it.contains(q, true) }) &&
-            inRange(srv.ping)
+            inRange(pingOf(srv)) &&
+            // while a ping rule is on, a row with no real number is not part of the answer
+            (!pingOn || pingOf(srv) != null)
     }
 
     Column(
@@ -168,7 +174,7 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             Spacer(Modifier.height(8.dp))
             // scrollable, like the category row: three labels plus the ping fields must not be clipped
             androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(listOf(0 to S.SORT_PING_DEFAULT, 1 to S.SORT_PING_LOW, 2 to S.SORT_PING_HIGH, 3 to S.SORT_PING_DEAD)) { (mode, label) ->
+                items(listOf(0 to S.SORT_PING_DEFAULT, 1 to S.SORT_PING_LOW, 2 to S.SORT_PING_HIGH)) { (mode, label) ->
                     SelectChip(label, pingSort == mode) { pingSort = if (pingSort == mode) 0 else mode }
                 }
             }
@@ -216,11 +222,8 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                    asking for the fastest - or the slowest - server at the top, so the pin does not
                    interfere with it */
                 val sorted = when (pingSort) {
-                    1 -> filtered.sortedBy { it.ping ?: Int.MAX_VALUE }
-                    2 -> filtered.sortedByDescending { it.ping ?: Int.MIN_VALUE }
-                    // a row with no number is the one worth looking at first: it is the one that is
-                    // not answering. Stable sort, so the rest keeps the order the admin sent.
-                    3 -> filtered.sortedBy { if (it.ping == null) 0 else 1 }
+                    1 -> filtered.sortedBy { pingOf(it) ?: Int.MAX_VALUE }
+                    2 -> filtered.sortedByDescending { pingOf(it) ?: Int.MIN_VALUE }
                     else -> filtered.sortedWith(
                         compareByDescending<ServerProfile> { it.pinned }
                             .thenBy { state.servers.indexOfFirst { x -> x.id == it.id } },
@@ -280,6 +283,16 @@ fun ServersScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     }
 }
 
+/** Plain mode replaces a sticker with an icon; a country flag stays a flag. */
+@Composable
+private fun ServerAvatar(sticker: Sticker, plainMode: Boolean, sizeDp: androidx.compose.ui.unit.Dp) {
+    if (plainMode && sticker.art !is ir.v2rayng.compose.stickers.FlagArt) {
+        PlainServerIcon(sticker, sizeDp)
+    } else {
+        StickerCharacter(sticker, sizeDp = sizeDp)
+    }
+}
+
 @Composable
 private fun ServerRow(
     profile: ServerProfile,
@@ -332,10 +345,10 @@ private fun ServerRow(
                                     .background(bubCol),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                StickerCharacter(sticker, sizeDp = 46.dp)
+                                ServerAvatar(sticker, settings.plainMode, 46.dp)
                             }
                         } else {
-                            StickerCharacter(sticker, sizeDp = 46.dp)
+                            ServerAvatar(sticker, settings.plainMode, 46.dp)
                         }
                     }
             Spacer(Modifier.width(10.dp))

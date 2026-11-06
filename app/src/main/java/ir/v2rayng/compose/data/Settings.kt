@@ -35,8 +35,9 @@ data class Settings(
     val mainSize: Int = 0,
     val mainIndex: Int = -1,
     val followFinger: Boolean = false,
-    val animate: Boolean = false,
-    val motionGlobal: Boolean = false,
+    /** 0 = nothing moves, 1 = a sticker moves while it is touched, 2 = it dances all the time.
+     *  One number instead of two booleans, because "how much motion" is one question. */
+    val motionMode: Int = 0,
     val stateMotion: Boolean = false,
     val showNotification: Boolean = true,
     val notifSticker: Boolean = false,
@@ -79,11 +80,12 @@ data class Settings(
     val autoFlagNew: Boolean = true,
     val bubbleOn: Boolean = false,
     val bubbleColor: Long = -1L,
-    /** Everything flat: no faces, no gloss, no shadow, no morphing - a coloured icon instead of a
-     *  sticker. This is the default because the sticker art is the app's personality, and the
-     *  person who does not want it should not have to find four switches to opt out of it. */
+    /** A normal app: every place that would draw a sticker draws a plain icon instead - not the same
+     *  blob with its face removed, which still looked like a sticker. Turning this off is the way
+     *  back to the blob packs. */
     val plainMode: Boolean = true,
-    /** Flags specifically, for when the sticker packs are back on: a country flag without eyes. */
+    /** Country flags never become a generic icon: the flag is what the row is about. This keeps the
+     *  flag itself flat (no eyes, no movement) when it is drawn. */
     val plainFlags: Boolean = true,
 )
 
@@ -237,8 +239,7 @@ class SettingsStore(context: Context) {
             mainSize = i("mainSize", 0),
             mainIndex = i("mainIndex", -1),
             followFinger = b("followFinger", false),
-            animate = b("animate", false),
-            motionGlobal = b("motionGlobal", false),
+            motionMode = i("motionMode", 0),
             stateMotion = b("stateMotion", false),
             showNotification = b("showNotification", true),
             notifSticker = b("notifSticker", false),
@@ -451,8 +452,7 @@ class SettingsStore(context: Context) {
         p("mainSize", s.mainSize)
         p("mainIndex", s.mainIndex)
         p("followFinger", s.followFinger)
-        p("animate", s.animate)
-        p("motionGlobal", s.motionGlobal)
+        p("motionMode", s.motionMode)
         p("stateMotion", s.stateMotion)
         p("showNotification", s.showNotification)
         p("notifSticker", s.notifSticker)

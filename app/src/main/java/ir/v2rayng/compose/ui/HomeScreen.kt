@@ -56,7 +56,7 @@ import ir.v2rayng.compose.stickers.tinted
 @Composable
 fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offset? = null, onGoServers: () -> Unit = {}) {
     val sel = state.selected
-    val mood = if (settings.stateMotion && settings.motionGlobal) {
+    val mood = if (settings.stateMotion && settings.motionMode != 0) {
         when (state.vpnState) {
             VpnState.IDLE -> StickerMood.NORMAL
             VpnState.CONNECTING -> StickerMood.WOBBLE
@@ -145,13 +145,26 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                             onHold = { editorOpen.value = true },
                         )
                     ) {
-                        StickerCharacter(
-                            sticker = tinted(mainSticker, settings.mainColor),
-                            mood = mood,
-                            sizeDp = if (settings.mainSize > 0) settings.mainSize.dp else 190.dp,
-                            gaze = gaze,
-                            modifier = Modifier.stickerFx(parseFxPack(settings.mainFx)),
-                        )
+                        if (settings.plainMode && mainSticker.art !is ir.v2rayng.compose.stickers.FlagArt) {
+                            val tint = when (state.vpnState) {
+                                VpnState.CONNECTED -> Color(0xFF2BD48A)
+                                VpnState.CONNECTING -> Color(0xFFFFB24A)
+                                VpnState.BROKEN -> Color(0xFFFF7C7C)
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            PlainConnectButton(
+                                sizeDp = if (settings.mainSize > 0) settings.mainSize.dp else 190.dp,
+                                tint = tint,
+                            )
+                        } else {
+                            StickerCharacter(
+                                sticker = tinted(mainSticker, settings.mainColor),
+                                mood = mood,
+                                sizeDp = if (settings.mainSize > 0) settings.mainSize.dp else 190.dp,
+                                gaze = gaze,
+                                modifier = Modifier.stickerFx(parseFxPack(settings.mainFx)),
+                            )
+                        }
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
@@ -177,7 +190,11 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                             } else {
                                 V2Stickers.byIndex(settings.stickerStyle, sel.stickerIndex)
                             }
-                            StickerCharacter(tinted(selAvatar, settings.mainColor), mood = if (connected && settings.stateMotion && settings.motionGlobal) StickerMood.HAPPY else StickerMood.NORMAL, sizeDp = 34.dp)
+                            if (settings.plainMode && selAvatar.art !is ir.v2rayng.compose.stickers.FlagArt) {
+                                PlainServerIcon(selAvatar, 34.dp)
+                            } else {
+                                StickerCharacter(tinted(selAvatar, settings.mainColor), mood = if (connected && settings.stateMotion && settings.motionMode != 0) StickerMood.HAPPY else StickerMood.NORMAL, sizeDp = 34.dp)
+                            }
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(
@@ -197,8 +214,8 @@ fun HomeScreen(state: AppState, settings: Settings, vm: AppViewModel, gaze: Offs
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), settings.upIcon, settings.upPack, settings.stickerStyle, settings.upColor, settings.upSpeed, { editZone.value = "up" }, settings.navStickers, parseFxPack(settings.upFx))
-                        TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), settings.downIcon, settings.downPack, settings.stickerStyle, settings.downColor, settings.downSpeed, { editZone.value = "down" }, settings.navStickers, parseFxPack(settings.downFx))
+                        TrafficCard(S.UPLOAD, state.traffic.upSpeed, state.traffic.up, Color(0xFFEC6E6E), settings.upIcon, settings.upPack, settings.stickerStyle, settings.upColor, settings.upSpeed, { editZone.value = "up" }, settings.navStickers && !settings.plainMode, parseFxPack(settings.upFx))
+                        TrafficCard(S.DOWNLOAD, state.traffic.downSpeed, state.traffic.down, Color(0xFF7FD8E8), settings.downIcon, settings.downPack, settings.stickerStyle, settings.downColor, settings.downSpeed, { editZone.value = "down" }, settings.navStickers && !settings.plainMode, parseFxPack(settings.downFx))
                     }
                     androidx.compose.material3.TextButton(
                         onClick = { vm.resetTotalTraffic() },

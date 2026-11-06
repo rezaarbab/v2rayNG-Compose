@@ -591,11 +591,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setMainSize(v: Int) = setSettings { it.copy(mainSize = v) }
     fun setMainIndex(v: Int, pack: Int = -1) = setSettings { it.copy(mainIndex = v, mainPack = pack) }
     fun setFollowFinger(v: Boolean) = setSettings { it.copy(followFinger = v) }
-    fun setAnimate(v: Boolean) = setSettings { it.copy(animate = v) }
+    /** 0 = off, 1 = only while touched, 2 = always. The one switch that starts the frame ticker. */
+    fun setMotionMode(v: Int) = setSettings { it.copy(motionMode = v.coerceIn(0, 2)) }
     fun setStateMotion(v: Boolean) = setSettings { it.copy(stateMotion = v) }
 
-    /** Master switch: with it off nothing animates and the per-frame ticker stops entirely. */
-    fun setMotionGlobal(v: Boolean) = setSettings { it.copy(motionGlobal = v) }
     fun setShowNotification(v: Boolean) = setSettings { it.copy(showNotification = v) }
     fun setNotifSticker(v: Boolean) = setSettings { it.copy(notifSticker = v) }
     fun setNotifColor(v: Long) = setSettings { it.copy(notifColor = v) }
@@ -1574,9 +1573,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
         log("INFO", "Server deleted - " + gone.name)
     }
 
-    /** Only servers that were actually measured and failed; never-measured rows are kept. */
+    /** Only servers that were actually measured and failed; never-measured rows are kept. A tcp-only
+     *  answer is a failure: the middlebox replied, the tunnel did not. */
     fun deleteUnpingable(): Int {
-        val dead = _state.value.servers.filter { it.ping == null && !it.pingErr.isNullOrBlank() }
+        val dead = _state.value.servers.filter { !it.pingErr.isNullOrBlank() }
         if (dead.isEmpty()) return 0
         serversTouched = true
         val ids = dead.map { it.id }.toSet()

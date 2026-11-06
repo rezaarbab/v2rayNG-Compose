@@ -17,12 +17,10 @@ class StickerEnv {
     // flag look, user-controlled: aspect (square..long) and corner rounding (sharp..semicircle)
     val flagStretch = mutableFloatStateOf(0.66f)
     val flagRound = mutableFloatStateOf(0.45f)
-    // flat everything: no faces, no gloss, no shadow, no morph. The default look of the app.
-    val plain = mutableStateOf(true)
+    // a country flag is data, not decoration: flat flag art, no eyes, no movement
     val plainFlags = mutableStateOf(true)
-    /** The dance belongs to the finger: a sticker moves while it is being touched and holds still
-     *  the moment it is not. Nothing in the settings turns this back into an all-the-time wobble,
-     *  because all-the-time wobble is the battery cost this was written to remove. */
+    /** The dance belongs to the finger when motion is set to "on touch": a sticker moves while it
+     *  is being touched and holds still the moment it is not. */
     val touchOnly = mutableStateOf(true)
 }
 

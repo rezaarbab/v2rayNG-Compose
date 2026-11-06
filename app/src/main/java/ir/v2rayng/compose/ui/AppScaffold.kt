@@ -84,10 +84,10 @@ fun AppRoot() {
     androidx.compose.runtime.LaunchedEffect(settings.dark) {
         (context as? ir.v2rayng.compose.MainActivity)?.applySystemBars(settings.dark)
     }
-    LaunchedEffect(settings.motionGlobal, settings.animate) {
+    LaunchedEffect(settings.motionMode) {
         // the loop used to run at display refresh rate for as long as any screen was composed,
         // even with animations switched off - that is the single biggest battery cost in the app
-        if (!settings.motionGlobal || !settings.animate) return@LaunchedEffect
+        if (settings.motionMode == 0) return@LaunchedEffect
         var prev = 0L
         var animMs = 0L
         var waveMs = 0L
@@ -114,13 +114,13 @@ fun AppRoot() {
             }
         }
     }
-    LaunchedEffect(settings.animate, settings.motionGlobal, settings.speed, settings.bgSpeed, settings.flagStretch, settings.flagRound, settings.plainMode, settings.plainFlags) {
-        env.enabled.value = settings.animate && settings.motionGlobal
+    LaunchedEffect(settings.motionMode, settings.speed, settings.bgSpeed, settings.flagStretch, settings.flagRound, settings.plainFlags) {
+        env.enabled.value = settings.motionMode != 0
+        env.touchOnly.value = settings.motionMode == 1
         env.speed.floatValue = settings.speed
         env.bgSpeed.floatValue = settings.bgSpeed
         env.flagStretch.floatValue = settings.flagStretch
         env.flagRound.floatValue = settings.flagRound
-        env.plain.value = settings.plainMode
         env.plainFlags.value = settings.plainFlags
     }
     CompositionLocalProvider(LocalStickerEnv provides env) {
@@ -174,7 +174,7 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                                     onHold = { editNav = real },
                                 )
                             ) {
-                                if (settings.navStickers) {
+                                if (settings.navStickers && !settings.plainMode) {
                                     val spd = parseFloatList(settings.navSpeeds, listOf(1f, 1f, 1f, 1f, 1f)).getOrNull(real) ?: 1f
                                     val navPacks = parseList(settings.navPacks, listOf(-1, -1, -1, -1, -1))
                                     val st = V2Stickers.byPack(
@@ -223,7 +223,8 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                     }
                 }
         ) {
-            if (settings.wallpaperIndex >= 0) {
+            // a sticker wallpaper is still a sticker: plain mode leaves the background empty
+            if (settings.wallpaperIndex >= 0 && !settings.plainMode) {
                 val wall = tinted(
                     V2Stickers.byIndex(settings.wallpaperStyle, settings.wallpaperIndex),
                     settings.wallpaperColor,

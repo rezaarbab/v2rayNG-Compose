@@ -74,8 +74,11 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
     var showRemoteUrl by remember { mutableStateOf(false) }
     /** what to write once the user has agreed to what motion costs - null means no dialog is up */
     var motionWarn by remember { mutableStateOf<(() -> Unit)?>(null) }
-    val askMotion: (Boolean, () -> Unit) -> Unit = { needsWarning, set ->
-        if (needsWarning) motionWarn = set else set()
+    /* Motion is the one setting that costs battery all day, so the first time it leaves "off" the
+       cost is named before anything is written. Going between "on touch" and "always" is free. */
+    fun pickMotion(mode: Int) {
+        if (mode != 0 && settings.motionMode == 0) motionWarn = { vm.setMotionMode(mode) }
+        else vm.setMotionMode(mode)
     }
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.runtime.LaunchedEffect(Unit) { vm.loadApps(context) }
@@ -138,17 +141,11 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     SelectChip(S.CREATOR_TITLE, false, { showCreator = true })
                 }
 
-                ToggleRow(S.MOTION_ALL, S.MOTION_ALL_SUB, settings.motionGlobal) {
-                    askMotion(it && !settings.motionGlobal) { vm.setMotionGlobal(it) }
-                }
-
-                ToggleRow(S.ANIMATION, S.ANIMATION_SUB, settings.animate && settings.motionGlobal) {
-                    /* this switch shows the AND of both, so agreeing to it has to move both - a
-                       confirm that left the row showing "off" would be a lie about what was turned on */
-                    askMotion(it && !(settings.animate && settings.motionGlobal)) {
-                        vm.setAnimate(it)
-                        if (it) vm.setMotionGlobal(true)
-                    }
+                Text(S.MOTION_TITLE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SelectChip(S.MOTION_OFF, settings.motionMode == 0) { pickMotion(0) }
+                    SelectChip(S.MOTION_TOUCH, settings.motionMode == 1) { pickMotion(1) }
+                    SelectChip(S.MOTION_ALWAYS, settings.motionMode == 2) { pickMotion(2) }
                 }
 
                 Text(S.SPEED_STICKERS.format(settings.speed), style = MaterialTheme.typography.bodyMedium)
@@ -158,25 +155,27 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 Slider(value = settings.bgSpeed, onValueChange = { vm.setBgSpeed(it) }, valueRange = 0.25f..2f)
 
                 ToggleRow(S.STATE_MOTION, S.STATE_MOTION_SUB, settings.stateMotion) { vm.setStateMotion(it) }
-                ToggleRow(S.NOTIF_TITLE, S.NOTIF_SUB, settings.showNotification) { vm.setShowNotification(it) }
+                if (!settings.plainMode) {
+                    ToggleRow(S.NOTIF_TITLE, S.NOTIF_SUB, settings.showNotification) { vm.setShowNotification(it) }
 
-                Text(S.NOTIF_STYLE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SelectChip(S.NOTIF_STICKER, settings.notifSticker, { vm.setNotifSticker(true) })
-                    SelectChip(S.NOTIF_LOCK, !settings.notifSticker, { vm.setNotifSticker(false) })
-                }
+                    Text(S.NOTIF_STYLE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SelectChip(S.NOTIF_STICKER, settings.notifSticker, { vm.setNotifSticker(true) })
+                        SelectChip(S.NOTIF_LOCK, !settings.notifSticker, { vm.setNotifSticker(false) })
+                    }
 
-                if (settings.notifSticker) {
-                    Text(S.NOTIF_COLOR, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        ColorDot(Color(0xFF888888), "", settings.notifColor < 0) { vm.setNotifColor(-1) }
-                        NotifPalette.forEach { c ->
-                            ColorDot(Color(c), "", settings.notifColor == c) { vm.setNotifColor(c) }
+                    if (settings.notifSticker) {
+                        Text(S.NOTIF_COLOR, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            ColorDot(Color(0xFF888888), "", settings.notifColor < 0) { vm.setNotifColor(-1) }
+                            NotifPalette.forEach { c ->
+                                ColorDot(Color(c), "", settings.notifColor == c) { vm.setNotifColor(c) }
+                            }
+                            SelectChip("Custom", false, { showNotifHex = true })
                         }
-                        SelectChip("Custom", false, { showNotifHex = true })
                     }
                 }
 
@@ -214,26 +213,33 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(S.MENU_LAYOUT, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
 
-                ToggleRow(S.NAV_STICKERS, S.ICON_STICKERS_SUB, settings.navStickers) { vm.setNavStickers(it) }
-
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(S.MENU_LAYOUT_SUB, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    Text(
+                        if (settings.plainMode) S.MENU_ORDER else S.MENU_LAYOUT_SUB,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
                     SelectChip(S.EDITOR, false, { moveMenu = true })
                 }
 
-                Text(S.NAV_ICONS_TITLE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                val navIcons = parseList(settings.navIcons, (0..4).toList())
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    itemsIndexed(navIcons) { slot, idx ->
-                        val sticker = V2Stickers.byIndex(settings.stickerStyle, idx)
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { editNavSlot = slot }
-                                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), RoundedCornerShape(14.dp))
-                                .padding(5.dp),
-                        ) {
-                            StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 40.dp)
+                // sticker configuration only exists while stickers do
+                if (!settings.plainMode) {
+                    ToggleRow(S.NAV_STICKERS, S.ICON_STICKERS_SUB, settings.navStickers) { vm.setNavStickers(it) }
+
+                    Text(S.NAV_ICONS_TITLE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    val navIcons = parseList(settings.navIcons, (0..4).toList())
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        itemsIndexed(navIcons) { slot, idx ->
+                            val sticker = V2Stickers.byIndex(settings.stickerStyle, idx)
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .clickable { editNavSlot = slot }
+                                    .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), RoundedCornerShape(14.dp))
+                                    .padding(5.dp),
+                            ) {
+                                StickerCharacter(sticker, mood = StickerMood.NORMAL, sizeDp = 40.dp)
+                            }
                         }
                     }
                 }

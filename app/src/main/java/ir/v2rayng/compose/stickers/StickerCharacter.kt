@@ -129,7 +129,9 @@ fun StickerCharacter(
     }
 
     val isFlag = sticker.art is FlagArt
-    val plain = env.plain.value || (isFlag && env.plainFlags.value)
+    /* only flags get the flat treatment here. A blob or a toy that is drawn at all is drawn as a
+       sticker, face and all - "plain" is a decision about which art to use, made by the caller. */
+    val plain = isFlag && env.plainFlags.value
     val motionActive = !env.touchOnly.value || pressed.value
 
     val tables: BlobTables? = remember(sticker) {
@@ -226,8 +228,8 @@ fun StickerCharacter(
 
         /* the blob's ground shadow. A flag is a rectangle with nothing standing on the ground, and
            at flagStretch 1 this ellipse lands across its bottom edge - a dark line where the
-           intention was a shadow. A plain icon has no ground either. */
-        if (!isFlag && !plain) {
+           intention was a shadow */
+        if (!isFlag) {
             drawOval(
                 color = Color.Black.copy(alpha = 0.20f),
                 topLeft = Offset(0.23f * s, 0.885f * s),
@@ -286,7 +288,7 @@ fun StickerCharacter(
             is BlobArt -> {
                 val tb = tables
                 val bodyColor = art.color
-                if (tb == null || plain) {
+                if (tb == null) {
                     drawCircle(bodyColor, radius = 0.34f * s, center = p(0.5f, 0.5f))
                 } else {
                     val t = if (static) {
@@ -316,11 +318,11 @@ fun StickerCharacter(
                     drawPath(shapePath, bodyColor)
                 }
 
-                if (!plain) drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
+                drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
 
                 val hw = 0.036f * s
                 val hh = 0.07f * blinkCur.floatValue * s
-                val eyes = if (plain) emptyList() else listOf(0.38f to 0.47f, 0.62f to 0.47f)
+                val eyes = listOf(0.38f to 0.47f, 0.62f to 0.47f)
                 for ((ex, ey) in eyes) {
                     val c = p(ex, ey) + Offset(gx, gy)
                     drawOval(
@@ -339,9 +341,9 @@ fun StickerCharacter(
             is ToyArt -> {
                 drawOps(art.ops, art.color)
 
-                if (!plain) drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
+                drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
 
-                for (e in (if (plain) emptyList() else art.eyes)) {
+                for (e in art.eyes) {
                     val c = p(e.cx, e.cy) + Offset(gx, gy)
                     val w = e.w * s
                     val h = e.h * s * blinkCur.floatValue
@@ -460,9 +462,9 @@ fun StickerCharacter(
                     }
                 }
 
-                if (!plain) drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
+                drawCircle(Color.White.copy(alpha = 0.16f), radius = 0.11f * s, center = p(0.42f, 0.37f))
 
-                if (art.eyes && !plain) {
+                if (art.eyes) {
                     val hw = 0.036f * s
                     val hh = 0.07f * blinkCur.floatValue * s
                     val eyes = listOf(0.38f to 0.47f, 0.62f to 0.47f)
