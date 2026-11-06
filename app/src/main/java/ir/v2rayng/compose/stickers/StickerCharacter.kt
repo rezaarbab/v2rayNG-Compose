@@ -131,7 +131,7 @@ fun StickerCharacter(
     val isFlag = sticker.art is FlagArt
     /* only flags get the flat treatment here. A blob or a toy that is drawn at all is drawn as a
        sticker, face and all - "plain" is a decision about which art to use, made by the caller. */
-    val plain = isFlag && env.plainFlags.value
+    val plain = isFlag && env.flagStyle.intValue == 0
     val motionActive = !env.touchOnly.value || pressed.value
 
     val tables: BlobTables? = remember(sticker) {
@@ -221,9 +221,15 @@ fun StickerCharacter(
             clock / 1000f * us * (if (bg) 0.6f else 1f) * (moodSpeed(mood) * speedScale * customSpeed) + phaseOf(sticker.art)
         }
 
-        // flags: user-controlled aspect (square..long) and corner rounding (sharp..semicircle)
-        val flagYScale = if (isFlag) env.flagStretch.floatValue.coerceIn(0.5f, 1f) else 1f
-        val flagRadius = if (isFlag) env.flagRound.floatValue.coerceIn(0f, 1f) * flagYScale * s * 0.5f else 0f
+        // a plain flag is a real flag: 3:2 with square corners, whatever the sticker sliders say.
+        // the sticker flag keeps the user's aspect (square..long) and rounding (sharp..semicircle)
+        val flagYScale = when {
+            !isFlag -> 1f
+            // 0.7 of a 0.92-tall design rect over 0.96 of width is 3:2, the ratio a real flag has
+            plain -> 0.7f
+            else -> env.flagStretch.floatValue.coerceIn(0.5f, 1f)
+        }
+        val flagRadius = if (isFlag && !plain) env.flagRound.floatValue.coerceIn(0f, 1f) * flagYScale * s * 0.5f else 0f
         fun p(x: Float, y: Float): Offset = Offset(x * s, (y - 0.5f) * s * flagYScale + 0.5f * s)
 
         /* the blob's ground shadow. A flag is a rectangle with nothing standing on the ground, and
@@ -358,25 +364,22 @@ fun StickerCharacter(
             }
 
             is FlagArt -> {
-                if (flagRadius > 0.02f) {
-                    // user-rounded flag: base shape + every band clipped inside it
-                    shapePath.rewind()
-                    shapePath.addRoundRect(
-                        androidx.compose.ui.geometry.RoundRect(
-                            left = 0.02f * s,
-                            top = (0.04f - 0.5f) * s * flagYScale + 0.5f * s,
-                            right = 0.98f * s,
-                            bottom = (0.96f - 0.5f) * s * flagYScale + 0.5f * s,
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(flagRadius, flagRadius),
-                        ),
-                    )
-                    drawPath(shapePath, art.base)
-                    clipPath(shapePath) {
-                        for (band in art.bands) {
-                            drawOps(band.ops, band.color)
-                        }
-                    }
-                } else {
+                /* one rectangle for both styles: the flag's own base first, then every band clipped
+                   inside it. A plain flag is that rectangle with square corners - a band-only draw
+                   (what a zero corner radius used to do) left every flag that leans on its base
+                   colour, like Japan's white field, with no field at all. */
+                shapePath.rewind()
+                shapePath.addRoundRect(
+                    androidx.compose.ui.geometry.RoundRect(
+                        left = 0.02f * s,
+                        top = (0.04f - 0.5f) * s * flagYScale + 0.5f * s,
+                        right = 0.98f * s,
+                        bottom = (0.96f - 0.5f) * s * flagYScale + 0.5f * s,
+                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(flagRadius, flagRadius),
+                    ),
+                )
+                drawPath(shapePath, art.base)
+                clipPath(shapePath) {
                     for (band in art.bands) {
                         drawOps(band.ops, band.color)
                     }

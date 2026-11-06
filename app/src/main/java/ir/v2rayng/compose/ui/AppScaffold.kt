@@ -114,14 +114,14 @@ fun AppRoot() {
             }
         }
     }
-    LaunchedEffect(settings.motionMode, settings.speed, settings.bgSpeed, settings.flagStretch, settings.flagRound, settings.plainFlags) {
+    LaunchedEffect(settings.motionMode, settings.speed, settings.bgSpeed, settings.flagStretch, settings.flagRound, settings.flagStyle) {
         env.enabled.value = settings.motionMode != 0
         env.touchOnly.value = settings.motionMode == 1
         env.speed.floatValue = settings.speed
         env.bgSpeed.floatValue = settings.bgSpeed
         env.flagStretch.floatValue = settings.flagStretch
         env.flagRound.floatValue = settings.flagRound
-        env.plainFlags.value = settings.plainFlags
+        env.flagStyle.intValue = settings.flagStyle
     }
     CompositionLocalProvider(LocalStickerEnv provides env) {
         V2rayNGTheme(dark = settings.dark, accent = settings.accent, custom = settings.customAccent) {

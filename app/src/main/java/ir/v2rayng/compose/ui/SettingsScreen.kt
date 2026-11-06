@@ -128,7 +128,11 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(S.STICKERS, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 ToggleRow(S.PLAIN_ALL, S.PLAIN_ALL_SUB, settings.plainMode) { vm.setPlainMode(it) }
-                ToggleRow(S.PLAIN_FLAGS, S.PLAIN_FLAGS_SUB, settings.plainFlags) { vm.setPlainFlags(it) }
+                Text(S.FLAG_STYLE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SelectChip(S.FLAG_PLAIN, settings.flagStyle == 0) { vm.setFlagStyle(0) }
+                    SelectChip(S.FLAG_STICKER, settings.flagStyle == 1) { vm.setFlagStyle(1) }
+                }
                 Text(S.SHAPE, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SelectChip(S.STYLE_BLOB, settings.stickerStyle == 0, { vm.setStickerStyle(0) })
@@ -197,11 +201,14 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                 ToggleRow(S.CONNECT_FLAG_DANCER, S.CONNECT_FLAG_DANCER_SUB, settings.connectFlagDancer) { vm.setConnectFlagDancer(it) }
                 ToggleRow(S.FOLLOW_FINGER, S.FOLLOW_SUB, settings.followFinger) { vm.setFollowFinger(it) }
 
-                Text(S.FLAG_STRETCH.format((settings.flagStretch * 100f).toInt()), style = MaterialTheme.typography.bodyMedium)
-                Slider(value = settings.flagStretch, onValueChange = { vm.setFlagStretch(it) }, valueRange = 0.5f..1f)
+                // aspect and rounding are the sticker flag's own; a plain flag is 3:2 and square
+                if (settings.flagStyle == 1) {
+                    Text(S.FLAG_STRETCH.format((settings.flagStretch * 100f).toInt()), style = MaterialTheme.typography.bodyMedium)
+                    Slider(value = settings.flagStretch, onValueChange = { vm.setFlagStretch(it) }, valueRange = 0.5f..1f)
 
-                Text(S.FLAG_ROUND.format((settings.flagRound * 100f).toInt()), style = MaterialTheme.typography.bodyMedium)
-                Slider(value = settings.flagRound, onValueChange = { vm.setFlagRound(it) }, valueRange = 0f..1f)
+                    Text(S.FLAG_ROUND.format((settings.flagRound * 100f).toInt()), style = MaterialTheme.typography.bodyMedium)
+                    Slider(value = settings.flagRound, onValueChange = { vm.setFlagRound(it) }, valueRange = 0f..1f)
+                }
             }
         }
 

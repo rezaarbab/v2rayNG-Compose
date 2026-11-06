@@ -1,6 +1,7 @@
 package ir.v2rayng.compose.stickers
 
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -17,8 +18,8 @@ class StickerEnv {
     // flag look, user-controlled: aspect (square..long) and corner rounding (sharp..semicircle)
     val flagStretch = mutableFloatStateOf(0.66f)
     val flagRound = mutableFloatStateOf(0.45f)
-    // a country flag is data, not decoration: flat flag art, no eyes, no movement
-    val plainFlags = mutableStateOf(true)
+    // a country flag is data, not decoration: 0 draws a real flag, 1 draws the sticker version
+    val flagStyle = mutableIntStateOf(0)
     /** The dance belongs to the finger when motion is set to "on touch": a sticker moves while it
      *  is being touched and holds still the moment it is not. */
     val touchOnly = mutableStateOf(true)

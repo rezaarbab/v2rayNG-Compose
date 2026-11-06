@@ -84,9 +84,10 @@ data class Settings(
      *  blob with its face removed, which still looked like a sticker. Turning this off is the way
      *  back to the blob packs. */
     val plainMode: Boolean = true,
-    /** Country flags never become a generic icon: the flag is what the row is about. This keeps the
-     *  flag itself flat (no eyes, no movement) when it is drawn. */
-    val plainFlags: Boolean = true,
+    /** Country flags are never replaced by a generic icon: the flag is what the row is about. What
+     *  can change is how the flag is drawn - 0 is a real flag (square corners, real proportions,
+     *  no gloss, no eyes), 1 is the sticker version with the face and the rounding. */
+    val flagStyle: Int = 0,
 )
 
 fun parseList(s: String, def: List<Int>): List<Int> {
@@ -283,7 +284,7 @@ class SettingsStore(context: Context) {
             bubbleOn = b("bubbleOn", false),
             bubbleColor = l("bubbleColor", -1L),
             plainMode = b("plainMode", true),
-            plainFlags = b("plainFlags", true),
+            flagStyle = i("flagStyle", 0),
         )
     }
 
@@ -496,7 +497,7 @@ class SettingsStore(context: Context) {
         p("bubbleOn", s.bubbleOn)
         p("bubbleColor", s.bubbleColor)
         p("plainMode", s.plainMode)
-        p("plainFlags", s.plainFlags)
+        p("flagStyle", s.flagStyle)
         val raw = j.toString()
         if (raw == blobJson) return
         blobJson = raw
