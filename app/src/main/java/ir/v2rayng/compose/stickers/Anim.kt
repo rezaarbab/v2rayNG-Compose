@@ -22,6 +22,8 @@ class StickerEnv {
     val flagStyle = mutableIntStateOf(0)
     // which art wears a face: bit 0 blobs, bit 1 toys, bit 2 flags
     val eyes = mutableIntStateOf(3)
+    // which art's eyes follow the hand: same bits
+    val gaze = mutableIntStateOf(0)
     /** The dance belongs to the finger when motion is set to "on touch": a sticker moves while it
      *  is being touched and holds still the moment it is not. */
     val touchOnly = mutableStateOf(true)

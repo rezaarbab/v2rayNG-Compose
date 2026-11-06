@@ -34,7 +34,8 @@ data class Settings(
     val mainColor: Long = -1L,
     val mainSize: Int = 0,
     val mainIndex: Int = -1,
-    val followFinger: Boolean = false,
+    /** Which art's eyes follow the hand: bit 0 blobs, bit 1 toys, bit 2 flags. 0 = none. */
+    val gaze: Int = 0,
     /** 0 = nothing moves, 1 = a sticker moves while it is touched, 2 = it dances all the time.
      *  One number instead of two booleans, because "how much motion" is one question. */
     val motionMode: Int = 0,
@@ -242,7 +243,7 @@ class SettingsStore(context: Context) {
             mainColor = l("mainColor", -1L),
             mainSize = i("mainSize", 0),
             mainIndex = i("mainIndex", -1),
-            followFinger = b("followFinger", false),
+            gaze = i("gaze", 0),
             motionMode = i("motionMode", 0),
             stateMotion = b("stateMotion", false),
             showNotification = b("showNotification", true),
@@ -456,7 +457,7 @@ class SettingsStore(context: Context) {
         p("mainColor", s.mainColor)
         p("mainSize", s.mainSize)
         p("mainIndex", s.mainIndex)
-        p("followFinger", s.followFinger)
+        p("gaze", s.gaze)
         p("motionMode", s.motionMode)
         p("stateMotion", s.stateMotion)
         p("showNotification", s.showNotification)

@@ -207,7 +207,14 @@ fun SettingsScreen(state: AppState, settings: Settings, vm: AppViewModel) {
                     }
                 }
                 ToggleRow(S.CONNECT_FLAG_DANCER, S.CONNECT_FLAG_DANCER_SUB, settings.connectFlagDancer) { vm.setConnectFlagDancer(it) }
-                ToggleRow(S.FOLLOW_FINGER, S.FOLLOW_SUB, settings.followFinger) { vm.setFollowFinger(it) }
+                /* the same three kinds, a second question: touch a sticker and does its face turn
+                   to your finger? The blob, the toy and the flag each answer for themselves. */
+                Text(S.FOLLOW_FINGER, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SelectChip(S.EYES_BLOBS, (settings.gaze and 1) != 0) { vm.setGaze(1, (settings.gaze and 1) == 0) }
+                    SelectChip(S.EYES_TOYS, (settings.gaze and 2) != 0) { vm.setGaze(2, (settings.gaze and 2) == 0) }
+                    SelectChip(S.EYES_FLAGS, (settings.gaze and 4) != 0) { vm.setGaze(4, (settings.gaze and 4) == 0) }
+                }
 
                 // aspect and rounding are the sticker flag's own; a plain flag is 3:2 and square
                 if (settings.flagStyle == 1) {

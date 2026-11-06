@@ -110,23 +110,8 @@ fun StickerCharacter(
     var rootPos by remember { mutableStateOf(Offset.Zero) }
     var side by remember { mutableStateOf(IntSize.Zero) }
     val pressed = remember { mutableStateOf(false) }
+    val touchAt = remember { mutableStateOf<Offset?>(null) }
     val frozenPhase = remember(sticker) { ((sticker.id.hashCode() and 0x3FF) % 997) / 997f }
-
-    /* Read at Initial pass and nothing is consumed: the tap, the hold and the list scroll all see
-     * exactly the events they saw before this existed. */
-    val touchMod = if (env.touchOnly.value) {
-        Modifier.pointerInput(Unit) {
-            awaitPointerEventScope {
-                while (true) {
-                    val ev = awaitPointerEvent(PointerEventPass.Initial)
-                    val down = ev.changes.any { it.pressed }
-                    if (down != pressed.value) pressed.value = down
-                }
-            }
-        }
-    } else {
-        Modifier
-    }
 
     val isFlag = sticker.art is FlagArt
     /* only flags get the flat treatment here. A blob or a toy that is drawn at all is drawn as a
@@ -141,7 +126,30 @@ fun StickerCharacter(
         is FlagArt -> (eyeBits and 4) != 0
         is ImageArt -> artNow.eyes && (eyeBits and 1) != 0
     }
+    /* and following the hand is its own choice per kind: a flag whose eyes watch your finger is a
+       toy, and not every user wants a toy */
+    val gazeBits = env.gaze.intValue
+    val gazeOn = when (artNow) {
+        is BlobArt -> (gazeBits and 1) != 0
+        is ToyArt -> (gazeBits and 2) != 0
+        is FlagArt -> (gazeBits and 4) != 0
+        is ImageArt -> (gazeBits and 1) != 0
+    }
     val motionActive = !env.touchOnly.value || pressed.value
+
+    /* Read at Initial pass and nothing is consumed: the tap, the hold and the list scroll all see
+     * exactly the events they saw before this existed. */
+    val touchMod = Modifier.pointerInput(gazeOn) {
+        awaitPointerEventScope {
+            while (true) {
+                val ev = awaitPointerEvent(PointerEventPass.Initial)
+                val p = ev.changes.firstOrNull { it.pressed }
+                val down = p != null
+                if (down != pressed.value) pressed.value = down
+                if (gazeOn) touchAt.value = p?.position
+            }
+        }
+    }
 
     val tables: BlobTables? = remember(sticker) {
         when (val art = sticker.art) {
@@ -254,9 +262,20 @@ fun StickerCharacter(
 
         var gx = 0f
         var gy = 0f
-        if (gaze != null) {
-            val dirX = gaze.x - (rootPos.x + side.width / 2f)
-            val dirY = gaze.y - (rootPos.y + side.height / 2f)
+        if (gazeOn) {
+            /* the finger on the sticker itself is the one the user is touching, so it wins over
+               the page-wide point; that is also what lets a flag in the list follow the hand
+               without every screen having to track pointers */
+            val t = touchAt.value
+            var dirX = 0f
+            var dirY = 0f
+            if (t != null) {
+                dirX = t.x - size.width / 2f
+                dirY = t.y - size.height / 2f
+            } else if (gaze != null) {
+                dirX = gaze.x - (rootPos.x + side.width / 2f)
+                dirY = gaze.y - (rootPos.y + side.height / 2f)
+            }
             val len = sqrt(dirX * dirX + dirY * dirY)
             if (len > 1f) {
                 val cap = s * 0.055f

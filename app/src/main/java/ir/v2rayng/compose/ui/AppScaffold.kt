@@ -114,7 +114,7 @@ fun AppRoot() {
             }
         }
     }
-    LaunchedEffect(settings.motionMode, settings.speed, settings.bgSpeed, settings.flagStretch, settings.flagRound, settings.flagStyle, settings.eyes) {
+    LaunchedEffect(settings.motionMode, settings.speed, settings.bgSpeed, settings.flagStretch, settings.flagRound, settings.flagStyle, settings.eyes, settings.gaze) {
         env.enabled.value = settings.motionMode != 0
         env.touchOnly.value = settings.motionMode == 1
         env.speed.floatValue = settings.speed
@@ -123,6 +123,7 @@ fun AppRoot() {
         env.flagRound.floatValue = settings.flagRound
         env.flagStyle.intValue = settings.flagStyle
         env.eyes.intValue = settings.eyes
+        env.gaze.intValue = settings.gaze
     }
     CompositionLocalProvider(LocalStickerEnv provides env) {
         V2rayNGTheme(dark = settings.dark, accent = settings.accent, custom = settings.customAccent) {
@@ -204,7 +205,9 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
             }
         },
     ) { pad ->
-        val gaze = if (settings.followFinger) {
+        // page-wide pointer tracking only feeds the art kinds the user asked to follow the hand;
+        // a sticker that follows its own touch does that inside StickerCharacter
+        val gaze = if (settings.gaze != 0) {
             gazeLocal.value?.let { it + outerRoot.value }
         } else null
 
@@ -213,8 +216,8 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                 .fillMaxSize()
                 .padding(pad)
                 .onGloballyPositioned { outerRoot.value = it.positionInRoot() }
-                .pointerInput(settings.followFinger) {
-                    if (!settings.followFinger) return@pointerInput
+                .pointerInput(settings.gaze) {
+                    if (settings.gaze == 0) return@pointerInput
                     awaitPointerEventScope {
                         while (true) {
                             val e = awaitPointerEvent()
@@ -224,8 +227,8 @@ fun AppScaffold(vm: AppViewModel, settings: Settings) {
                     }
                 }
         ) {
-            // a sticker wallpaper is still a sticker: plain mode leaves the background empty
-            if (settings.wallpaperIndex >= 0 && !settings.plainMode) {
+            // the background is chosen on purpose, so plain mode does not remove it
+            if (settings.wallpaperIndex >= 0) {
                 val wall = tinted(
                     V2Stickers.byIndex(settings.wallpaperStyle, settings.wallpaperIndex),
                     settings.wallpaperColor,

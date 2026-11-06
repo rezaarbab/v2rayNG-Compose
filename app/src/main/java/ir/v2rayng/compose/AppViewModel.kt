@@ -302,7 +302,16 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
             ir.v2rayng.compose.core.XrayBridge.status.collect { st ->
                 val real = _state.value.servers.firstOrNull { it.id == _state.value.selectedId }?.let { dialRowOf(it) >= 0 } == true ||
                     _state.value.selectedId.startsWith("rv-")
-                if (real || st.state != ir.v2rayng.compose.core.RealState.IDLE) {
+                /* A tunnel that came down while the library no longer has a row for the selected
+                 * server used to be dropped whole by the guard below - it only ever looked at
+                 * `real` - and the screen stayed green with a running clock for a tunnel that no
+                 * longer exists. Holding no tunnel is a fact the service can state on its own.
+                 * Deliberately CONNECTED only: cancelling a dial that is still handshaking would
+                 * turn a slow connect into a failed one. */
+                val gone = st.state == ir.v2rayng.compose.core.RealState.IDLE &&
+                    !ir.v2rayng.compose.core.XrayVpnService.tunnelUp &&
+                    _state.value.vpnState == VpnState.CONNECTED
+                if (real || st.state != ir.v2rayng.compose.core.RealState.IDLE || gone) {
                     if (st.state != lastRealState) {
                         val prev = lastRealState
                         lastRealState = st.state
@@ -351,6 +360,20 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                             log("ERROR", "Failed to connect to server")
                                         } else if (!ok2) {
                                             log("INFO", S.LOG_DISCONNECTED)
+                                            /* probe says the tunnel carries nothing and the
+                                               service holds none: whatever the bridge last said,
+                                               it cannot stay "connected" - that is the green
+                                               button and the clock running for a tunnel that is
+                                               not there */
+                                            if (!ir.v2rayng.compose.core.XrayVpnService.tunnelUp &&
+                                                ir.v2rayng.compose.core.XrayBridge.status.value.state ==
+                                                ir.v2rayng.compose.core.RealState.CONNECTED
+                                            ) {
+                                                ir.v2rayng.compose.core.XrayBridge.setState(
+                                                    ir.v2rayng.compose.core.RealState.IDLE,
+                                                    "no tunnel",
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -379,7 +402,9 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                                 // idle app red
                                 watchdogJob?.cancel()
                                 clearConnSince()
-                                if (lastRealState == ir.v2rayng.compose.core.RealState.CONNECTED) {
+                                // `lastRealState` was just overwritten with IDLE, so this has to
+                                // read the state we came from or the event is never sent
+                                if (prev == ir.v2rayng.compose.core.RealState.CONNECTED) {
                                     Remote.queueAck("event", name = "disconnect")
                                 }
                                 // the core counters go back to zero with the tunnel: store the
@@ -431,7 +456,7 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
                         }
                         s.copy(
                             vpnState = when (st.state) {
-                                ir.v2rayng.compose.core.RealState.IDLE -> if (real) VpnState.IDLE else s.vpnState
+                                ir.v2rayng.compose.core.RealState.IDLE -> if (real || gone) VpnState.IDLE else s.vpnState
                                 ir.v2rayng.compose.core.RealState.CONNECTING -> VpnState.CONNECTING
                                 ir.v2rayng.compose.core.RealState.CONNECTED -> VpnState.CONNECTED
                                 ir.v2rayng.compose.core.RealState.BROKEN -> VpnState.BROKEN
@@ -590,7 +615,10 @@ class AppViewModel(private val store: SettingsStore) : ViewModel() {
     fun setMainColor(v: Long) = setSettings { it.copy(mainColor = v) }
     fun setMainSize(v: Int) = setSettings { it.copy(mainSize = v) }
     fun setMainIndex(v: Int, pack: Int = -1) = setSettings { it.copy(mainIndex = v, mainPack = pack) }
-    fun setFollowFinger(v: Boolean) = setSettings { it.copy(followFinger = v) }
+    /** kind: 1 = blobs, 2 = toys, 4 = flags. Which art's eyes follow the hand. */
+    fun setGaze(kind: Int, on: Boolean) = setSettings {
+        it.copy(gaze = if (on) it.gaze or kind else it.gaze and kind.inv())
+    }
     /** 0 = off, 1 = only while touched, 2 = always. The one switch that starts the frame ticker. */
     fun setMotionMode(v: Int) = setSettings { it.copy(motionMode = v.coerceIn(0, 2)) }
     fun setStateMotion(v: Boolean) = setSettings { it.copy(stateMotion = v) }

@@ -76,7 +76,6 @@ object S {
     const val NAV_STICKERS = "Icons are stickers"
     const val ICON_STICKERS_SUB = "Off = sleek vector icons (menu, traffic, routing)"
     const val FOLLOW_FINGER = "Eyes follow your finger"
-    const val FOLLOW_SUB = "Touch/drag anywhere"
     const val ANTI_FILTER = "Anti-filter mode"
     const val ANTI_FILTER_SUB = "Tune behavior for filtered networks"
     const val ANTI_FILTER_APPS = "Choose apps (%d selected)"
