@@ -170,6 +170,16 @@ private fun starGrid(x0: Float, y0: Float, dx: Float, dy: Float, cols: Int, rows
         ToyPoly(polyPl(x0 + dx * (i % cols), y0 + dy * (i / cols), r, 5, -90f, 0.42f))
     })
 
+/** Every other square of a checkerboard, for a shield that is literally a checkerboard. */
+private fun checker(x0: Float, y0: Float, cell: Float, cols: Int, rows: Int, color: Color, parity: Int) = FlagBand(
+    color,
+    (0 until cols * rows).filter { ((it % cols) + (it / cols)) % 2 == parity }.map { i ->
+        val x = x0 + cell * (i % cols)
+        val y = y0 + cell * (i / cols)
+        ToyPoly(listOf(Offset(x, y), Offset(x + cell, y), Offset(x + cell, y + cell), Offset(x, y + cell)))
+    },
+)
+
 /** Every other stripe of an n-stripe field, on the face itself: the stripes used to be hand-placed
  *  on the 0.10 grid, which gave flags the wrong number of them and a band of field at both edges. */
 private fun stripes(n: Int, color: Color, from: Int = 1): FlagBand = FlagBand(
@@ -227,20 +237,30 @@ private fun build(): List<Sticker> {
     f("ai", "Anguilla", BLUE, miniUK())
     f("al", "Albania", RED, listOf(cb(BLACK, ToyCircle(0.5f, 0.5f, 0.13f))))
     f("am", "Armenia", RED, TRIH(RED, BLUE, GOLD))
-    f("ao", "Angola", RED, listOf(hb(0.5f, 0.99f, BLACK), cb(GOLD, ToyCircle(0.42f, 0.42f, 0.12f))))
+    f("ao", "Angola", RED, listOf(hb(0.5f, 0.99f, BLACK), star(0.42f, 0.42f, 0.10f, 5, GOLD)))
     f("ar", "Argentina", SKY, listOf(hb(0.366f, 0.634f, WHITE), cb(GOLD, ToyCircle(0.5f, 0.5f, 0.09f))))
     f("at", "Austria", WHITE, listOf(hb(0.366f, 0.634f, RED)))
     f("au", "Australia", NAVY, miniUK() + listOf(cb(WHITE, ToyCircle(0.64f, 0.26f, 0.05f), ToyCircle(0.78f, 0.40f, 0.05f), ToyCircle(0.64f, 0.60f, 0.05f), ToyCircle(0.82f, 0.78f, 0.05f))))
     f("aw", "Aruba", SKY, listOf(hb(0.62f, 0.68f, WHITE), hb(0.68f, 0.74f, RED), cb(WHITE, ToyCircle(0.16f, 0.30f, 0.06f), ToyCircle(0.24f, 0.38f, 0.06f))))
     f("ax", "Aland Islands", BLUE, NV(BLUE, GOLD) + listOf(vb(0.31f, 0.39f, RED), hb(0.43f, 0.57f, RED)))
-    f("az", "Azerbaijan", SKY, listOf(hb(0.366f, 0.634f, RED), hb(0.634f, 0.99f, GREEN), cb(WHITE, ToyCircle(0.5f, 0.5f, 0.10f))))
+    f("az", "Azerbaijan", SKY, listOf(
+        hb(0.366f, 0.634f, RED), hb(0.634f, 0.99f, GREEN),
+        cb(WHITE, ToyCircle(0.455f, 0.50f, 0.10f)), cb(RED, ToyCircle(0.500f, 0.50f, 0.09f)),
+        star(0.585f, 0.50f, 0.06f, 8, WHITE),
+    ))
     f("ba", "Bosnia and Herzegovina", NAVY, listOf(vb(0.01f, 0.55f, GOLD), hb(0.66f, 0.99f, NAVY)))
     // three vertical bands (blue-gold-blue) with the black broken trident: head and shaft, the two
     // outer prongs left out. It used to be a gold disc on a blue field, which is not this flag
-    f("bb", "Barbados", BLUE, TRIV(BLUE, GOLD, BLUE) + listOf(cb(BLACK, ToyCircle(0.5f, 0.40f, 0.055f)), rc(0.485f, 0.44f, 0.515f, 0.66f, BLACK)))
+    // the broken trident: three prongs over a shaft, instead of a dot above a line
+    f("bb", "Barbados", BLUE, TRIV(BLUE, GOLD, BLUE) + listOf(
+        rc(0.475f, 0.42f, 0.525f, 0.68f, BLACK),
+        rc(0.395f, 0.30f, 0.435f, 0.47f, BLACK),
+        rc(0.565f, 0.30f, 0.605f, 0.47f, BLACK),
+        rc(0.478f, 0.26f, 0.522f, 0.44f, BLACK),
+    ))
     f("bd", "Bangladesh", GREEN, DISK(RED, 0.24f))
     f("be", "Belgium", BLACK, TRIV(BLACK, GOLD, RED))
-    f("bf", "Burkina Faso", RED, listOf(hb(0.5f, 0.99f, GREEN), cb(GOLD, ToyCircle(0.5f, 0.42f, 0.11f))))
+    f("bf", "Burkina Faso", RED, listOf(hb(0.5f, 0.99f, GREEN), star(0.5f, 0.44f, 0.10f, 5, GOLD)))
     f("bg", "Bulgaria", WHITE, TRIH(WHITE, GREEN, RED))
     f("bh", "Bahrain", WHITE, listOf(vb(0.34f, 0.99f, RED)))
     f("bi", "Burundi", GREEN, listOf(hb(0.366f, 0.634f, WHITE), cb(RED, ToyCircle(0.5f, 0.5f, 0.14f))))
@@ -257,8 +277,19 @@ private fun build(): List<Sticker> {
     f("by", "Belarus", RED, listOf(hb(0.66f, 0.99f, GREEN), vb(0.01f, 0.22f, WHITE)))
     // blue field with red borders top and bottom and the white coat of arms between them
     f("bz", "Belize", BLUE, listOf(hb(0.01f, 0.11f, RED), hb(0.89f, 0.99f, RED), cb(WHITE, ToyCircle(0.5f, 0.5f, 0.21f)), cb(GREEN, ToyCircle(0.5f, 0.5f, 0.13f))))
-    f("ca", "Canada", WHITE, listOf(vb(0.01f, 0.30f, RED), vb(0.70f, 0.99f, RED), cb(RED, ToyCircle(0.5f, 0.5f, 0.10f))))
-    f("cd", "DR Congo", SKY, listOf(vb(0.62f, 0.72f, RED), cb(GOLD, ToyCircle(0.24f, 0.28f, 0.09f))))
+    // the maple leaf: the shape the country is recognised by, instead of a red disc
+    f("ca", "Canada", WHITE, listOf(
+        vb(0.01f, 0.30f, RED), vb(0.70f, 0.99f, RED),
+        FlagBand(RED, listOf(ToyPoly(listOf(
+            Offset(0.500f, 0.255f), Offset(0.535f, 0.400f), Offset(0.620f, 0.360f),
+            Offset(0.595f, 0.450f), Offset(0.700f, 0.440f), Offset(0.615f, 0.500f),
+            Offset(0.665f, 0.580f), Offset(0.545f, 0.560f), Offset(0.560f, 0.685f),
+            Offset(0.500f, 0.615f), Offset(0.440f, 0.685f), Offset(0.455f, 0.560f),
+            Offset(0.335f, 0.580f), Offset(0.385f, 0.500f), Offset(0.300f, 0.440f),
+            Offset(0.405f, 0.450f), Offset(0.380f, 0.360f), Offset(0.465f, 0.400f),
+        )))),
+    ))
+    f("cd", "DR Congo", SKY, listOf(vb(0.62f, 0.72f, RED), star(0.24f, 0.28f, 0.08f, 5, GOLD)))
     f("cf", "Central African Republic", BLUE, listOf(
         hb(0.04f, 0.27f, BLUE), hb(0.27f, 0.50f, WHITE), hb(0.50f, 0.73f, GREEN), hb(0.73f, 0.96f, GOLD),
         vb(0.01f, 0.25f, RED), star(0.13f, 0.19f, 0.05f, 5, GOLD),
@@ -268,7 +299,7 @@ private fun build(): List<Sticker> {
     f("ci", "Ivory Coast", WHITE, TRIV(GOLD, WHITE, ORANGE))
     f("ck", "Cook Islands", BLUE, miniUK() + listOf(cb(WHITE, ToyCircle(0.7f, 0.5f, 0.07f))))
     f("cl", "Chile", WHITE, listOf(hb(0.5f, 0.99f, RED), rc(0.02f, 0.04f, 0.36f, 0.50f, BLUE), cb(WHITE, ToyCircle(0.20f, 0.30f, 0.07f))))
-    f("cm", "Cameroon", GREEN, TRIV(GREEN, RED, GOLD) + listOf(cb(GOLD, ToyCircle(0.5f, 0.5f, 0.10f))))
+    f("cm", "Cameroon", GREEN, TRIV(GREEN, RED, GOLD) + listOf(star(0.5f, 0.5f, 0.10f, 5, GOLD)))
     // five stars, not five circles: one large and four small ones opening from it
     f("cn", "China", RED, listOf(
         star(0.30f, 0.32f, 0.14f, 5, GOLD),
@@ -285,13 +316,13 @@ private fun build(): List<Sticker> {
         FlagBand(RED, listOf(ToyPoly(listOf(Offset(0.02f, 0.04f), Offset(0.46f, 0.50f), Offset(0.02f, 0.96f))))),
         star(0.16f, 0.50f, 0.07f, 5, WHITE),
     ))
-    f("cv", "Cape Verde", NAVY, listOf(hb(0.44f, 0.56f, WHITE), hb(0.56f, 0.68f, RED), cb(GOLD, ToyCircle(0.5f, 0.62f, 0.05f))))
+    f("cv", "Cape Verde", NAVY, listOf(hb(0.44f, 0.56f, WHITE), hb(0.56f, 0.68f, RED), starGrid(0.30f, 0.56f, 0.05f, 0.05f, 5, 2, 0.022f, GOLD)))
     f("cw", "Curacao", BLUE, listOf(hb(0.58f, 0.70f, GOLD), vb(0.01f, 0.22f, WHITE)))
     f("cx", "Christmas Island", BLUE, listOf(cb(GREEN, ToyCircle(0.72f, 0.62f, 0.13f)), cb(GOLD, ToyCircle(0.28f, 0.32f, 0.10f))))
     f("cy", "Cyprus", WHITE, listOf(cb(Color(0xFFB8763E), ToyCircle(0.5f, 0.52f, 0.10f))))
     f("cz", "Czechia", WHITE, listOf(hb(0.5f, 0.99f, RED), FlagBand(BLUE, listOf(ToyPoly(listOf(Offset(0.05f, 0.10f), Offset(0.34f, 0.50f), Offset(0.05f, 0.90f)))))))
     f("de", "Germany", BLACK, TRIH(BLACK, RED, GOLD))
-    f("dj", "Djibouti", SKY, listOf(hb(0.5f, 0.99f, GREEN), vb(0.01f, 0.40f, WHITE), cb(RED, ToyCircle(0.20f, 0.32f, 0.08f))))
+    f("dj", "Djibouti", SKY, listOf(hb(0.5f, 0.99f, GREEN), vb(0.01f, 0.40f, WHITE), star(0.20f, 0.32f, 0.07f, 5, RED)))
     f("dk", "Denmark", RED, NV(RED, WHITE))
     f("dm", "Dominica", GREEN, listOf(hb(0.366f, 0.634f, GOLD), hb(0.634f, 0.99f, BLACK), cb(RED, ToyCircle(0.5f, 0.5f, 0.14f))))
     // the cross is drawn first and the four quarters reach it, so every edge belongs to a quarter;
@@ -314,7 +345,7 @@ private fun build(): List<Sticker> {
     f("et", "Ethiopia", GREEN, TRIH(GREEN, GOLD, RED) + listOf(cb(BLUE, ToyCircle(0.5f, 0.5f, 0.13f)), star(0.5f, 0.5f, 0.10f, 5, GOLD)))
     f("fi", "Finland", WHITE, NV(WHITE, BLUE))
     f("fj", "Fiji", SKY, miniUK())
-    f("fm", "Micronesia", SKY, listOf(cb(WHITE, ToyCircle(0.5f, 0.5f, 0.10f))))
+    f("fm", "Micronesia", SKY, listOf(starGrid(0.34f, 0.34f, 0.16f, 0.16f, 2, 2, 0.055f, WHITE)))
     f("fo", "Faroe Islands", WHITE, NV(WHITE, RED) + listOf(vb(0.32f, 0.38f, NAVY)))
     f("fr", "France", WHITE, V3(BLUE, WHITE, RED))
     f("ga", "Gabon", GREEN, TRIH(GREEN, GOLD, BLUE))
@@ -327,7 +358,7 @@ private fun build(): List<Sticker> {
     f("gd", "Grenada", RED, listOf(hb(0.24f, 0.44f, GOLD), hb(0.44f, 0.62f, GREEN), hb(0.62f, 0.82f, GOLD), cb(RED, ToyCircle(0.5f, 0.53f, 0.08f))))
     f("ge", "Georgia", WHITE, CROSS(RED) + listOf(rc(0.30f, 0.16f, 0.40f, 0.26f, RED), rc(0.30f, 0.74f, 0.40f, 0.84f, RED), rc(0.60f, 0.16f, 0.70f, 0.26f, RED), rc(0.60f, 0.74f, 0.70f, 0.84f, RED)))
     f("gf", "French Guiana", BLUE, TRIH(BLUE, WHITE, RED) + listOf(cb(RED, ToyCircle(0.5f, 0.5f, 0.11f))))
-    f("gh", "Ghana", RED, TRIH(RED, GOLD, GREEN) + listOf(cb(BLACK, ToyCircle(0.5f, 0.5f, 0.10f))))
+    f("gh", "Ghana", RED, TRIH(RED, GOLD, GREEN) + listOf(star(0.5f, 0.5f, 0.11f, 5, BLACK)))
     f("gi", "Gibraltar", WHITE, listOf(hb(0.62f, 0.90f, RED)))
     f("gl", "Greenland", WHITE, listOf(hb(0.5f, 0.99f, RED), cb(WHITE, ToyCircle(0.38f, 0.5f, 0.20f)), cb(RED, ToyCircle(0.52f, 0.5f, 0.20f))))
     f("gm", "Gambia", RED, TRIH(RED, BLUE, GREEN) + listOf(hb(0.42f, 0.46f, WHITE), hb(0.54f, 0.58f, WHITE)))
@@ -346,7 +377,11 @@ private fun build(): List<Sticker> {
     f("hk", "Hong Kong", RED, listOf(star(0.5f, 0.5f, 0.16f, 5, WHITE, w = 0.62f)))
     f("hm", "Heard Island", NAVY, miniUK())
     f("hn", "Honduras", SKY, TRIH(SKY, WHITE, SKY) + listOf(cb(SKY, ToyCircle(0.5f, 0.5f, 0.08f))))
-    f("hr", "Croatia", RED, TRIH(RED, WHITE, BLUE) + listOf(cb(RED, ToyCircle(0.5f, 0.44f, 0.10f))))
+    // the shield is literally a checkerboard: white field with red squares, 5x5
+    f("hr", "Croatia", RED, TRIH(RED, WHITE, BLUE) + listOf(
+        rc(0.42f, 0.30f, 0.58f, 0.46f, WHITE),
+        checker(0.42f, 0.30f, 0.032f, 5, 5, RED, 0),
+    ))
     f("ht", "Haiti", NAVY, listOf(rc(0.02f, 0.04f, 0.98f, 0.50f, NAVY), rc(0.02f, 0.50f, 0.98f, 0.96f, RED), cb(WHITE, ToyCircle(0.5f, 0.5f, 0.11f))))
     f("hu", "Hungary", RED, TRIH(RED, WHITE, GREEN))
     f("id", "Indonesia", RED, H2(RED) + listOf(hb(0.5f, 0.99f, WHITE)))
@@ -372,8 +407,14 @@ private fun build(): List<Sticker> {
     f("is", "Iceland", BLUE, NV(BLUE, WHITE) + listOf(vb(0.31f, 0.39f, RED), hb(0.43f, 0.57f, RED)))
     f("it", "Italy", WHITE, V3(GREEN, WHITE, RED))
     f("je", "Jersey", WHITE, miniUK())
-    f("jm", "Jamaica", GREEN, listOf(cb(GOLD, ToyCircle(0.5f, 0.5f, 0.16f)), cb(BLACK, ToyCircle(0.5f, 0.5f, 0.10f))))
-    f("jo", "Jordan", BLACK, TRIH(BLACK, WHITE, GREEN) + listOf(vb(0.01f, 0.38f, RED), cb(WHITE, ToyCircle(0.18f, 0.5f, 0.06f))))
+    // the gold saltire with black and green quarters: four triangles leave the X in the base
+    f("jm", "Jamaica", GOLD, listOf(
+        FlagBand(BLACK, listOf(ToyPoly(listOf(Offset(0.02f, 0.04f), Offset(0.98f, 0.04f), Offset(0.5f, 0.5f))),
+            ToyPoly(listOf(Offset(0.02f, 0.96f), Offset(0.98f, 0.96f), Offset(0.5f, 0.5f))))),
+        FlagBand(GREEN, listOf(ToyPoly(listOf(Offset(0.02f, 0.04f), Offset(0.02f, 0.96f), Offset(0.5f, 0.5f))),
+            ToyPoly(listOf(Offset(0.98f, 0.04f), Offset(0.98f, 0.96f), Offset(0.5f, 0.5f))))),
+    ))
+    f("jo", "Jordan", BLACK, TRIH(BLACK, WHITE, GREEN) + listOf(vb(0.01f, 0.38f, RED), star(0.18f, 0.5f, 0.06f, 7, WHITE)))
     f("jp", "Japan", WHITE, DISK(Color(0xFFD9344A), 0.26f))
     f("ke", "Kenya", BLACK, TRIH(BLACK, RED, GREEN) + listOf(hb(0.30f, 0.366f, WHITE), hb(0.634f, 0.70f, WHITE), cb(RED, ToyCircle(0.5f, 0.5f, 0.10f))))
     f("kg", "Kyrgyzstan", RED, listOf(cb(GOLD, ToyCircle(0.5f, 0.5f, 0.14f))))
@@ -385,8 +426,8 @@ private fun build(): List<Sticker> {
         FlagBand(GREEN, listOf(ToyPoly(listOf(Offset(0.02f, 0.04f), Offset(0.32f, 0.50f), Offset(0.02f, 0.96f))))),
         cb(WHITE, ToyCircle(0.15f, 0.50f, 0.055f)),
     ))
-    f("kn", "St. Kitts and Nevis", GREEN, listOf(hb(0.366f, 0.634f, BLACK), hb(0.634f, 0.99f, RED), cb(WHITE, ToyCircle(0.32f, 0.36f, 0.05f))))
-    f("kp", "North Korea", BLUE, listOf(hb(0.16f, 0.24f, WHITE), hb(0.24f, 0.76f, RED), hb(0.76f, 0.84f, WHITE), cb(WHITE, ToyCircle(0.28f, 0.5f, 0.13f))))
+    f("kn", "St. Kitts and Nevis", GREEN, listOf(hb(0.366f, 0.634f, BLACK), hb(0.634f, 0.99f, RED), star(0.32f, 0.36f, 0.05f, 5, WHITE), star(0.42f, 0.50f, 0.04f, 5, WHITE)))
+    f("kp", "North Korea", BLUE, listOf(hb(0.16f, 0.24f, WHITE), hb(0.24f, 0.76f, RED), hb(0.76f, 0.84f, WHITE), cb(WHITE, ToyCircle(0.28f, 0.5f, 0.13f)), star(0.28f, 0.5f, 0.10f, 5, RED)))
     /* the taegeuk is two half discs plus two half-size ones, which is the S curve; the trigrams are
        three short bars each, upright because this renderer has no rotated rectangles */
     f("kr", "South Korea", WHITE, listOf(
@@ -412,7 +453,8 @@ private fun build(): List<Sticker> {
     f("lt", "Lithuania", GOLD, TRIH(GOLD, GREEN, RED))
     f("lu", "Luxembourg", RED, TRIH(RED, WHITE, SKY))
     f("lv", "Latvia", Color(0xFF9E3039), listOf(hb(0.40f, 0.60f, WHITE)))
-    f("ly", "Libya", RED, TRIH(RED, BLACK, GREEN) + listOf(cb(WHITE, ToyCircle(0.5f, 0.5f, 0.09f))))
+    // Libya's flag carries no emblem: the white disc was invented
+    f("ly", "Libya", RED, TRIH(RED, BLACK, GREEN))
     f("ma", "Morocco", RED, listOf(star(0.5f, 0.5f, 0.17f, 5, GREEN)))
     f("mc", "Monaco", RED, H2(RED) + listOf(hb(0.5f, 0.99f, WHITE)))
     f("md", "Moldova", NAVY, TRIV(BLUE, GOLD, RED) + listOf(cb(BLACK, ToyCircle(0.5f, 0.5f, 0.09f))))
@@ -422,16 +464,24 @@ private fun build(): List<Sticker> {
     f("mh", "Marshall Islands", NAVY, listOf(hb(0.36f, 0.44f, WHITE), hb(0.44f, 0.52f, SKY), cb(WHITE, ToyCircle(0.24f, 0.30f, 0.10f))))
     f("mk", "North Macedonia", RED, listOf(cb(GOLD, ToyCircle(0.5f, 0.5f, 0.13f))))
     f("ml", "Mali", GREEN, TRIV(GREEN, GOLD, RED))
-    f("mm", "Myanmar", GOLD, TRIH(GOLD, GREEN, RED) + listOf(cb(WHITE, ToyCircle(0.5f, 0.5f, 0.12f))))
+    f("mm", "Myanmar", GOLD, TRIH(GOLD, GREEN, RED) + listOf(star(0.5f, 0.5f, 0.13f, 5, WHITE)))
     f("mn", "Mongolia", RED, TRIV(RED, BLUE, RED) + listOf(cb(GOLD, ToyCircle(0.17f, 0.5f, 0.09f))))
     f("mo", "Macau", GREEN, listOf(cb(WHITE, ToyCircle(0.5f, 0.5f, 0.13f))))
     f("mp", "Northern Mariana Islands", NAVY, listOf(cb(WHITE, ToyCircle(0.5f, 0.5f, 0.12f)), cb(SKY, ToyCircle(0.5f, 0.5f, 0.07f))))
     f("mq", "Martinique", NAVY, TRIH(NAVY, WHITE, RED))
-    f("mr", "Mauritania", GREEN, listOf(cb(GOLD, ToyCircle(0.5f, 0.40f, 0.11f)), hb(0.68f, 0.76f, GOLD)))
+    // red bands top and bottom of the green field, with the gold crescent and star
+    f("mr", "Mauritania", GREEN, listOf(
+        hb(0.04f, 0.16f, RED), hb(0.84f, 0.96f, RED),
+        cb(GOLD, ToyCircle(0.46f, 0.50f, 0.12f)), cb(GREEN, ToyCircle(0.515f, 0.50f, 0.11f)),
+        star(0.60f, 0.50f, 0.055f, 5, GOLD),
+    ))
     f("ms", "Montserrat", NAVY, miniUK())
     f("mt", "Malta", WHITE, listOf(vb(0.01f, 0.28f, RED)))
     f("mu", "Mauritius", RED, listOf(hb(0.27f, 0.50f, BLUE), hb(0.50f, 0.73f, GOLD), hb(0.73f, 0.96f, GREEN)))
-    f("mv", "Maldives", RED, listOf(rc(0.22f, 0.24f, 0.78f, 0.76f, GREEN), cb(WHITE, ToyCircle(0.5f, 0.5f, 0.11f))))
+    f("mv", "Maldives", RED, listOf(
+        rc(0.22f, 0.24f, 0.78f, 0.76f, GREEN),
+        cb(WHITE, ToyCircle(0.46f, 0.50f, 0.11f)), cb(GREEN, ToyCircle(0.515f, 0.50f, 0.10f)),
+    ))
     f("mw", "Malawi", BLACK, TRIH(BLACK, RED, GREEN) + listOf(cb(RED, ToyCircle(0.5f, 0.24f, 0.08f))))
     // the eagle over the cactus, not a brown dot
     f("mx", "Mexico", WHITE, TRIV(GREEN, WHITE, RED) + listOf(
@@ -469,7 +519,7 @@ private fun build(): List<Sticker> {
         )),
         cb(WHITE, ToyCircle(0.33f, 0.19f, 0.05f)), cb(WHITE, ToyCircle(0.33f, 0.62f, 0.05f)),
     ))
-    f("nr", "Nauru", NAVY, listOf(hb(0.58f, 0.66f, GOLD), cb(WHITE, ToyCircle(0.30f, 0.32f, 0.09f))))
+    f("nr", "Nauru", NAVY, listOf(hb(0.58f, 0.66f, GOLD), star(0.30f, 0.32f, 0.09f, 12, WHITE)))
     f("nu", "Niue", GOLD, miniUK())
     f("nz", "New Zealand", NAVY, miniUK() + listOf(cb(RED, ToyCircle(0.64f, 0.26f, 0.055f), ToyCircle(0.78f, 0.42f, 0.055f), ToyCircle(0.66f, 0.60f, 0.055f))))
     f("om", "Oman", WHITE, TRIH(WHITE, RED, GREEN) + listOf(vb(0.01f, 0.30f, RED)))
@@ -535,10 +585,10 @@ private fun build(): List<Sticker> {
     f("sk", "Slovakia", WHITE, TRIH(WHITE, BLUE, RED) + listOf(cb(RED, ToyCircle(0.30f, 0.5f, 0.11f))))
     f("sl", "Sierra Leone", GREEN, TRIH(GREEN, WHITE, SKY))
     f("sm", "San Marino", WHITE, TRIH(WHITE, SKY, WHITE))
-    f("sn", "Senegal", GREEN, TRIV(GREEN, GOLD, RED) + listOf(cb(GREEN, ToyCircle(0.5f, 0.5f, 0.10f))))
-    f("so", "Somalia", SKY, DISK(WHITE, 0.20f))
+    f("sn", "Senegal", GREEN, TRIV(GREEN, GOLD, RED) + listOf(star(0.5f, 0.5f, 0.11f, 5, GREEN)))
+    f("so", "Somalia", SKY, listOf(star(0.5f, 0.5f, 0.20f, 5, WHITE)))
     f("sr", "Suriname", GREEN, listOf(hb(0.20f, 0.28f, WHITE), hb(0.28f, 0.72f, RED), hb(0.72f, 0.80f, WHITE), star(0.5f, 0.5f, 0.13f, 5, GOLD)))
-    f("ss", "South Sudan", BLACK, TRIH(BLACK, RED, GREEN) + listOf(vb(0.01f, 0.36f, SKY), cb(GOLD, ToyCircle(0.20f, 0.5f, 0.07f))))
+    f("ss", "South Sudan", BLACK, TRIH(BLACK, RED, GREEN) + listOf(vb(0.01f, 0.36f, SKY), star(0.19f, 0.50f, 0.07f, 5, GOLD)))
     f("st", "Sao Tome and Principe", GREEN, TRIH(GREEN, GOLD, RED) + listOf(cb(BLACK, ToyCircle(0.5f, 0.5f, 0.09f))))
     f("sv", "El Salvador", SKY, TRIH(SKY, WHITE, SKY) + listOf(cb(GOLD, ToyCircle(0.5f, 0.5f, 0.09f))))
     // red over blue to the edges, with the white hoist triangle
@@ -546,12 +596,12 @@ private fun build(): List<Sticker> {
         hb(0.04f, 0.50f, RED), hb(0.50f, 0.96f, BLUE),
         FlagBand(WHITE, listOf(ToyPoly(listOf(Offset(0.02f, 0.04f), Offset(0.42f, 0.50f), Offset(0.02f, 0.96f))))),
     ))
-    f("sy", "Syria", RED, TRIH(RED, WHITE, BLACK) + listOf(cb(GREEN, ToyCircle(0.42f, 0.5f, 0.05f), ToyCircle(0.58f, 0.5f, 0.05f))))
+    f("sy", "Syria", RED, TRIH(RED, WHITE, BLACK) + listOf(star(0.42f, 0.5f, 0.05f, 5, GREEN), star(0.58f, 0.5f, 0.05f, 5, GREEN)))
     f("sz", "Eswatini", NAVY, listOf(hb(0.10f, 0.30f, GOLD), hb(0.70f, 0.90f, GOLD), rc(0.02f, 0.30f, 0.98f, 0.70f, RED), cb(BLACK, ToyCircle(0.5f, 0.5f, 0.11f))))
     f("tc", "Turks and Caicos", NAVY, miniUK())
     f("td", "Chad", NAVY, TRIV(NAVY, GOLD, RED))
     f("tf", "French Southern Lands", NAVY, miniUK())
-    f("tg", "Togo", GREEN, TRIH(GREEN, GOLD, GREEN) + listOf(rc(0.02f, 0.04f, 0.36f, 0.56f, RED), cb(WHITE, ToyCircle(0.20f, 0.33f, 0.09f))))
+    f("tg", "Togo", GREEN, TRIH(GREEN, GOLD, GREEN) + listOf(rc(0.02f, 0.04f, 0.36f, 0.56f, RED), star(0.20f, 0.30f, 0.085f, 5, WHITE)))
     f("th", "Thailand", RED, listOf(hb(0.24f, 0.38f, WHITE), hb(0.38f, 0.62f, NAVY), hb(0.62f, 0.76f, WHITE)))
     f("tj", "Tajikistan", RED, TRIH(RED, WHITE, GREEN) + listOf(cb(GOLD, ToyCircle(0.5f, 0.5f, 0.10f))))
     f("tk", "Tokelau", GOLD, miniUK())
@@ -564,16 +614,28 @@ private fun build(): List<Sticker> {
         cb(WHITE, ToyCircle(0.475f, 0.5f, 0.105f)),
         star(0.565f, 0.5f, 0.058f, 5, RED, rot = 90f),
     ))
-    f("to", "Tonga", RED, listOf(rc(0.02f, 0.04f, 0.42f, 0.48f, WHITE), cb(RED, ToyCircle(0.24f, 0.29f, 0.06f))))
+    // white canton with a red cross, not a red dot in a white square
+    f("to", "Tonga", RED, listOf(
+        rc(0.02f, 0.04f, 0.42f, 0.48f, WHITE),
+        rc(0.195f, 0.10f, 0.245f, 0.40f, RED), rc(0.10f, 0.225f, 0.34f, 0.275f, RED),
+    ))
     f("tr", "Turkey", Color(0xFFE30A17), listOf(
         cb(Color.White, ToyCircle(0.40f, 0.5f, 0.24f)),
         cb(Color(0xFFE30A17), ToyCircle(0.475f, 0.5f, 0.19f)),
         star(0.655f, 0.5f, 0.085f, 5, Color.White, rot = 90f),
     ))
-    f("tt", "Trinidad and Tobago", RED, listOf(hb(0.366f, 0.634f, WHITE), cb(BLACK, ToyCircle(0.5f, 0.5f, 0.16f))))
+    // red field, white-edged black diagonal, instead of a black disc
+    f("tt", "Trinidad and Tobago", RED, listOf(
+        FlagBand(WHITE, listOf(ToyPoly(listOf(Offset(0.06f, 0.04f), Offset(0.30f, 0.04f), Offset(0.98f, 0.60f), Offset(0.98f, 0.86f))))),
+        FlagBand(BLACK, listOf(ToyPoly(listOf(Offset(0.20f, 0.04f), Offset(0.30f, 0.04f), Offset(0.98f, 0.70f), Offset(0.98f, 0.80f))))),
+    ))
     f("tv", "Tuvalu", SKY, miniUK() + listOf(cb(GOLD, ToyCircle(0.7f, 0.6f, 0.06f))))
     f("tw", "Taiwan", RED, listOf(rc(0.02f, 0.04f, 0.46f, 0.50f, NAVY), cb(WHITE, ToyCircle(0.25f, 0.30f, 0.11f))))
-    f("tz", "Tanzania", GREEN, listOf(hb(0.36f, 0.64f, BLACK), hb(0.30f, 0.36f, GOLD), hb(0.64f, 0.70f, GOLD), cb(SKY, ToyCircle(0.2f, 0.2f, 0.07f))))
+    // green over blue across a black band, not a sky dot in the corner
+    f("tz", "Tanzania", GREEN, listOf(
+        hb(0.36f, 0.64f, BLACK), hb(0.30f, 0.36f, GOLD), hb(0.64f, 0.70f, GOLD),
+        FlagBand(BLUE, listOf(ToyPoly(listOf(Offset(0.30f, 0.70f), Offset(0.99f, 0.70f), Offset(0.99f, 0.96f), Offset(0.30f, 0.96f))))),
+    ))
     f("ua", "Ukraine", BLUE, H2(BLUE) + listOf(hb(0.5f, 0.99f, GOLD)))
     f("ug", "Uganda", BLACK, TRIH(BLACK, GOLD, RED) + listOf(hb(0.30f, 0.366f, WHITE), hb(0.634f, 0.70f, WHITE), cb(GREY, ToyCircle(0.5f, 0.5f, 0.10f))))
     f("um", "US Minor Outlying Islands", NAVY, miniUK())
@@ -585,16 +647,23 @@ private fun build(): List<Sticker> {
         starGrid(0.085f, 0.105f, 0.083f, 0.108f, 5, 4, 0.028f, WHITE),
     ))
     f("uy", "Uruguay", WHITE, listOf(stripes(9, SKY), rc(0.02f, 0.04f, 0.36f, 0.409f, WHITE), cb(GOLD, ToyCircle(0.19f, 0.22f, 0.075f))))
-    f("uz", "Uzbekistan", SKY, TRIH(SKY, WHITE, GREEN) + listOf(hb(0.366f, 0.40f, RED), hb(0.60f, 0.634f, RED), cb(SKY, ToyCircle(0.22f, 0.28f, 0.09f))))
+    f("uz", "Uzbekistan", SKY, TRIH(SKY, WHITE, GREEN) + listOf(
+        hb(0.366f, 0.40f, RED), hb(0.60f, 0.634f, RED),
+        cb(WHITE, ToyCircle(0.19f, 0.27f, 0.09f)), cb(SKY, ToyCircle(0.23f, 0.27f, 0.08f)),
+        starGrid(0.34f, 0.18f, 0.058f, 0.058f, 6, 2, 0.019f, WHITE),
+    ))
     f("va", "Vatican City", GOLD, TRIH(GOLD, WHITE, GOLD) + listOf(cb(GOLD, ToyCircle(0.5f, 0.5f, 0.09f))))
     f("vc", "St. Vincent", SKY, TRIV(SKY, GOLD, GREEN) + listOf(cb(GREEN, ToyCircle(0.5f, 0.5f, 0.08f))))
-    f("ve", "Venezuela", GOLD, TRIH(GOLD, BLUE, RED) + listOf(cb(WHITE, ToyCircle(0.5f, 0.40f, 0.09f))))
+    f("ve", "Venezuela", GOLD, TRIH(GOLD, BLUE, RED) + listOf(starGrid(0.36f, 0.36f, 0.05f, 0.05f, 4, 2, 0.022f, WHITE)))
     f("vg", "British Virgin Islands", NAVY, miniUK())
     f("vi", "U.S. Virgin Islands", WHITE, listOf(cb(GOLD, ToyCircle(0.42f, 0.5f, 0.12f)), cb(Color(0xFFB8763E), ToyCircle(0.6f, 0.42f, 0.07f))))
     f("vn", "Vietnam", RED, listOf(star(0.5f, 0.5f, 0.20f, 5, GOLD)))
     f("vu", "Vanuatu", BLACK, listOf(hb(0.30f, 0.70f, GREEN), hb(0.70f, 0.96f, RED), cb(GOLD, ToyCircle(0.5f, 0.5f, 0.11f))))
     f("wf", "Wallis and Futuna", NAVY, miniUK())
-    f("ws", "Samoa", RED, listOf(rc(0.02f, 0.04f, 0.44f, 0.52f, NAVY), cb(WHITE, ToyCircle(0.22f, 0.26f, 0.06f), ToyCircle(0.34f, 0.26f, 0.06f), ToyCircle(0.28f, 0.38f, 0.06f))))
+    f("ws", "Samoa", RED, listOf(
+        rc(0.02f, 0.04f, 0.44f, 0.52f, NAVY),
+        starGrid(0.13f, 0.13f, 0.13f, 0.13f, 2, 2, 0.035f, WHITE), star(0.26f, 0.38f, 0.032f, 5, WHITE),
+    ))
     f("xk", "Kosovo", NAVY, listOf(cb(GOLD, ToyCircle(0.5f, 0.44f, 0.13f))))
     f("ye", "Yemen", RED, TRIH(RED, WHITE, BLACK))
     f("yt", "Mayotte", NAVY, miniUK())
