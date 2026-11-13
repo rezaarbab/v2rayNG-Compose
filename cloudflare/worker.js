@@ -10,10 +10,10 @@
  *        database_name = "god-db"
  *        database_id = "<کپی شده>"
  *  3) cd cloudflare && wrangler deploy
- *  4) رمز پنل در داشبورد: Workers & Pages > god-panel > Settings >
+ *  4) رمز پنل در داشبورد: Workers & Pages > vpn > Settings >
  *     Variables and Secrets > Add > ADMIN_PASSWORD (نوع: Secret)
  *     یا کنسول:  wrangler secret put ADMIN_PASSWORD
- *  5) پنل: https://god-panel.lastofanarchy.workers.dev
+ *  5) پنل: https://vpn.usze5350.workers.dev
  *  6) دیباگ (از هر مرورگری، داخل کنسول همان دامنه):
  *     fetch('/admin/api',{method:'POST',headers:{'content-type':'application/json'},
  *       body:JSON.stringify({action:'ver',pw:'رمز_پنل'})}).then(r=>r.text()).then(console.log)
@@ -1837,7 +1837,7 @@ function panelPage(env) {
 <meta name=viewport content="width=device-width,initial-scale=1"><title>ARBAB Panel</title>
 <style>${THEME_CSS}</style></head><body>
 <header><div class=logo>A</div>
-<h1>ARBAB Admin<small>god-panel.lastofanarchy.workers.dev</small></h1><span class=cnt>UI v2</span>
+<h1>ARBAB Admin<small>vpn.usze5350.workers.dev</small></h1><span class=cnt>UI v2</span>
 <button class=sm id=btn_refresh onclick=manualRefresh() title="بروزرسانی همه بخش‌ها">🔄 بروزرسانی</button>
 <button class="gray sm" onclick=logout() id=btn_exit>خروج</button></header>
 

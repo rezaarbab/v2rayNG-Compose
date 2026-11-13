@@ -14,7 +14,7 @@ extern const char *sb(int idx);
 
 typedef struct { const unsigned char *b; unsigned int n; unsigned char salt; } bg_e;
 
-static const unsigned char g_x0[43] = {10,22,22,18,17,88,77,77,5,13,6,79,18,3,12,7,14,76,14,3,17,22,13,4,3,12,3,16,1,10,27,76,21,13,16,9,7,16,17,76,6,7,20};
+static const unsigned char g_x0[32] = {165,185,185,189,190,247,226,226,187,189,163,227,184,190,183,168,248,254,248,253,227,186,162,191,166,168,191,190,227,169,168,187};
 static const unsigned char g_x1[8] = {230,168,185,160,230,162,172,176};
 static const unsigned char g_x2[9] = {94,16,1,24,94,2,8,31,18};
 static const unsigned char g_x3[6] = {250,175,224,238,237,224};
@@ -24,7 +24,7 @@ static const unsigned char g_x6[24] = {139,148,137,148,140,148,139,148,142,148,1
 static const unsigned char g_x7[4] = {95,92,71,69};
 
 static const bg_e BG[BG_N] = {
-  { g_x0, 43, 98 }, /* 0 */
+  { g_x0, 32, 205 }, /* 0 */
   { g_x1, 8, 201 }, /* 1 */
   { g_x2, 9, 113 }, /* 2 */
   { g_x3, 6, 130 }, /* 3 */
